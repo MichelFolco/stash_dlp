@@ -1,0 +1,153 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Stash DLP Manager</title>
+<link rel="icon" type="image/png" href="/static/favicon.png">
+<link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+
+<div id="app" class="app">
+
+  <div class="top-row">
+    <img id="logo" class="logo" src="/static/logo.png" alt="" onerror="this.style.display='none'">
+
+    <input id="input-field" class="input-field" type="text"
+           placeholder="Checking for yt-dlp updates..." autocomplete="off" spellcheck="false">
+
+    <span id="mini-stats" class="mini-stats hidden"></span>
+
+    <div id="mode-container" class="mode-container">
+      <button id="dl-mode-btn" class="mode-btn mode-btn-left" title="Download Mode Active">⬇️</button>
+      <button id="find-mode-btn" class="mode-btn mode-btn-right" title="Switch to Find Link Mode (Ctrl+F)">🔍</button>
+    </div>
+
+    <button id="ui-mode-btn" class="icon-btn" title="Toggle Mini Mode (Ctrl+M)">⛶</button>
+  </div>
+
+  <div id="control-bar" class="control-bar">
+    <button id="refresh-btn" class="btn">Refresh</button>
+    <button id="clear-completed-btn" class="btn">Clear Completed</button>
+    <button id="move-all-btn" class="btn">Move All to Target</button>
+  </div>
+
+  <div id="ledger-toolbar" class="ledger-toolbar">
+    <input id="ledger-filter" class="ledger-filter-input" type="text"
+           placeholder="Filter by name..." autocomplete="off" spellcheck="false">
+    <select id="ledger-sort" class="ledger-sort-select">
+      <option value="added">Date Added</option>
+      <option value="size">File Size</option>
+      <option value="name">Filename</option>
+    </select>
+    <button id="ledger-sort-dir" class="icon-btn" title="Toggle sort direction">↓</button>
+  </div>
+
+  <div id="queue-list" class="queue-list"></div>
+
+</div>
+
+<!-- Custom context menus (right-click), replacing QMenu -->
+<div id="logo-menu" class="ctx-menu hidden">
+  <div id="ctx-version" class="ctx-item ctx-disabled">yt-dlp version unknown</div>
+  <div class="ctx-separator"></div>
+  <div id="ctx-save-dir" class="ctx-item ctx-disabled ctx-folder-info" title="">
+    <div class="ctx-folder-path">Folder: (loading...)</div>
+    <div id="ctx-save-free" class="ctx-folder-free"></div>
+  </div>
+  <div id="ctx-change-folder" class="ctx-item">Change Download Folder...</div>
+  <div class="ctx-separator"></div>
+  <div id="ctx-target-dir" class="ctx-item ctx-disabled ctx-folder-info" title="">
+    <div class="ctx-folder-path">Target: (none set)</div>
+    <div id="ctx-target-free" class="ctx-folder-free"></div>
+  </div>
+  <div id="ctx-change-target" class="ctx-item">Change Target Folder...</div>
+  <div class="ctx-separator"></div>
+  <div class="ctx-item ctx-row">
+    <span class="ctx-label">Max Res:</span>
+    <select id="res-dropdown" class="res-dropdown">
+      <option value="Best">Best</option>
+      <option value="720p" selected>720p</option>
+      <option value="480p">480p</option>
+      <option value="Audio Only">Audio Only</option>
+    </select>
+  </div>
+  <div class="ctx-separator"></div>
+  <div id="ctx-tag-toggle" class="ctx-item ctx-checkable">
+    <span class="ctx-check">✓</span> Tag File [Domain]
+  </div>
+  <div id="ctx-m3u-toggle" class="ctx-item ctx-checkable">
+    <span class="ctx-check"></span> M3U Sniffer Mode
+  </div>
+  <div class="ctx-separator"></div>
+  <div id="ctx-restart-app" class="ctx-item ctx-danger">Restart App</div>
+</div>
+
+<div id="job-menu" class="ctx-menu hidden">
+  <div id="ctx-cancel-job" class="ctx-item hidden">Cancel Download</div>
+  <div id="ctx-play-video" class="ctx-item hidden">Play Video</div>
+  <div id="ctx-play-audio" class="ctx-item hidden">Play Audio</div>
+  <div id="ctx-extract-audio" class="ctx-item hidden">Extract Audio</div>
+  <div id="ctx-delete-file" class="ctx-item ctx-danger hidden">Delete File</div>
+  <div id="ctx-rename-file" class="ctx-item hidden">Rename File</div>
+  <div id="ctx-copy-link" class="ctx-item hidden">Copy Link</div>
+  <div id="ctx-copy-filename" class="ctx-item hidden">Copy File Name</div>
+  <div id="ctx-move-to-target" class="ctx-item hidden">Move to Target</div>
+</div>
+
+<div id="video-modal" class="modal-overlay hidden">
+  <div class="video-modal-box">
+    <div class="video-modal-header">
+      <span id="video-modal-title" class="video-modal-title"></span>
+      <button id="video-modal-close" class="icon-btn">✕</button>
+    </div>
+    <video id="video-player" class="video-player hidden" controls playsinline preload="metadata"></video>
+    <div id="audio-player-wrap" class="audio-player-wrap hidden">
+      <span class="audio-player-icon">🎵</span>
+      <audio id="audio-player" class="audio-player" controls preload="metadata"></audio>
+    </div>
+  </div>
+</div>
+
+<div id="folder-modal" class="modal-overlay hidden">
+  <div class="modal-box">
+    <div class="modal-title">Change Download Folder</div>
+    <div class="modal-row">
+      <input id="folder-input" class="input-field" type="text" spellcheck="false">
+      <button id="folder-browse-btn" class="btn modal-browse-btn">Browse...</button>
+    </div>
+    <div id="folder-error" class="modal-error hidden"></div>
+    <div id="folder-recent-wrap" class="modal-recent-wrap hidden">
+      <div class="modal-recent-label">Recent folders</div>
+      <div id="folder-recent-list" class="modal-recent-list"></div>
+    </div>
+    <div class="modal-actions">
+      <button id="folder-cancel-btn" class="btn">Cancel</button>
+      <button id="folder-set-btn" class="btn btn-primary">Set Folder</button>
+    </div>
+  </div>
+</div>
+
+<div id="target-folder-modal" class="modal-overlay hidden">
+  <div class="modal-box">
+    <div class="modal-title">Change Target Folder</div>
+    <div class="modal-row">
+      <input id="target-folder-input" class="input-field" type="text" spellcheck="false">
+      <button id="target-folder-browse-btn" class="btn modal-browse-btn">Browse...</button>
+    </div>
+    <div id="target-folder-error" class="modal-error hidden"></div>
+    <div id="target-folder-recent-wrap" class="modal-recent-wrap hidden">
+      <div class="modal-recent-label">Recent folders</div>
+      <div id="target-folder-recent-list" class="modal-recent-list"></div>
+    </div>
+    <div class="modal-actions">
+      <button id="target-folder-cancel-btn" class="btn">Cancel</button>
+      <button id="target-folder-set-btn" class="btn btn-primary">Set Folder</button>
+    </div>
+  </div>
+</div>
+
+<script src="/static/app.js"></script>
+</body>
+</html>
