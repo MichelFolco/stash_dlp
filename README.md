@@ -135,6 +135,19 @@ drive letters) it just shows the size. Verified directly against `df -h`
 for accuracy, and confirmed the menu re-fetches live rather than
 showing a stale value from page load.
 
+## Clipboard auto-scan removed
+
+The app no longer reads the clipboard at all. Paste (or type) a link
+into the input field manually and press Enter - it only ever acts on
+what's actually in the box. If the box is empty or doesn't contain a
+valid URL, it just prompts you to paste one; it doesn't fall back to
+checking the clipboard anymore. Default messages throughout the app
+("Paste a link, then press ENTER...", etc.) were updated to match.
+Verified directly: with a URL sitting on the clipboard but the input
+box empty, pressing Enter does nothing with it - only manually entering
+a URL and pressing Enter starts anything, and it's that manually-entered
+URL that gets downloaded.
+
 ## Thumbnail click plays directly
 
 On a completed card, clicking the thumbnail itself starts playback

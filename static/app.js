@@ -1,7 +1,8 @@
 // Stash DLP Web — ported from stash_dlp.py's YtdlpManagerApp.
 // State machine (READY / EDITING / FETCHING / INTERCEPTING) and app_mode
-// (DOWNLOAD / FIND_LINK) mirror the desktop app exactly; only the
-// clipboard-read and window-chrome pieces differ due to browser sandboxing.
+// (DOWNLOAD / FIND_LINK) mirror the desktop app; URLs are pasted manually
+// into the input field rather than auto-read from the clipboard, and
+// window-chrome pieces differ due to browser sandboxing.
 
 // The server's snapshot endpoints (GET /api/jobs, refresh, clear-completed,
 // folder-change, etc.) all return newest-first. We want the Map's own
@@ -67,7 +68,7 @@ async function boot() {
   await loadJobsSnapshot();
   connectWebSocket();
   inputField.setPlaceholderText = null; // n/a, kept for readability
-  inputField.placeholder = "Press ENTER to scan clipboard link...";
+  inputField.placeholder = "Paste a link, then press ENTER...";
   inputField.focus();
 }
 
@@ -154,7 +155,7 @@ function connectWebSocket() {
 
     if (inputField.disabled) {
       inputField.disabled = false;
-      inputField.placeholder = "Press ENTER to scan clipboard link...";
+      inputField.placeholder = "Paste a link, then press ENTER...";
     }
   };
 
@@ -732,7 +733,7 @@ el("ctx-m3u-toggle").addEventListener("click", () => {
   state.m3uSniffer = !state.m3uSniffer;
   el("ctx-m3u-toggle").querySelector(".ctx-check").textContent = state.m3uSniffer ? "✓" : "";
   if (state.m3uSniffer) {
-    inputField.placeholder = "Press ENTER to scan clipboard link...";
+    inputField.placeholder = "Paste a link, then press ENTER...";
   }
 });
 
@@ -1037,24 +1038,18 @@ function resetToReady() {
   inputField.disabled = false;
   modeContainer.style.pointerEvents = "";
   inputField.value = "";
-  inputField.placeholder = "Press ENTER to scan clipboard link...";
+  inputField.placeholder = "Paste a link, then press ENTER...";
   updateModeButtons();
 }
 
 async function handleEnterPipeline() {
   if (state.current === "READY") {
-    let clipboard = "";
-    try { clipboard = (await navigator.clipboard.readText()).trim(); }
-    catch (e) {
-      inputField.placeholder = "Clipboard access denied by browser.";
-      return;
-    }
-
-    if (/^https?:\/\//i.test(clipboard)) {
-      await beginDownloadPipeline(clipboard);
+    const typedValue = inputField.value.trim();
+    if (/^https?:\/\//i.test(typedValue)) {
+      await beginDownloadPipeline(typedValue);
     } else {
       inputField.value = "";
-      inputField.placeholder = "No valid URL found in clipboard.";
+      inputField.placeholder = "No valid URL - paste a link and press ENTER.";
     }
   } else if (state.current === "EDITING") {
     const finalTitle = inputField.value.trim();
@@ -1186,8 +1181,8 @@ document.addEventListener("keydown", async (e) => {
   if (e.key === "Escape") {
     if (["EDITING", "FETCHING", "INTERCEPTING"].includes(state.current)) {
       resetToReady();
-      inputField.placeholder = "Cancelled. Press ENTER to scan clipboard link...";
-      setTimeout(() => { inputField.placeholder = "Press ENTER to scan clipboard link..."; }, 2500);
+      inputField.placeholder = "Cancelled. Paste a link and press ENTER.";
+      setTimeout(() => { inputField.placeholder = "Paste a link, then press ENTER..."; }, 2500);
     } else {
       resetToReady();
     }
