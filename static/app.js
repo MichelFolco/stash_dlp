@@ -4,7 +4,7 @@
 // into the input field rather than auto-read from the clipboard, and
 // window-chrome pieces differ due to browser sandboxing.
 
-// The server's snapshot endpoints (GET /api/jobs, refresh, clear-completed,
+// The server's snapshot endpoints (GET /api/jobs, refresh, folder-change,
 // folder-change, etc.) all return newest-first. We want the Map's own
 // insertion order to be true chronological (oldest→newest) always -
 // consistent whether jobs arrive via an initial snapshot or one at a
@@ -987,12 +987,6 @@ el("refresh-btn").addEventListener("click", async () => {
   renderLedger();
 });
 
-el("clear-completed-btn").addEventListener("click", async () => {
-  const res = await fetch("/api/clear-completed", { method: "POST" });
-  const data = await res.json();
-  loadJobsIntoMap(data.jobs);
-  renderLedger();
-});
 
 el("move-all-btn").addEventListener("click", async () => {
   const targetPath = ctxTargetDir.title || "";

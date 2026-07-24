@@ -321,19 +321,6 @@ class JobManager:
             pass
         return True
 
-    # ── Clearing completed ───────────────────────────────────────
-    def clear_completed(self):
-        keep = {}
-        for filename, job in self.jobs.items():
-            if job["status"] == "DOWNLOADING":
-                keep[filename] = job
-        self.jobs = keep
-
-        for filename in list(self.saved_queue.keys()):
-            if self.saved_queue[filename].get("status") in ("DONE", "CANCELLED", "ERROR"):
-                del self.saved_queue[filename]
-        save_queue_to_disk(self.saved_queue)
-
     # ── Deleting a completed job's file ───────────────────────────
     def delete_job(self, filename: str) -> bool:
         """Deletes the media file (and any thumbnail) from disk, and

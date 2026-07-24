@@ -56,7 +56,8 @@ single-folder model.
 - M3U Sniffer mode (playwright-based), Find Link / history-search mode
 - Logo right-click menu (yt-dlp version + "just updated" flag, Max Res,
   Tag toggle, M3U toggle, Change Download Folder)
-- Refresh / Clear Completed, keyboard shortcuts (Ctrl+F/D/M, Ctrl +/-,
+- Refresh (re-scans the download folder - useful if files changed on
+  disk outside the app), keyboard shortcuts (Ctrl+F/D/M, Ctrl +/-,
   Enter, Esc)
 - Clicking the Download mode button (⬇️) while a valid URL is already
   sitting in the input box - e.g. one you just pasted, or one Find Link
@@ -282,9 +283,9 @@ folders).
   folder picker, or pick from recent target folders). Persists in
   `_app_settings.json`, survives a restart.
 - **Move one file**: left-click any completed item → **Move to Target**
-- **Move everything**: **Move All to Target** button next to Refresh/
-  Clear Completed - confirms first, then moves every completed item
-  in one go and reports which (if any) failed and why
+- **Move everything**: **Move All to Target** button next to Refresh -
+  confirms first, then moves every completed item in one go and
+  reports which (if any) failed and why
 - Moving a file also cleans up its now-orphaned thumbnail from the
   source folder's `stash_dlp_data/.thumbnails/`. The target folder isn't
   tracked by the app - it's just a destination, not a second library.

@@ -405,19 +405,6 @@ async def api_history_search(req: HistorySearchRequest):
     return {"url": search_history(req.query)}
 
 
-@app.post("/api/clear-completed")
-async def api_clear_completed():
-    job_manager.clear_completed()
-    # Files still on disk get rediscovered here — matches the desktop
-    # app's existing "Clear Completed" behavior (it clears tracking
-    # metadata, not the files themselves).
-    done_jobs = scan_filesystem()
-    job_manager.seed_from_filesystem(done_jobs)
-    snapshot = job_manager.snapshot()
-    await job_manager.connections.broadcast({"type": "refresh", "jobs": snapshot})
-    return {"jobs": snapshot}
-
-
 @app.post("/api/refresh")
 async def api_refresh():
     done_jobs = scan_filesystem()
