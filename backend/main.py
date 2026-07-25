@@ -284,6 +284,34 @@ async def api_delete_job(req: CancelRequest):
     return {"ok": ok}
 
 
+@app.post("/api/jobs/open-folder")
+async def api_open_folder(req: CancelRequest, request: Request):
+    """Opens the OS file browser at the file's location. Gated to
+    localhost requests - a window popping open on the server machine is
+    useless (and confusing) if you're browsing in from your phone."""
+    client_host = request.client.host if request.client else ""
+    if client_host not in ("127.0.0.1", "::1", "localhost"):
+        return JSONResponse(
+            status_code=400,
+            content={"error": "Only works when the browser is on the same machine as the server."},
+        )
+
+    media_path = find_media_file(req.filename)
+    if not media_path:
+        return JSONResponse(status_code=404, content={"error": "File not found."})
+
+    try:
+        if sys.platform == "win32":
+            subprocess.Popen(["explorer", "/select,", media_path], **NO_CONSOLE_KWARGS)
+        elif sys.platform == "darwin":
+            subprocess.Popen(["open", "-R", media_path], **NO_CONSOLE_KWARGS)
+        else:
+            subprocess.Popen(["xdg-open", os.path.dirname(media_path)], **NO_CONSOLE_KWARGS)
+        return {"ok": True}
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"error": str(e)})
+
+
 @app.post("/api/jobs/rename")
 async def api_rename_job(req: RenameRequest):
     try:
@@ -408,7 +436,7 @@ async def api_history_search(req: HistorySearchRequest):
 @app.post("/api/refresh")
 async def api_refresh():
     done_jobs = scan_filesystem()
-    job_manager.seed_from_filesystem(done_jobs)
+    job_manager.seed_from_filesystem(done_jobs, replace=True)
     snapshot = job_manager.snapshot()
     await job_manager.connections.broadcast({"type": "refresh", "jobs": snapshot})
     return {"jobs": snapshot}

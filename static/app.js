@@ -438,6 +438,7 @@ function openJobMenu(x, y, job) {
   el("ctx-copy-link").classList.toggle("hidden", isDownloading);
   el("ctx-copy-filename").classList.toggle("hidden", isDownloading);
   el("ctx-move-to-target").classList.toggle("hidden", !isDone);
+  el("ctx-open-folder").classList.toggle("hidden", !isDone);
 
   jobMenu.dataset.filename = job.filename;
   positionMenu(jobMenu, x, y);
@@ -673,6 +674,23 @@ el("ctx-move-to-target").addEventListener("click", async () => {
     flashStatus(`Moved to target: ${filename}`);
   } catch (e) {
     window.alert("Couldn't reach the server to move that file.");
+  }
+});
+
+el("ctx-open-folder").addEventListener("click", async () => {
+  const filename = jobMenu.dataset.filename;
+  closeMenus();
+  try {
+    const res = await fetch("/api/jobs/open-folder", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ filename }),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      window.alert(`Couldn't open Explorer:\n${data.error || "Unknown error"}`);
+    }
+  } catch (e) {
+    window.alert("Couldn't reach the server to open Explorer.");
   }
 });
 
