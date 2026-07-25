@@ -7,10 +7,25 @@ initial default the first time the app runs, before any folder has
 been chosen via the UI.
 """
 import os
+import sys
 from pathlib import Path
 
 BACKEND_DIR = Path(__file__).resolve().parent
-PROJECT_ROOT = BACKEND_DIR.parent
+
+FROZEN = getattr(sys, "frozen", False)
+
+if FROZEN:
+    # Running as a PyInstaller-bundled exe: __file__-based paths point
+    # into the temporary extraction folder (sys._MEIPASS), which is wiped
+    # after the process exits. Persist settings/downloads next to the
+    # actual exe instead, so they survive between runs.
+    PROJECT_ROOT = Path(sys.executable).resolve().parent
+    # Bundled read-only assets (static/) DO live under _MEIPASS though -
+    # that's genuinely where PyInstaller unpacks --add-data files.
+    BUNDLE_DIR = Path(getattr(sys, "_MEIPASS", str(BACKEND_DIR.parent)))
+else:
+    PROJECT_ROOT = BACKEND_DIR.parent
+    BUNDLE_DIR = PROJECT_ROOT
 
 # Where the app's own bookkeeping lives - this location is fixed
 # regardless of which folder downloads currently go to.

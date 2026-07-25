@@ -136,6 +136,59 @@ drive letters) it just shows the size. Verified directly against `df -h`
 for accuracy, and confirmed the menu re-fetches live rather than
 showing a stale value from page load.
 
+## Bundling as a standalone .exe
+
+`build_exe.bat` builds a single-file, tray-icon `StashDLP.exe` via
+PyInstaller. Run it from the project root (`pip install pyinstaller`
+first, or let the script do it):
+
+```
+build_exe.bat
+```
+
+Copy `icon.ico` into the same folder as the built `dist\StashDLP.exe` -
+that's where the tray icon looks for it at runtime.
+
+**This needed two real fixes, not just a PyInstaller command:**
+
+1. **Path resolution.** `config.py` used to compute the project root
+   from `__file__`, which points into PyInstaller's temporary
+   extraction folder when frozen (wiped after the process exits) -
+   `_app_settings.json` and the default download folder would've
+   silently reset on every launch. Fixed by detecting `sys.frozen` and
+   using the actual exe's own directory instead, while still correctly
+   finding bundled assets (the `static/` folder) wherever PyInstaller
+   actually unpacked them.
+2. **Self-restart.** The Restart App feature relaunched via
+   `[sys.executable, script_path]` - fine for `python main.py`, broken
+   for a frozen exe, where `sys.executable` *is* the app itself with no
+   separate script to pass it. Also switched `uvicorn.run("main:app")`
+   (a string it re-imports by name) to `uvicorn.run(app)` (the object
+   directly) - the string form doesn't reliably resolve inside a frozen
+   bundle and was failing outright. The restart delay itself now works
+   by telling the *relaunched* process to pause briefly via an
+   environment variable, rather than spawning a Python helper script to
+   do it - which wouldn't have worked for a frozen exe either, since
+   there's no separate Python interpreter to run a snippet on.
+
+**Tested for real, not just patched and hoped:** built an actual
+PyInstaller executable in this environment (a Linux ELF binary, since
+building a Windows `.exe` requires running PyInstaller on Windows
+itself - PyInstaller doesn't cross-compile) and ran it standalone,
+confirming: the server responds, bundled static assets serve correctly,
+`_app_settings.json` lands next to the real exe rather than a temp
+folder, and the restart startup-delay mechanism works under a frozen
+build specifically. Also re-ran the full normal (non-frozen) dev-mode
+test suite afterward to confirm none of this broke the regular
+`python backend/main.py` / `tray_launcher.py` workflow.
+
+One thing I couldn't verify here: the actual tray icon itself, since
+`pystray` needs a real GTK environment on Linux to even import, which
+this sandbox doesn't have - Windows uses a completely different
+(win32) backend with no such dependency, so this is expected and not a
+sign of a problem, but it's the one piece you'll want to confirm
+yourself once you've built it on your machine.
+
 ## Clipboard auto-scan removed
 
 The app no longer reads the clipboard at all. Paste (or type) a link

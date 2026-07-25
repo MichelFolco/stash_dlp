@@ -11,7 +11,7 @@ from pydantic import BaseModel
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from config import PROJECT_ROOT, HOST, PORT
+from config import PROJECT_ROOT, BUNDLE_DIR, FROZEN, HOST, PORT
 from diskspace import get_free_space_label
 from filesystem_scan import scan_filesystem
 from folder_dialog import ask_directory
@@ -30,7 +30,7 @@ STREAM_CHUNK_SIZE = 1024 * 1024  # 1 MB
 
 app = FastAPI(title="Stash DLP Web")
 
-STATIC_DIR = os.path.join(str(PROJECT_ROOT), "static")
+STATIC_DIR = os.path.join(str(BUNDLE_DIR), "static")
 
 job_manager = JobManager()
 
@@ -458,17 +458,28 @@ async def api_restart_app():
 async def _do_restart():
     await asyncio.sleep(0.3)  # let the HTTP response above actually reach the client first
 
-    launch_script = os.path.abspath(sys.argv[0])
-    launch_cwd = os.path.dirname(launch_script)
-    helper_code = (
-        "import subprocess, sys, time; "
-        "time.sleep(1.5); "
-        f"subprocess.Popen([{sys.executable!r}, {launch_script!r}], cwd={launch_cwd!r})"
-    )
+    if FROZEN:
+        # The exe is fully self-contained - no separate script to pass it.
+        relaunch_cmd = [sys.executable]
+        relaunch_cwd = os.path.dirname(sys.executable)
+    else:
+        launch_script = os.path.abspath(sys.argv[0])
+        relaunch_cmd = [sys.executable, launch_script]
+        relaunch_cwd = os.path.dirname(launch_script)
+
+    # Rather than a separate helper process sleeping before relaunching
+    # (which needs a real Python interpreter to run a snippet - not
+    # available for a frozen exe, since sys.executable there IS the app,
+    # not python.exe), tell the relaunched process itself to pause
+    # briefly before binding. Works identically frozen or not.
+    env = os.environ.copy()
+    env["STASH_DLP_STARTUP_DELAY"] = "1.5"
+
     try:
         subprocess.Popen(
-            [sys.executable, "-c", helper_code],
-            cwd=launch_cwd,
+            relaunch_cmd,
+            cwd=relaunch_cwd,
+            env=env,
             close_fds=True,
             **NO_CONSOLE_KWARGS,
         )
@@ -479,6 +490,11 @@ async def _do_restart():
 
 
 if __name__ == "__main__":
+    import time
     import uvicorn
 
-    uvicorn.run("main:app", host=HOST, port=PORT, reload=False)
+    _startup_delay = float(os.environ.get("STASH_DLP_STARTUP_DELAY", "0") or 0)
+    if _startup_delay > 0:
+        time.sleep(_startup_delay)
+
+    uvicorn.run(app, host=HOST, port=PORT, reload=False)

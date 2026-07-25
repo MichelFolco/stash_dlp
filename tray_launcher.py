@@ -11,7 +11,14 @@ the tray rather than a console window.
 import os
 import sys
 
-PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
+if getattr(sys, "frozen", False):
+    # Running as a PyInstaller-bundled exe: __file__ points into the
+    # temporary extraction folder, which is wiped after the process
+    # exits. Use the actual exe's own directory instead, so the log
+    # file/icon lookup/settings all persist next to it correctly.
+    PROJECT_ROOT = os.path.dirname(os.path.abspath(sys.executable))
+else:
+    PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
 
 # ── pythonw.exe fix ────────────────────────────────────────────
 # Under pythonw.exe (no console attached), sys.stdout/sys.stderr are None
@@ -20,17 +27,29 @@ PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
 # raises, the background thread dies silently, and since there's no
 # console to show the traceback it just looks like nothing happened.
 # Redirect both to a log file before anything else gets a chance to log.
-if sys.stdout is None or sys.stderr is None:
+def _stream_is_usable(stream):
+    if stream is None:
+        return False
+    try:
+        stream.write("")
+        return True
+    except Exception:
+        return False
+
+
+if not _stream_is_usable(sys.stdout) or not _stream_is_usable(sys.stderr):
     _log_path = os.path.join(PROJECT_ROOT, "tray_launcher.log")
     _log_file = open(_log_path, "a", buffering=1, encoding="utf-8")
     sys.stdout = _log_file
     sys.stderr = _log_file
 
 import threading
+import time
 import webbrowser
 
-BACKEND_DIR = os.path.join(PROJECT_ROOT, "backend")
-sys.path.insert(0, BACKEND_DIR)
+if not getattr(sys, "frozen", False):
+    BACKEND_DIR = os.path.join(PROJECT_ROOT, "backend")
+    sys.path.insert(0, BACKEND_DIR)
 
 from config import HOST, PORT
 
@@ -98,6 +117,10 @@ def quit_app(icon, item):
 
 if __name__ == "__main__":
     try:
+        _startup_delay = float(os.environ.get("STASH_DLP_STARTUP_DELAY", "0") or 0)
+        if _startup_delay > 0:
+            time.sleep(_startup_delay)
+
         server_thread = ServerThread()
         server_thread.start()
 
