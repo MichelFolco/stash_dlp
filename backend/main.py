@@ -503,6 +503,15 @@ async def _do_restart():
     env = os.environ.copy()
     env["STASH_DLP_STARTUP_DELAY"] = "1.5"
 
+    # Strip PyInstaller's bootloader-internal vars (e.g. _MEIPASS2) if
+    # present. Copying them into a relaunched frozen exe tells it to
+    # reuse the PARENT's temp extraction folder instead of doing its own
+    # - and since the parent exits almost immediately after spawning the
+    # child, that folder can be mid-cleanup, causing binary extension
+    # modules (pydantic_core, etc.) to go missing in the new process.
+    for _key in [k for k in env if k.startswith("_MEI")]:
+        del env[_key]
+
     try:
         subprocess.Popen(
             relaunch_cmd,
