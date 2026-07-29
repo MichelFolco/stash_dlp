@@ -75,6 +75,8 @@ const openWithFlyout = el("open-with-flyout");
 const openWithProgramsList = el("open-with-programs-list");
 const copyFlyout = el("copy-flyout");
 const fileFlyout = el("file-flyout");
+const foldersFlyout = el("folders-flyout");
+const settingsFlyout = el("settings-flyout");
 const externalProgramsModal = el("external-programs-modal");
 const externalProgramsList = el("external-programs-list");
 const programFormModal = el("program-form-modal");
@@ -461,9 +463,19 @@ function updateMiniStats() {
   miniStats.classList.remove("hidden");
 }
 
+// Every submenu flyout in the app - Copy/File (job menu) and
+// Folders/Settings (logo menu) all share this one open/close/position
+// mechanism, so anything that resets menu state just walks this list.
+const ALL_FLYOUTS = [openWithFlyout, copyFlyout, fileFlyout, foldersFlyout, settingsFlyout];
+
+function hideAllFlyouts() {
+  for (const flyout of ALL_FLYOUTS) flyout.classList.add("hidden");
+}
+
 // ── Context menus ─────────────────────────────────────────────
 function openLogoMenu(x, y) {
   jobMenu.classList.add("hidden");
+  hideAllFlyouts();
   el("ctx-m3u-toggle").style.display = state.appMode === "DOWNLOAD" ? "" : "none";
   positionMenu(logoMenu, x, y);
   refreshSaveDir();
@@ -472,9 +484,7 @@ function openLogoMenu(x, y) {
 
 function openJobMenu(x, y, job) {
   logoMenu.classList.add("hidden");
-  openWithFlyout.classList.add("hidden");
-  copyFlyout.classList.add("hidden");
-  fileFlyout.classList.add("hidden");
+  hideAllFlyouts();
 
   const isDownloading = job.status === "DOWNLOADING";
   const isDone = job.status === "DONE";
@@ -566,25 +576,25 @@ el("ctx-open-with").addEventListener("click", () => {
 });
 
 function closeOtherFlyouts(except) {
-  for (const flyout of [openWithFlyout, copyFlyout, fileFlyout]) {
+  for (const flyout of ALL_FLYOUTS) {
     if (flyout !== except) flyout.classList.add("hidden");
   }
 }
 
-function positionFlyoutNextToJobMenu(flyoutEl) {
-  const jobRect = jobMenu.getBoundingClientRect();
+function positionFlyoutNextTo(flyoutEl, anchorMenu) {
+  const anchorRect = anchorMenu.getBoundingClientRect();
   flyoutEl.classList.remove("hidden");
   const flyoutRect = flyoutEl.getBoundingClientRect();
 
-  // Prefer opening to the right of the job menu; flip to the left if
+  // Prefer opening to the right of the anchor menu; flip to the left if
   // that would run off the edge of the viewport.
-  let left = jobRect.right + 4;
+  let left = anchorRect.right + 4;
   if (left + flyoutRect.width > window.innerWidth - 8) {
-    left = jobRect.left - flyoutRect.width - 4;
+    left = anchorRect.left - flyoutRect.width - 4;
   }
   left = Math.max(8, left);
 
-  let top = jobRect.top;
+  let top = anchorRect.top;
   const maxTop = window.innerHeight - flyoutRect.height - 8;
   top = Math.min(top, Math.max(8, maxTop));
 
@@ -604,7 +614,7 @@ function openOpenWithFlyout() {
     item.addEventListener("click", () => launchExternalProgram(prog.id));
     openWithProgramsList.appendChild(item);
   }
-  positionFlyoutNextToJobMenu(openWithFlyout);
+  positionFlyoutNextTo(openWithFlyout, jobMenu);
 }
 
 el("ctx-copy-submenu").addEventListener("click", () => {
@@ -613,7 +623,7 @@ el("ctx-copy-submenu").addEventListener("click", () => {
     return;
   }
   closeOtherFlyouts(copyFlyout);
-  positionFlyoutNextToJobMenu(copyFlyout);
+  positionFlyoutNextTo(copyFlyout, jobMenu);
 });
 
 el("ctx-file-submenu").addEventListener("click", () => {
@@ -622,7 +632,25 @@ el("ctx-file-submenu").addEventListener("click", () => {
     return;
   }
   closeOtherFlyouts(fileFlyout);
-  positionFlyoutNextToJobMenu(fileFlyout);
+  positionFlyoutNextTo(fileFlyout, jobMenu);
+});
+
+el("ctx-folders-submenu").addEventListener("click", () => {
+  if (!foldersFlyout.classList.contains("hidden")) {
+    foldersFlyout.classList.add("hidden");
+    return;
+  }
+  closeOtherFlyouts(foldersFlyout);
+  positionFlyoutNextTo(foldersFlyout, logoMenu);
+});
+
+el("ctx-settings-submenu").addEventListener("click", () => {
+  if (!settingsFlyout.classList.contains("hidden")) {
+    settingsFlyout.classList.add("hidden");
+    return;
+  }
+  closeOtherFlyouts(settingsFlyout);
+  positionFlyoutNextTo(settingsFlyout, logoMenu);
 });
 
 async function launchExternalProgram(programId) {
@@ -880,9 +908,7 @@ function positionMenu(menu, x, y) {
 function closeMenus() {
   logoMenu.classList.add("hidden");
   jobMenu.classList.add("hidden");
-  openWithFlyout.classList.add("hidden");
-  copyFlyout.classList.add("hidden");
-  fileFlyout.classList.add("hidden");
+  hideAllFlyouts();
 }
 
 document.addEventListener("click", (e) => {
@@ -892,15 +918,11 @@ document.addEventListener("click", (e) => {
   // period, that ghost click hits this same listener and closes the menu
   // before it's possible to actually tap an item in it.
   if (Date.now() - lastMenuOpenAt < MENU_CLOSE_GRACE_MS) return;
-  if (
-    !logoMenu.contains(e.target) &&
-    !jobMenu.contains(e.target) &&
-    !openWithFlyout.contains(e.target) &&
-    !copyFlyout.contains(e.target) &&
-    !fileFlyout.contains(e.target)
-  ) {
-    closeMenus();
-  }
+  const clickedInsideAMenu =
+    logoMenu.contains(e.target) ||
+    jobMenu.contains(e.target) ||
+    ALL_FLYOUTS.some((flyout) => flyout.contains(e.target));
+  if (!clickedInsideAMenu) closeMenus();
 });
 
 el("logo").addEventListener("contextmenu", (e) => {

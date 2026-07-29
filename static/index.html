@@ -51,6 +51,20 @@
 <div id="logo-menu" class="ctx-menu hidden">
   <div id="ctx-version" class="ctx-item ctx-disabled">yt-dlp version unknown</div>
   <div class="ctx-separator"></div>
+  <div id="ctx-folders-submenu" class="ctx-item ctx-item-submenu">
+    <span>Folders</span><span class="ctx-chevron">▸</span>
+  </div>
+  <div id="ctx-settings-submenu" class="ctx-item ctx-item-submenu">
+    <span>Settings</span><span class="ctx-chevron">▸</span>
+  </div>
+  <div class="ctx-separator"></div>
+  <div id="ctx-manage-programs" class="ctx-item">Manage External Programs</div>
+  <div class="ctx-separator"></div>
+  <div id="ctx-restart-app" class="ctx-item ctx-danger">Restart App</div>
+</div>
+
+<!-- Folders flyout: both folder info blocks + their change buttons -->
+<div id="folders-flyout" class="ctx-menu hidden">
   <div id="ctx-save-dir" class="ctx-item ctx-disabled ctx-folder-info" title="">
     <div class="ctx-folder-path">Folder: (loading...)</div>
     <div id="ctx-save-free" class="ctx-folder-free"></div>
@@ -62,7 +76,10 @@
     <div id="ctx-target-free" class="ctx-folder-free"></div>
   </div>
   <div id="ctx-change-target" class="ctx-item">Change Target Folder...</div>
-  <div class="ctx-separator"></div>
+</div>
+
+<!-- Settings flyout: Max Res + toggles -->
+<div id="settings-flyout" class="ctx-menu hidden">
   <div class="ctx-item ctx-row">
     <span class="ctx-label">Max Res:</span>
     <select id="res-dropdown" class="res-dropdown">
@@ -79,10 +96,6 @@
   <div id="ctx-m3u-toggle" class="ctx-item ctx-checkable">
     <span class="ctx-check"></span> M3U Sniffer Mode
   </div>
-  <div class="ctx-separator"></div>
-  <div id="ctx-manage-programs" class="ctx-item">Manage External Programs</div>
-  <div class="ctx-separator"></div>
-  <div id="ctx-restart-app" class="ctx-item ctx-danger">Restart App</div>
 </div>
 
 <div id="job-menu" class="ctx-menu hidden">
