@@ -80,6 +80,8 @@
     <span class="ctx-check"></span> M3U Sniffer Mode
   </div>
   <div class="ctx-separator"></div>
+  <div id="ctx-manage-programs" class="ctx-item">Manage External Programs</div>
+  <div class="ctx-separator"></div>
   <div id="ctx-restart-app" class="ctx-item ctx-danger">Restart App</div>
 </div>
 
@@ -88,12 +90,70 @@
   <div id="ctx-play-video" class="ctx-item hidden">Play Video</div>
   <div id="ctx-play-audio" class="ctx-item hidden">Play Audio</div>
   <div id="ctx-extract-audio" class="ctx-item hidden">Extract Audio</div>
+  <div id="ctx-open-with" class="ctx-item hidden">Open With...</div>
+  <div class="ctx-separator"></div>
+  <div id="ctx-copy-submenu" class="ctx-item ctx-item-submenu hidden">
+    <span>Copy</span><span class="ctx-chevron">▸</span>
+  </div>
+  <div id="ctx-file-submenu" class="ctx-item ctx-item-submenu hidden">
+    <span>File</span><span class="ctx-chevron">▸</span>
+  </div>
+  <div class="ctx-separator"></div>
   <div id="ctx-delete-file" class="ctx-item ctx-danger hidden">Delete File</div>
-  <div id="ctx-rename-file" class="ctx-item hidden">Rename File</div>
+</div>
+
+<!-- Copy/File submenu flyouts - same click-to-toggle, flip-to-fit
+     positioning as the "Open With..." flyout below. -->
+<div id="copy-flyout" class="ctx-menu hidden">
   <div id="ctx-copy-link" class="ctx-item hidden">Copy Link</div>
   <div id="ctx-copy-filename" class="ctx-item hidden">Copy File Name</div>
+</div>
+
+<div id="file-flyout" class="ctx-menu hidden">
+  <div id="ctx-rename-file" class="ctx-item hidden">Rename File</div>
   <div id="ctx-move-to-target" class="ctx-item hidden">Move to Target</div>
   <div id="ctx-open-folder" class="ctx-item hidden">Open in Explorer</div>
+</div>
+
+<!-- "Open With..." flyout, positioned to the right (or left, if it would
+     overflow) of the job menu when that item is clicked -->
+<div id="open-with-flyout" class="ctx-menu hidden">
+  <div id="open-with-programs-list"></div>
+  <div class="ctx-separator"></div>
+  <div id="flyout-manage-programs" class="ctx-item">Manage External Programs...</div>
+</div>
+
+<div id="external-programs-modal" class="modal-overlay hidden">
+  <div class="modal-box">
+    <div class="modal-title">External Programs</div>
+    <div id="external-programs-list" class="modal-recent-list external-programs-list"></div>
+    <div class="modal-actions external-programs-actions">
+      <button id="add-program-btn" class="btn">+ Add Program</button>
+      <button id="external-programs-close-btn" class="btn btn-primary">Close</button>
+    </div>
+  </div>
+</div>
+
+<div id="program-form-modal" class="modal-overlay hidden">
+  <div class="modal-box">
+    <div id="program-form-title" class="modal-title">Add Program</div>
+    <div class="modal-row program-form-row">
+      <input id="program-name-input" class="input-field" type="text" placeholder="Program name" autocomplete="off" spellcheck="false">
+    </div>
+    <div class="modal-row program-form-row">
+      <input id="program-path-input" class="input-field" type="text" placeholder="Path to program" autocomplete="off" spellcheck="false">
+      <button id="program-browse-btn" class="btn modal-browse-btn">Browse...</button>
+    </div>
+    <div class="modal-row program-form-row">
+      <input id="program-args-input" class="input-field" type="text" placeholder="Arguments (optional - use {file} for the file path)" autocomplete="off" spellcheck="false">
+    </div>
+    <div id="program-form-error" class="modal-error hidden"></div>
+    <div class="modal-actions">
+      <button id="program-delete-btn" class="btn btn-danger hidden">Delete</button>
+      <button id="program-form-cancel-btn" class="btn">Cancel</button>
+      <button id="program-form-save-btn" class="btn btn-primary">Save</button>
+    </div>
+  </div>
 </div>
 
 <div id="video-modal" class="modal-overlay hidden">

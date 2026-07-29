@@ -14,17 +14,22 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from config import PROJECT_ROOT, BUNDLE_DIR, FROZEN, HOST, PORT
 from diskspace import get_free_space_label
 from filesystem_scan import scan_filesystem
-from folder_dialog import ask_directory
+from folder_dialog import ask_directory, ask_file_path
 from job_manager import JobManager
 from m3u8_finder import find_m3u8, M3u8NotFound
 from procflags import NO_CONSOLE_KWARGS
 from settings import (
     get_save_dir, set_save_dir, get_recent_dirs, remove_recent_dir,
     get_target_dir, set_target_dir, get_recent_target_dirs, remove_recent_target_dir,
+    get_external_programs, get_external_program, add_external_program,
+    update_external_program, delete_external_program,
 )
 from storage import search_history
 from thumbnails import get_thumbnail_path
-from ytdlp_utils import clean_filename, fetch_title, get_domain, check_and_update_ytdlp, find_media_file
+from ytdlp_utils import (
+    clean_filename, fetch_title, get_domain, check_and_update_ytdlp, find_media_file,
+    build_open_with_command,
+)
 
 STREAM_CHUNK_SIZE = 1024 * 1024  # 1 MB
 
@@ -97,6 +102,28 @@ class PlaybackPositionRequest(BaseModel):
     position: float
 
 
+class ExternalProgramRequest(BaseModel):
+    name: str
+    path: str
+    args: str = ""
+
+
+class ExternalProgramUpdateRequest(BaseModel):
+    id: str
+    name: str
+    path: str
+    args: str = ""
+
+
+class ExternalProgramDeleteRequest(BaseModel):
+    id: str
+
+
+class OpenWithRequest(BaseModel):
+    filename: str
+    program_id: str
+
+
 # ── REST endpoints ──────────────────────────────────────────────
 @app.get("/api/version")
 async def get_version():
@@ -156,6 +183,80 @@ async def api_browse_folder(request: Request):
         )
     try:
         path = await ask_directory(get_save_dir())
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"error": str(e)})
+    return {"path": path}
+
+
+@app.get("/api/external-programs")
+async def api_get_external_programs():
+    # Read-only listing - harmless to expose to any connected client,
+    # same as save_dir/target_dir already are via /api/settings. Only
+    # the mutating endpoints below (and the launch endpoint) are
+    # localhost-gated.
+    return {"programs": get_external_programs()}
+
+
+@app.post("/api/external-programs")
+async def api_add_external_program(req: ExternalProgramRequest, request: Request):
+    """Adds a new external program. Gated to localhost - see
+    api_browse_folder for why managing these only makes sense on the
+    machine that actually has them installed."""
+    client_host = request.client.host if request.client else ""
+    if client_host not in ("127.0.0.1", "::1", "localhost"):
+        return JSONResponse(
+            status_code=400,
+            content={"error": "Managing external programs only works when the browser is on the same machine as the server."},
+        )
+    try:
+        programs = add_external_program(req.name, req.path, req.args)
+    except ValueError as e:
+        return JSONResponse(status_code=400, content={"error": str(e)})
+    return {"programs": programs}
+
+
+@app.post("/api/external-programs/update")
+async def api_update_external_program(req: ExternalProgramUpdateRequest, request: Request):
+    """Same localhost gating as api_add_external_program."""
+    client_host = request.client.host if request.client else ""
+    if client_host not in ("127.0.0.1", "::1", "localhost"):
+        return JSONResponse(
+            status_code=400,
+            content={"error": "Managing external programs only works when the browser is on the same machine as the server."},
+        )
+    try:
+        programs = update_external_program(req.id, req.name, req.path, req.args)
+    except ValueError as e:
+        return JSONResponse(status_code=400, content={"error": str(e)})
+    return {"programs": programs}
+
+
+@app.post("/api/external-programs/delete")
+async def api_delete_external_program(req: ExternalProgramDeleteRequest, request: Request):
+    """Same localhost gating as api_add_external_program."""
+    client_host = request.client.host if request.client else ""
+    if client_host not in ("127.0.0.1", "::1", "localhost"):
+        return JSONResponse(
+            status_code=400,
+            content={"error": "Managing external programs only works when the browser is on the same machine as the server."},
+        )
+    programs = delete_external_program(req.id)
+    return {"programs": programs}
+
+
+@app.post("/api/browse-program-file")
+async def api_browse_program_file(request: Request):
+    """Native file-picker for choosing an external program's executable.
+    Same localhost gating as api_browse_folder - see that endpoint for
+    why."""
+    client_host = request.client.host if request.client else ""
+    if client_host not in ("127.0.0.1", "::1", "localhost"):
+        return JSONResponse(
+            status_code=400,
+            content={"error": "Browse only works when the browser is on the same machine as the server."},
+        )
+    try:
+        path = await ask_file_path(get_save_dir())
     except Exception as e:
         return JSONResponse(status_code=500, content={"error": str(e)})
     return {"path": path}
@@ -310,6 +411,41 @@ async def api_open_folder(req: CancelRequest, request: Request):
         return {"ok": True}
     except Exception as e:
         return JSONResponse(status_code=500, content={"error": str(e)})
+
+
+@app.post("/api/jobs/open-with")
+async def api_open_with(req: OpenWithRequest, request: Request):
+    """Launches a configured external program against a completed job's
+    media file. Gated to localhost - same reasoning as open-folder: a
+    program window popping open on the server machine is useless (and
+    confusing) if you're browsing in from your phone."""
+    client_host = request.client.host if request.client else ""
+    if client_host not in ("127.0.0.1", "::1", "localhost"):
+        return JSONResponse(
+            status_code=400,
+            content={"error": "Only works when the browser is on the same machine as the server."},
+        )
+
+    program = get_external_program(req.program_id)
+    if not program:
+        return JSONResponse(status_code=404, content={"error": "That external program no longer exists."})
+
+    media_path = find_media_file(req.filename)
+    if not media_path:
+        return JSONResponse(status_code=404, content={"error": "File not found."})
+
+    if not os.path.isfile(program["path"]):
+        return JSONResponse(
+            status_code=400,
+            content={"error": f"'{program['name']}' points at a path that no longer exists: {program['path']}"},
+        )
+
+    cmd = build_open_with_command(program["path"], program.get("args", ""), media_path)
+    try:
+        subprocess.Popen(cmd, **NO_CONSOLE_KWARGS)
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"error": str(e)})
+    return {"ok": True}
 
 
 @app.post("/api/jobs/rename")

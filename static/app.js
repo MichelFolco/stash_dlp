@@ -17,6 +17,17 @@ function loadJobsIntoMap(jobsArray) {
 
 const el = (id) => document.getElementById(id);
 
+// "Manage External Programs" and "Open With..." only make sense on the
+// machine actually running the server (that's where the programs and
+// the screen to show them on live) - same reasoning as the folder
+// browse buttons and Open in Explorer, which the backend already
+// localhost-gates. We mirror that here on the client using the
+// hostname the browser used to reach the server, so remote (e.g.
+// Tailscale) sessions see the options as disabled with an explanation
+// rather than have them silently fail server-side.
+const IS_LOCAL = ["127.0.0.1", "localhost", "::1"].includes(window.location.hostname);
+const REMOTE_ONLY_TOOLTIP = "Only available when browsing from the same machine as the server.";
+
 const state = {
   appMode: "DOWNLOAD",        // DOWNLOAD | FIND_LINK
   current: "READY",           // READY | EDITING | FETCHING | INTERCEPTING
@@ -29,6 +40,7 @@ const state = {
   ws: null,
   recentDirs: [],
   recentTargetDirs: [],
+  externalPrograms: [],
   filterText: "",
   sortField: "added",         // added | size | name
   sortDir: "desc",            // desc | asc
@@ -59,17 +71,53 @@ const videoPlayer = el("video-player");
 const videoModalTitle = el("video-modal-title");
 const audioPlayerWrap = el("audio-player-wrap");
 const audioPlayer = el("audio-player");
+const openWithFlyout = el("open-with-flyout");
+const openWithProgramsList = el("open-with-programs-list");
+const copyFlyout = el("copy-flyout");
+const fileFlyout = el("file-flyout");
+const externalProgramsModal = el("external-programs-modal");
+const externalProgramsList = el("external-programs-list");
+const programFormModal = el("program-form-modal");
+const programFormTitle = el("program-form-title");
+const programNameInput = el("program-name-input");
+const programPathInput = el("program-path-input");
+const programArgsInput = el("program-args-input");
+const programFormError = el("program-form-error");
+const programDeleteBtn = el("program-delete-btn");
 
 // ── Boot ──────────────────────────────────────────────────────
 async function boot() {
   await refreshVersion();
   await refreshSaveDir();
   await refreshTargetDir();
+  await refreshExternalPrograms();
   await loadJobsSnapshot();
   connectWebSocket();
+  applyLocalOnlyUI();
   inputField.setPlaceholderText = null; // n/a, kept for readability
   inputField.placeholder = "Paste a link, then press ENTER...";
   inputField.focus();
+}
+
+// Static for the life of the page (IS_LOCAL doesn't change at runtime),
+// so this just needs to run once at boot rather than on every menu open.
+function applyLocalOnlyUI() {
+  if (IS_LOCAL) return;
+  for (const id of ["ctx-manage-programs", "ctx-open-with", "flyout-manage-programs"]) {
+    const item = el(id);
+    item.classList.add("ctx-disabled");
+    item.title = REMOTE_ONLY_TOOLTIP;
+  }
+}
+
+async function refreshExternalPrograms() {
+  try {
+    const res = await fetch("/api/external-programs");
+    const data = await res.json();
+    state.externalPrograms = data.programs || [];
+  } catch (e) {
+    state.externalPrograms = [];
+  }
 }
 
 async function refreshSaveDir() {
@@ -424,6 +472,9 @@ function openLogoMenu(x, y) {
 
 function openJobMenu(x, y, job) {
   logoMenu.classList.add("hidden");
+  openWithFlyout.classList.add("hidden");
+  copyFlyout.classList.add("hidden");
+  fileFlyout.classList.add("hidden");
 
   const isDownloading = job.status === "DOWNLOADING";
   const isDone = job.status === "DONE";
@@ -433,12 +484,25 @@ function openJobMenu(x, y, job) {
   el("ctx-play-video").classList.toggle("hidden", !isVideo);
   el("ctx-play-audio").classList.toggle("hidden", !isAudioDone);
   el("ctx-extract-audio").classList.toggle("hidden", !isVideo);
-  el("ctx-delete-file").classList.toggle("hidden", isDownloading);
-  el("ctx-rename-file").classList.toggle("hidden", isDownloading);
+  // Shown for any completed item (video or audio) once at least one
+  // external program is configured; enabled/disabled state (local vs
+  // remote) is applied once at boot via applyLocalOnlyUI.
+  el("ctx-open-with").classList.toggle("hidden", !(isDone && state.externalPrograms.length > 0));
+
+  // Copy and File are submenu triggers now (see copy-flyout/file-flyout)
+  // rather than flat top-level items - the trigger itself is shown
+  // whenever at least one of its children would be, and the individual
+  // rows inside each flyout are toggled the same way they always were.
   el("ctx-copy-link").classList.toggle("hidden", isDownloading);
   el("ctx-copy-filename").classList.toggle("hidden", isDownloading);
+  el("ctx-copy-submenu").classList.toggle("hidden", isDownloading);
+
+  el("ctx-rename-file").classList.toggle("hidden", isDownloading);
   el("ctx-move-to-target").classList.toggle("hidden", !isDone);
   el("ctx-open-folder").classList.toggle("hidden", !isDone);
+  el("ctx-file-submenu").classList.toggle("hidden", isDownloading);
+
+  el("ctx-delete-file").classList.toggle("hidden", isDownloading);
 
   jobMenu.dataset.filename = job.filename;
   positionMenu(jobMenu, x, y);
@@ -485,6 +549,106 @@ el("ctx-extract-audio").addEventListener("click", async () => {
   } catch (e) {
     window.alert("Couldn't reach the server to extract audio.");
   }
+});
+
+el("ctx-open-with").addEventListener("click", () => {
+  if (!IS_LOCAL) {
+    flashStatus(REMOTE_ONLY_TOOLTIP);
+    return;
+  }
+  // Click toggles the flyout open/closed rather than hover, so this
+  // behaves sanely with touch/Moonlight-style input.
+  if (!openWithFlyout.classList.contains("hidden")) {
+    openWithFlyout.classList.add("hidden");
+    return;
+  }
+  openOpenWithFlyout();
+});
+
+function closeOtherFlyouts(except) {
+  for (const flyout of [openWithFlyout, copyFlyout, fileFlyout]) {
+    if (flyout !== except) flyout.classList.add("hidden");
+  }
+}
+
+function positionFlyoutNextToJobMenu(flyoutEl) {
+  const jobRect = jobMenu.getBoundingClientRect();
+  flyoutEl.classList.remove("hidden");
+  const flyoutRect = flyoutEl.getBoundingClientRect();
+
+  // Prefer opening to the right of the job menu; flip to the left if
+  // that would run off the edge of the viewport.
+  let left = jobRect.right + 4;
+  if (left + flyoutRect.width > window.innerWidth - 8) {
+    left = jobRect.left - flyoutRect.width - 4;
+  }
+  left = Math.max(8, left);
+
+  let top = jobRect.top;
+  const maxTop = window.innerHeight - flyoutRect.height - 8;
+  top = Math.min(top, Math.max(8, maxTop));
+
+  flyoutEl.style.left = `${left}px`;
+  flyoutEl.style.top = `${top}px`;
+  lastMenuOpenAt = Date.now(); // extend the ghost-click grace window
+}
+
+function openOpenWithFlyout() {
+  closeOtherFlyouts(openWithFlyout);
+  openWithProgramsList.innerHTML = "";
+  for (const prog of state.externalPrograms) {
+    const item = document.createElement("div");
+    item.className = "ctx-item";
+    item.textContent = prog.name;
+    item.title = prog.path;
+    item.addEventListener("click", () => launchExternalProgram(prog.id));
+    openWithProgramsList.appendChild(item);
+  }
+  positionFlyoutNextToJobMenu(openWithFlyout);
+}
+
+el("ctx-copy-submenu").addEventListener("click", () => {
+  if (!copyFlyout.classList.contains("hidden")) {
+    copyFlyout.classList.add("hidden");
+    return;
+  }
+  closeOtherFlyouts(copyFlyout);
+  positionFlyoutNextToJobMenu(copyFlyout);
+});
+
+el("ctx-file-submenu").addEventListener("click", () => {
+  if (!fileFlyout.classList.contains("hidden")) {
+    fileFlyout.classList.add("hidden");
+    return;
+  }
+  closeOtherFlyouts(fileFlyout);
+  positionFlyoutNextToJobMenu(fileFlyout);
+});
+
+async function launchExternalProgram(programId) {
+  const filename = jobMenu.dataset.filename;
+  closeMenus();
+  try {
+    const res = await fetch("/api/jobs/open-with", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ filename, program_id: programId }),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      window.alert(`Couldn't launch program:\n${data.error || "Unknown error"}`);
+    }
+  } catch (e) {
+    window.alert("Couldn't reach the server to launch that program.");
+  }
+}
+
+el("flyout-manage-programs").addEventListener("click", () => {
+  closeMenus();
+  if (!IS_LOCAL) {
+    flashStatus(REMOTE_ONLY_TOOLTIP);
+    return;
+  }
+  openExternalProgramsModal();
 });
 
 const NEAR_END_THRESHOLD_SECONDS = 5;
@@ -716,6 +880,9 @@ function positionMenu(menu, x, y) {
 function closeMenus() {
   logoMenu.classList.add("hidden");
   jobMenu.classList.add("hidden");
+  openWithFlyout.classList.add("hidden");
+  copyFlyout.classList.add("hidden");
+  fileFlyout.classList.add("hidden");
 }
 
 document.addEventListener("click", (e) => {
@@ -725,7 +892,15 @@ document.addEventListener("click", (e) => {
   // period, that ghost click hits this same listener and closes the menu
   // before it's possible to actually tap an item in it.
   if (Date.now() - lastMenuOpenAt < MENU_CLOSE_GRACE_MS) return;
-  if (!logoMenu.contains(e.target) && !jobMenu.contains(e.target)) closeMenus();
+  if (
+    !logoMenu.contains(e.target) &&
+    !jobMenu.contains(e.target) &&
+    !openWithFlyout.contains(e.target) &&
+    !copyFlyout.contains(e.target) &&
+    !fileFlyout.contains(e.target)
+  ) {
+    closeMenus();
+  }
 });
 
 el("logo").addEventListener("contextmenu", (e) => {
@@ -782,6 +957,174 @@ el("ctx-change-target").addEventListener("click", () => {
   closeMenus();
   targetFolderModal.open();
 });
+
+el("ctx-manage-programs").addEventListener("click", () => {
+  closeMenus();
+  if (!IS_LOCAL) {
+    flashStatus(REMOTE_ONLY_TOOLTIP);
+    return;
+  }
+  openExternalProgramsModal();
+});
+
+// ── External programs (Manage / Add / Edit) ────────────────────
+function openExternalProgramsModal() {
+  renderExternalProgramsList();
+  externalProgramsModal.classList.remove("hidden");
+}
+
+function closeExternalProgramsModal() {
+  externalProgramsModal.classList.add("hidden");
+}
+
+function renderExternalProgramsList() {
+  externalProgramsList.innerHTML = "";
+  if (state.externalPrograms.length === 0) {
+    const empty = document.createElement("div");
+    empty.className = "program-empty-note";
+    empty.textContent = "No external programs added yet.";
+    externalProgramsList.appendChild(empty);
+    return;
+  }
+  for (const prog of state.externalPrograms) {
+    const row = document.createElement("div");
+    row.className = "program-row";
+
+    const info = document.createElement("div");
+    info.className = "program-row-info";
+    const nameEl = document.createElement("div");
+    nameEl.className = "program-row-name";
+    nameEl.textContent = prog.name;
+    const pathEl = document.createElement("div");
+    pathEl.className = "program-row-path";
+    pathEl.textContent = prog.path;
+    pathEl.title = prog.path;
+    info.appendChild(nameEl);
+    info.appendChild(pathEl);
+
+    const editBtn = document.createElement("button");
+    editBtn.className = "program-edit-btn";
+    editBtn.textContent = "Edit";
+    editBtn.addEventListener("click", () => openProgramForm(prog));
+
+    row.appendChild(info);
+    row.appendChild(editBtn);
+    externalProgramsList.appendChild(row);
+  }
+}
+
+el("add-program-btn").addEventListener("click", () => openProgramForm(null));
+el("external-programs-close-btn").addEventListener("click", closeExternalProgramsModal);
+externalProgramsModal.addEventListener("click", (e) => {
+  if (e.target === externalProgramsModal) closeExternalProgramsModal();
+});
+
+let editingProgramId = null;
+
+function openProgramForm(prog) {
+  editingProgramId = prog ? prog.id : null;
+  programFormTitle.textContent = prog ? "Edit Program" : "Add Program";
+  programNameInput.value = prog ? prog.name : "";
+  programPathInput.value = prog ? prog.path : "";
+  programArgsInput.value = prog ? (prog.args || "") : "";
+  programFormError.classList.add("hidden");
+  programDeleteBtn.classList.toggle("hidden", !prog);
+  programFormModal.classList.remove("hidden");
+  programNameInput.focus();
+}
+
+function closeProgramForm() {
+  programFormModal.classList.add("hidden");
+  editingProgramId = null;
+}
+
+function showProgramFormError(message) {
+  programFormError.textContent = message;
+  programFormError.classList.remove("hidden");
+}
+
+el("program-form-cancel-btn").addEventListener("click", closeProgramForm);
+programFormModal.addEventListener("click", (e) => {
+  if (e.target === programFormModal) closeProgramForm();
+});
+
+el("program-browse-btn").addEventListener("click", async () => {
+  const btn = el("program-browse-btn");
+  programFormError.classList.add("hidden");
+  const original = btn.textContent;
+  btn.textContent = "...";
+  btn.disabled = true;
+  try {
+    const res = await fetch("/api/browse-program-file", { method: "POST" });
+    const data = await res.json();
+    if (!res.ok) {
+      showProgramFormError(data.error || "Couldn't open a file browser.");
+    } else if (data.path) {
+      programPathInput.value = data.path;
+    }
+    // empty data.path just means the dialog was cancelled - do nothing
+  } catch (e) {
+    showProgramFormError("Couldn't reach the server.");
+  } finally {
+    btn.textContent = original;
+    btn.disabled = false;
+  }
+});
+
+async function saveProgramForm() {
+  const name = programNameInput.value.trim();
+  const path = programPathInput.value.trim();
+  const args = programArgsInput.value;
+  if (!name) { showProgramFormError("Program name can't be empty."); return; }
+  if (!path) { showProgramFormError("Program path can't be empty."); return; }
+
+  const endpoint = editingProgramId ? "/api/external-programs/update" : "/api/external-programs";
+  const body = editingProgramId
+    ? { id: editingProgramId, name, path, args }
+    : { name, path, args };
+
+  try {
+    const res = await fetch(endpoint, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    const data = await res.json();
+    if (!res.ok) { showProgramFormError(data.error || "Unknown error"); return; }
+    state.externalPrograms = data.programs || [];
+    renderExternalProgramsList();
+    closeProgramForm();
+  } catch (e) {
+    showProgramFormError("Couldn't reach the server to save that program.");
+  }
+}
+
+el("program-form-save-btn").addEventListener("click", saveProgramForm);
+
+el("program-delete-btn").addEventListener("click", async () => {
+  if (!editingProgramId) return;
+  if (!window.confirm(`Remove "${programNameInput.value.trim()}" from external programs?`)) return;
+  try {
+    const res = await fetch("/api/external-programs/delete", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id: editingProgramId }),
+    });
+    const data = await res.json();
+    if (!res.ok) { showProgramFormError(data.error || "Unknown error"); return; }
+    state.externalPrograms = data.programs || [];
+    renderExternalProgramsList();
+    closeProgramForm();
+  } catch (e) {
+    showProgramFormError("Couldn't reach the server to delete that program.");
+  }
+});
+
+for (const input of [programNameInput, programPathInput, programArgsInput]) {
+  input.addEventListener("keydown", (e) => {
+    e.stopPropagation(); // don't trigger the global Enter/Escape pipeline handlers
+    if (e.key === "Enter") saveProgramForm();
+    if (e.key === "Escape") closeProgramForm();
+  });
+}
 
 function createFolderModalController({
   modal, input, errorEl, recentWrap, recentList, browseBtn, cancelBtn, setBtn,
@@ -1166,6 +1509,11 @@ let baseFontSize = 12;
 document.addEventListener("keydown", async (e) => {
   if (!folderModal.classList.contains("hidden")) return; // modal has its own handler
   if (!targetFolderModalEl.classList.contains("hidden")) return; // ditto
+  if (!externalProgramsModal.classList.contains("hidden")) {
+    if (e.key === "Escape") closeExternalProgramsModal();
+    return;
+  }
+  if (!programFormModal.classList.contains("hidden")) return; // its inputs have their own handler
 
   if (!videoModal.classList.contains("hidden")) {
     if (e.key === "Escape") closeMediaModal();

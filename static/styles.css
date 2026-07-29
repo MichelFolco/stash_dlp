@@ -358,6 +358,18 @@ html, body {
 }
 .ctx-separator.hidden { display: none; }
 
+.ctx-item-submenu {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.ctx-chevron {
+  color: var(--text-disabled);
+  flex-shrink: 0;
+}
+
 .ctx-row {
   display: flex;
   align-items: center;
@@ -512,6 +524,79 @@ html, body {
   background: var(--border);
   border-color: var(--accent);
   color: var(--accent);
+}
+
+.btn-danger {
+  border-color: var(--error-text);
+  color: var(--error-text);
+  flex: 0 1 auto;
+  margin-right: auto;
+}
+.btn-danger:hover {
+  background: var(--error-bg);
+}
+
+/* ── External programs list/form ───────────────────────────────── */
+.external-programs-list {
+  max-height: 260px;
+  margin-top: 4px;
+}
+
+.external-programs-actions {
+  justify-content: space-between;
+}
+
+.program-form-row {
+  margin-bottom: 8px;
+}
+
+.program-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 4px;
+}
+
+.program-row-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.program-row-name {
+  color: var(--text);
+  font-weight: bold;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.program-row-path {
+  color: var(--text-disabled);
+  font-size: calc(var(--base-font) - 2px);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.program-edit-btn {
+  flex: 0 0 auto;
+  background: var(--panel);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 4px 10px;
+  font-size: calc(var(--base-font) - 1px);
+  cursor: pointer;
+}
+.program-edit-btn:hover {
+  background: var(--border);
+  border-color: var(--accent);
+}
+
+.program-empty-note {
+  color: var(--text-dim);
+  padding: 8px 4px;
+  font-size: calc(var(--base-font) - 1px);
 }
 
 /* ── Video playback modal ──────────────────────────────────── */

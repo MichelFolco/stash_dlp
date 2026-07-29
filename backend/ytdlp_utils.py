@@ -22,6 +22,44 @@ def clean_filename(raw: str) -> str:
     return re.sub(r"\s+", " ", s).strip()
 
 
+def split_args_string(raw_args: str) -> list:
+    """Splits an external program's command-line-args string into a
+    token list for subprocess.Popen, respecting "quoted sections" (so a
+    single argument can contain spaces) but NOT treating backslashes as
+    escape characters - unlike shlex.split, which would mangle Windows
+    paths like C:\\Program Files\\foo.exe that show up inside a {file}
+    substitution or a quoted arg."""
+    tokens = []
+    current = []
+    in_quotes = False
+    for ch in raw_args or "":
+        if ch == '"':
+            in_quotes = not in_quotes
+            continue
+        if ch.isspace() and not in_quotes:
+            if current:
+                tokens.append("".join(current))
+                current = []
+            continue
+        current.append(ch)
+    if current:
+        tokens.append("".join(current))
+    return tokens
+
+
+def build_open_with_command(program_path: str, args_template: str, media_path: str) -> list:
+    """Builds the argv list for launching an external program against a
+    completed download. If the args template contains a {file} token,
+    it's substituted in place (letting the user control ordering
+    relative to other flags); otherwise the media path is appended as
+    the final argument."""
+    tokens = split_args_string(args_template)
+    if any("{file}" in t for t in tokens):
+        tokens = [t.replace("{file}", media_path) for t in tokens]
+        return [program_path] + tokens
+    return [program_path] + tokens + [media_path]
+
+
 def get_domain(url: str) -> str:
     try:
         host = urlparse(url).hostname or ""

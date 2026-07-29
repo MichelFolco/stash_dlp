@@ -27,3 +27,26 @@ def _ask_directory_sync(initial_dir: str) -> str:
 
 async def ask_directory(initial_dir: str = "") -> str:
     return await asyncio.to_thread(_ask_directory_sync, initial_dir)
+
+
+def _ask_file_sync(initial_dir: str) -> str:
+    import tkinter as tk
+    from tkinter import filedialog
+
+    root = tk.Tk()
+    root.withdraw()
+    root.attributes("-topmost", True)
+    try:
+        path = filedialog.askopenfilename(
+            initialdir=initial_dir or None,
+            title="Select Program",
+        )
+    finally:
+        root.destroy()
+    return path or ""
+
+
+async def ask_file_path(initial_dir: str = "") -> str:
+    """Same story as ask_directory - localhost-gated by main.py, since
+    the picker pops up on the server machine."""
+    return await asyncio.to_thread(_ask_file_sync, initial_dir)

@@ -6,6 +6,7 @@ the desktop app's single-folder model.
 """
 import json
 import os
+import uuid
 
 from config import SETTINGS_JSON_PATH, DEFAULT_SAVE_DIR, VIDEO_EXTENSIONS, AUDIO_EXTENSIONS
 
@@ -148,6 +149,95 @@ def set_target_dir(raw_path: str) -> str:
     _push_recent_target(path, data)
     _persist(data)
     return path
+
+
+# ── External programs ("Open With...") ────────────────────────────
+# Global rather than per-download-folder, like target_dir - a fixed set
+# of tools (VLC, an editor, whatever) you launch completed files with,
+# independent of which download folder is currently active.
+EXTERNAL_PROGRAMS_KEY = "external_programs"
+
+
+def _validate_program_path(raw_path: str) -> str:
+    """Shared validation for an external program's executable path:
+    non-empty, exists, and points at a file (not a folder). Deliberately
+    stricter than _validate_folder_path (no auto-create) since a program
+    path that doesn't exist yet is just a mistake, not a folder to make."""
+    if not raw_path or not raw_path.strip():
+        raise ValueError("Program path can't be empty.")
+
+    path = os.path.abspath(os.path.expanduser(raw_path.strip()))
+
+    if not os.path.exists(path):
+        raise ValueError(f"'{path}' doesn't exist.")
+    if not os.path.isfile(path):
+        raise ValueError(f"'{path}' is not a file.")
+
+    return path
+
+
+def get_external_programs() -> list:
+    return _load().get(EXTERNAL_PROGRAMS_KEY, [])
+
+
+def get_external_program(program_id: str):
+    for prog in get_external_programs():
+        if prog.get("id") == program_id:
+            return prog
+    return None
+
+
+def add_external_program(name: str, path: str, args: str = "") -> list:
+    """Validates and appends a new external program entry. Returns the
+    updated list of all programs (id, name, path, args)."""
+    name = (name or "").strip()
+    if not name:
+        raise ValueError("Program name can't be empty.")
+    validated_path = _validate_program_path(path)
+
+    data = _load()
+    programs = data.get(EXTERNAL_PROGRAMS_KEY, [])
+    programs.append({
+        "id": uuid.uuid4().hex,
+        "name": name,
+        "path": validated_path,
+        "args": args or "",
+    })
+    data[EXTERNAL_PROGRAMS_KEY] = programs
+    _persist(data)
+    return programs
+
+
+def update_external_program(program_id: str, name: str, path: str, args: str = "") -> list:
+    """Validates and updates an existing entry in place (matched by id,
+    not name, so renaming doesn't create a duplicate). Returns the
+    updated list of all programs."""
+    name = (name or "").strip()
+    if not name:
+        raise ValueError("Program name can't be empty.")
+    validated_path = _validate_program_path(path)
+
+    data = _load()
+    programs = data.get(EXTERNAL_PROGRAMS_KEY, [])
+    for prog in programs:
+        if prog.get("id") == program_id:
+            prog["name"] = name
+            prog["path"] = validated_path
+            prog["args"] = args or ""
+            break
+    else:
+        raise ValueError("That program no longer exists.")
+    data[EXTERNAL_PROGRAMS_KEY] = programs
+    _persist(data)
+    return programs
+
+
+def delete_external_program(program_id: str) -> list:
+    data = _load()
+    programs = [p for p in data.get(EXTERNAL_PROGRAMS_KEY, []) if p.get("id") != program_id]
+    data[EXTERNAL_PROGRAMS_KEY] = programs
+    _persist(data)
+    return programs
 
 
 DATA_DIR_NAME = "stash_dlp_data"
