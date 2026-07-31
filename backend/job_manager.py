@@ -11,6 +11,7 @@ import shutil
 from typing import Dict, Optional
 
 from config import RES_FORMATS, AUDIO_ONLY_KEY
+from ffmpeg_encode import probe_basic_info
 from procflags import NO_CONSOLE_KWARGS
 from settings import get_save_dir, get_target_dir
 from storage import load_saved_queue, save_queue_to_disk, write_to_history_log
@@ -52,21 +53,26 @@ class ConnectionManager:
 
 
 class JobManager:
-    def __init__(self):
+    def __init__(self, connections: "ConnectionManager | None" = None):
         self.jobs: Dict[str, dict] = {}  # filename -> job state dict, insertion order preserved
         self.saved_queue: dict = load_saved_queue()
-        self.connections = ConnectionManager()
+        self.connections = connections if connections is not None else ConnectionManager()
         self._processes: Dict[str, asyncio.subprocess.Process] = {}
         self._cancelled: set = set()
 
     # ── Bootstrapping ────────────────────────────────────────────
-    def seed_from_filesystem(self, done_jobs: list, replace: bool = False):
+    async def seed_from_filesystem(self, done_jobs: list, replace: bool = False):
         """Populate self.jobs with jobs discovered by filesystem_scan.
         With replace=True (used when the download folder changes), any
         previously-tracked completed jobs from the old folder are
         dropped first - active DOWNLOADING jobs are kept regardless,
         since they're mid-flight independent of which folder is
-        "current" right now."""
+        "current" right now.
+
+        Media metadata (resolution/duration/filetype) is cached in
+        queue.json once probed, so this only pays the ffprobe cost for
+        files that haven't been seen before (new drops, or the first
+        scan after upgrading from a version that didn't track this)."""
         if replace:
             self.jobs = {
                 filename: job
@@ -74,20 +80,53 @@ class JobManager:
                 if job["status"] == "DOWNLOADING"
             }
 
+        disk_queue = load_saved_queue()
+        queue_dirty = False
+
         for job in done_jobs:
-            self.jobs[job["filename"]] = {
-                "filename": job["filename"],
+            filename = job["filename"]
+            width = job.get("width", 0)
+            height = job.get("height", 0)
+            duration = job.get("duration", 0)
+            ext = job.get("ext", "")
+
+            if not ext:
+                media_path = find_media_file(filename)
+                if media_path:
+                    ext = os.path.splitext(media_path)[1].lstrip(".").upper()
+                    try:
+                        probed = await probe_basic_info(media_path)
+                    except Exception:
+                        probed = {"width": 0, "height": 0, "duration": 0.0}
+                    width, height, duration = probed["width"], probed["height"], probed["duration"]
+                    if filename in disk_queue:
+                        disk_queue[filename].update({
+                            "width": width, "height": height,
+                            "duration": duration, "ext": ext,
+                        })
+                        queue_dirty = True
+
+            self.jobs[filename] = {
+                "filename": filename,
                 "url": job["url"],
                 "res_cap": job["res_cap"],
                 "status": job["status"],
                 "file_size": job.get("file_size", ""),
                 "is_audio": job.get("is_audio", False),
                 "playback_position": job.get("playback_position", 0),
+                "width": width,
+                "height": height,
+                "duration": duration,
+                "ext": ext,
                 "pct": 100,
                 "total": "",
                 "speed": "",
                 "eta": "",
             }
+
+        if queue_dirty:
+            save_queue_to_disk(disk_queue)
+
         self.saved_queue = load_saved_queue()
 
     def snapshot(self) -> list:
@@ -108,6 +147,10 @@ class JobManager:
             "file_size": "",
             "is_audio": res_cap == AUDIO_ONLY_KEY,  # confirmed for real once the file lands
             "playback_position": 0,
+            "width": 0,
+            "height": 0,
+            "duration": 0,
+            "ext": "",
             "pct": 0,
             "total": "",
             "speed": "",
@@ -241,6 +284,7 @@ class JobManager:
         filename = job["filename"]
         file_size_str = ""
         is_audio = job.get("is_audio", False)
+        width, height, duration, ext = 0, 0, 0, ""
         if status == "DONE":
             size_bytes = get_downloaded_file_size(filename)
             if size_bytes is not None:
@@ -248,17 +292,31 @@ class JobManager:
             media_path = find_media_file(filename)
             if media_path:
                 is_audio = is_audio_file(media_path)
+                ext = os.path.splitext(media_path)[1].lstrip(".").upper()
+                try:
+                    probed = await probe_basic_info(media_path)
+                    width, height, duration = probed["width"], probed["height"], probed["duration"]
+                except Exception:
+                    pass
             self._relocate_downloaded_thumbnail(filename)
 
         job["status"] = status
         job["file_size"] = file_size_str
         job["is_audio"] = is_audio
+        job["width"] = width
+        job["height"] = height
+        job["duration"] = duration
+        job["ext"] = ext
 
         if filename in self.saved_queue:
             self.saved_queue[filename]["status"] = status
             if file_size_str:
                 self.saved_queue[filename]["file_size"] = file_size_str
             self.saved_queue[filename]["is_audio"] = is_audio
+            self.saved_queue[filename]["width"] = width
+            self.saved_queue[filename]["height"] = height
+            self.saved_queue[filename]["duration"] = duration
+            self.saved_queue[filename]["ext"] = ext
             save_queue_to_disk(self.saved_queue)
 
         write_to_history_log(
@@ -273,6 +331,10 @@ class JobManager:
             "status": status,
             "file_size": file_size_str,
             "is_audio": is_audio,
+            "width": width,
+            "height": height,
+            "duration": duration,
+            "ext": ext,
         })
 
     def _relocate_downloaded_thumbnail(self, filename: str) -> None:

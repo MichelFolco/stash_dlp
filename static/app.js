@@ -30,6 +30,7 @@ const REMOTE_ONLY_TOOLTIP = "Only available when browsing from the same machine 
 
 const state = {
   appMode: "DOWNLOAD",        // DOWNLOAD | FIND_LINK
+  currentView: "downloads",   // downloads | encode
   current: "READY",           // READY | EDITING | FETCHING | INTERCEPTING
   targetUrl: "",
   stagedUrl: "",
@@ -42,8 +43,19 @@ const state = {
   recentTargetDirs: [],
   externalPrograms: [],
   filterText: "",
+  audioOnlyFilter: false,
   sortField: "added",         // added | size | name
   sortDir: "desc",            // desc | asc
+
+  // Encode Manager
+  encodeJobs: new Map(),          // id -> job dict
+  encodeCapabilities: null,
+  encodeSources: [],
+  encodeFilterText: "",
+  encodeSortField: "added",       // added | size | savings
+  encodeSortDir: "desc",
+  encodeSourceInfo: null,         // last probe result for the selected source
+  encodeEstimateSeq: 0,           // guards against out-of-order estimate responses
 };
 
 const inputField = el("input-field");
@@ -52,6 +64,7 @@ const queueList = el("queue-list");
 const miniStats = el("mini-stats");
 const dlModeBtn = el("dl-mode-btn");
 const findModeBtn = el("find-mode-btn");
+const encodeModeBtn = el("encode-mode-btn");
 const modeContainer = el("mode-container");
 const resDropdown = el("res-dropdown");
 const ctxVersion = el("ctx-version");
@@ -94,6 +107,7 @@ async function boot() {
   await refreshTargetDir();
   await refreshExternalPrograms();
   await loadJobsSnapshot();
+  await loadEncodeJobsSnapshot();
   connectWebSocket();
   applyLocalOnlyUI();
   inputField.setPlaceholderText = null; // n/a, kept for readability
@@ -109,6 +123,11 @@ function applyLocalOnlyUI() {
     const item = el(id);
     item.classList.add("ctx-disabled");
     item.title = REMOTE_ONLY_TOOLTIP;
+  }
+  for (const id of ["encode-source-browse-btn", "open-converted-btn"]) {
+    const btn = el(id);
+    btn.disabled = true;
+    btn.title = REMOTE_ONLY_TOOLTIP;
   }
 }
 
@@ -202,6 +221,7 @@ function connectWebSocket() {
     refreshSaveDir();
     refreshTargetDir();
     loadJobsSnapshot();
+    loadEncodeJobsSnapshot();
 
     if (inputField.disabled) {
       inputField.disabled = false;
@@ -236,6 +256,22 @@ function connectWebSocket() {
     } else if (msg.type === "refresh") {
       loadJobsIntoMap(msg.jobs);
       renderLedger();
+    } else if (msg.type === "encode_job_added") {
+      state.encodeJobs.set(msg.job.id, msg.job);
+      renderEncodeLedger();
+    } else if (msg.type === "encode_job_progress" || msg.type === "encode_job_updated") {
+      state.encodeJobs.set(msg.job.id, msg.job);
+      updateEncodeJobCard(msg.job);
+      // A status flip (e.g. into/out of DONE) can change whether a
+      // download's RE-ENCODED pill should show, so keep it in sync.
+      if (msg.type === "encode_job_updated") {
+        renderLedger();
+        if (msg.job.status === "DONE") playCompletionPing();
+      }
+    } else if (msg.type === "encode_job_deleted") {
+      state.encodeJobs.delete(msg.job_id);
+      renderEncodeLedger();
+      renderLedger();
     }
   };
 
@@ -261,9 +297,13 @@ function getFilteredSortedJobs() {
   const withIndex = Array.from(state.jobs.values()).map((job, i) => ({ job, addedIndex: i }));
 
   const query = state.filterText.trim().toLowerCase();
-  const filtered = query
+  let filtered = query
     ? withIndex.filter(({ job }) => job.filename.toLowerCase().includes(query))
     : withIndex;
+
+  if (state.audioOnlyFilter) {
+    filtered = filtered.filter(({ job }) => job.is_audio);
+  }
 
   const dirMul = state.sortDir === "asc" ? 1 : -1;
   filtered.sort((a, b) => {
@@ -288,12 +328,82 @@ function renderLedger() {
   }
 }
 
+// Common video aspect ratios, checked against the actual pixel ratio so
+// slightly-off dimensions (e.g. 1918x1080 from some encoders) still snap
+// to the label a person would recognize, rather than showing "959:540".
+const COMMON_ASPECT_RATIOS = [
+  [1, 1], [4, 3], [3, 2], [16, 9], [16, 10], [21, 9], [9, 16], [3, 4], [2, 3], [10, 16],
+];
+
+function aspectRatioLabel(width, height) {
+  if (!width || !height) return "";
+  const ratio = width / height;
+  for (const [rw, rh] of COMMON_ASPECT_RATIOS) {
+    if (Math.abs(ratio - rw / rh) < 0.02) return `${rw}:${rh}`;
+  }
+  const divisor = gcd(width, height);
+  return `${width / divisor}:${height / divisor}`;
+}
+
+function gcd(a, b) {
+  return b === 0 ? a : gcd(b, a % b);
+}
+
+function stemOf(filename) {
+  const idx = filename.lastIndexOf(".");
+  return idx > 0 ? filename.slice(0, idx) : filename;
+}
+
+// A download is considered re-encoded if a completed Encode Manager job's
+// source file traces back to it - i.e. its source_filename's stem matches
+// this job's filename. Encode jobs are kept in sync client-side (see the
+// websocket handler and loadEncodeJobsSnapshot), so this is just a lookup.
+function isReencoded(filename) {
+  for (const encodeJob of state.encodeJobs.values()) {
+    if (encodeJob.status === "DONE" && stemOf(encodeJob.source_filename || "") === filename) {
+      return true;
+    }
+  }
+  return false;
+}
+
+// Short synthesized two-tone chime, so completion has an audible cue
+// without needing to ship/load an actual sound file.
+function playCompletionPing() {
+  try {
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    const now = ctx.currentTime;
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = "sine";
+    osc.frequency.setValueAtTime(880, now);
+    osc.frequency.exponentialRampToValueAtTime(1320, now + 0.12);
+    gain.gain.setValueAtTime(0.0001, now);
+    gain.gain.exponentialRampToValueAtTime(0.25, now + 0.01);
+    gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.35);
+    osc.connect(gain).connect(ctx.destination);
+    osc.start(now);
+    osc.stop(now + 0.4);
+    osc.onended = () => ctx.close();
+  } catch (e) {
+    // Audio unavailable/blocked (e.g. no user interaction yet) - not
+    // critical, the visual completion state still shows either way.
+  }
+}
+
 const ledgerFilterInput = el("ledger-filter");
+const ledgerAudioFilterBtn = el("ledger-audio-filter-btn");
 const ledgerSortSelect = el("ledger-sort");
 const ledgerSortDirBtn = el("ledger-sort-dir");
 
 ledgerFilterInput.addEventListener("input", () => {
   state.filterText = ledgerFilterInput.value;
+  renderLedger();
+});
+
+ledgerAudioFilterBtn.addEventListener("click", () => {
+  state.audioOnlyFilter = !state.audioOnlyFilter;
+  ledgerAudioFilterBtn.classList.toggle("active", state.audioOnlyFilter);
   renderLedger();
 });
 
@@ -355,6 +465,12 @@ function buildJobCard(job) {
     badge.textContent = "AUDIO";
     titleRow.appendChild(badge);
   }
+  if (job.status === "DONE" && isReencoded(job.filename)) {
+    const pill = document.createElement("span");
+    pill.className = "reencoded-badge";
+    pill.textContent = "RE-ENCODED";
+    titleRow.appendChild(pill);
+  }
   body.appendChild(titleRow);
 
   const status = job.status;
@@ -375,11 +491,24 @@ function buildJobCard(job) {
     updateProgressDOM(card, job);
   } else {
     card.classList.add(status === "DONE" ? "done" : status === "CANCELLED" ? "cancelled" : "error");
-    if (status === "DONE" && job.file_size) {
-      const size = document.createElement("div");
-      size.className = "job-size";
-      size.textContent = job.file_size;
-      body.appendChild(size);
+    if (status === "DONE") {
+      const metaParts = [];
+      if (job.ext) metaParts.push(job.ext);
+      if (!job.is_audio && job.width && job.height) {
+        metaParts.push(`${job.width}\u00d7${job.height}`);
+        const ar = aspectRatioLabel(job.width, job.height);
+        if (ar) metaParts.push(ar);
+      }
+      const durText = formatDuration(job.duration);
+      if (durText) metaParts.push(durText);
+      if (job.file_size) metaParts.push(job.file_size);
+
+      if (metaParts.length) {
+        const meta = document.createElement("div");
+        meta.className = "job-size";
+        meta.textContent = metaParts.join("  •  ");
+        body.appendChild(meta);
+      }
     }
     card.appendChild(body);
   }
@@ -406,7 +535,16 @@ function buildJobCard(job) {
 
 function buildTooltip(job) {
   let t = `File: ${job.filename}\nURL: ${job.url || ""}`;
+  if (job.ext) t += `\nType: ${job.ext}`;
+  if (!job.is_audio && job.width && job.height) {
+    t += `\nResolution: ${job.width}\u00d7${job.height}`;
+    const ar = aspectRatioLabel(job.width, job.height);
+    if (ar) t += ` (${ar})`;
+  }
+  const durText = formatDuration(job.duration);
+  if (durText) t += `\nDuration: ${durText}`;
   if (job.file_size) t += `\nSize: ${job.file_size}`;
+  if (job.status === "DONE" && isReencoded(job.filename)) t += `\nRe-encoded copy available in Converted/`;
   return t;
 }
 
@@ -1312,14 +1450,16 @@ const targetFolderModal = createFolderModalController({
 
 resDropdown.addEventListener("click", (e) => e.stopPropagation());
 
-// ── Mode buttons (Download / Find Link) ───────────────────────
+// ── Mode buttons (Download / Find Link / Encode) ───────────────
 function setAppModeDownload() {
+  setView("downloads");
   state.appMode = "DOWNLOAD";
   resetToReady();
   updateModeButtons();
 }
 
 function setAppModeFindLink() {
+  setView("downloads");
   state.appMode = "FIND_LINK";
   inputField.disabled = false;
   inputField.value = "";
@@ -1328,15 +1468,44 @@ function setAppModeFindLink() {
   updateModeButtons();
 }
 
+function setView(view) {
+  if (state.currentView === view) return;
+  state.currentView = view;
+  const isEncode = view === "encode";
+  el("download-view").classList.toggle("hidden", isEncode);
+  el("encode-view").classList.toggle("hidden", !isEncode);
+  if (isEncode) {
+    inputField.disabled = true;
+    inputField.value = "";
+    inputField.placeholder = "Switch to Download or Find Link mode to paste a URL";
+    if (state.encodeSources.length === 0) refreshEncodeSources();
+  } else {
+    inputField.disabled = false;
+  }
+}
+
+function setAppModeEncode() {
+  setView("encode");
+  updateModeButtons();
+}
+
 function updateModeButtons() {
-  const isDl = state.appMode === "DOWNLOAD";
+  const isEncode = state.currentView === "encode";
+  const isDl = !isEncode && state.appMode === "DOWNLOAD";
+  const isFind = !isEncode && state.appMode === "FIND_LINK";
   dlModeBtn.classList.toggle("active", isDl);
-  findModeBtn.classList.toggle("active", !isDl);
+  findModeBtn.classList.toggle("active", isFind);
+  encodeModeBtn.classList.toggle("active", isEncode);
   dlModeBtn.title = isDl ? "Download Mode Active" : "Switch to Download Mode (Ctrl+D)";
-  findModeBtn.title = isDl ? "Switch to Find Link Mode (Ctrl+F)" : "Find Link Mode Active";
+  findModeBtn.title = isFind ? "Find Link Mode Active" : "Switch to Find Link Mode (Ctrl+F)";
+  encodeModeBtn.title = isEncode ? "Encode Manager Active" : "Switch to Encode Manager";
 }
 
 dlModeBtn.addEventListener("click", () => {
+  if (state.currentView === "encode") {
+    setAppModeDownload();
+    return;
+  }
   if (state.current === "EDITING") {
     handleEnterPipeline(); // proceed with the download using the current input as the title
     return;
@@ -1352,6 +1521,7 @@ dlModeBtn.addEventListener("click", () => {
   }
 });
 findModeBtn.addEventListener("click", setAppModeFindLink);
+encodeModeBtn.addEventListener("click", setAppModeEncode);
 
 // ── Mini mode toggle ───────────────────────────────────────────
 el("ui-mode-btn").addEventListener("click", toggleMiniMode);
@@ -1363,12 +1533,14 @@ function toggleMiniMode() {
 }
 
 // ── Control bar ────────────────────────────────────────────────
-el("refresh-btn").addEventListener("click", async () => {
+async function refreshDownloadLedger() {
   const res = await fetch("/api/refresh", { method: "POST" });
   const data = await res.json();
   loadJobsIntoMap(data.jobs);
   renderLedger();
-});
+}
+
+el("refresh-btn").addEventListener("click", refreshDownloadLedger);
 
 
 el("move-all-btn").addEventListener("click", async () => {
@@ -1586,6 +1758,798 @@ document.addEventListener("keydown", async (e) => {
     } else {
       handleEnterPipeline();
     }
+  }
+});
+
+// ── Encode Manager ──────────────────────────────────────────────
+const encodeQueueList = el("encode-queue-list");
+const encodeFilterInput = el("encode-filter");
+const encodeSortSelect = el("encode-sort");
+const encodeSortDirBtn = el("encode-sort-dir");
+const newEncodeJobBtn = el("new-encode-job-btn");
+const openConvertedBtn = el("open-converted-btn");
+const newEncodeJobModal = el("new-encode-job-modal");
+const closeEncodeJobModalBtn = el("close-encode-job-modal");
+const cancelEncodeJobModalBtn = el("cancel-encode-job-modal");
+const addEncodeJobBtn = el("add-encode-job-btn");
+const encodeSourceSelect = el("encode-source-select");
+const encodeSourceBrowseRow = el("encode-source-browse-row");
+const encodeSourceBrowsePath = el("encode-source-browse-path");
+const encodeSourceBrowseBtn = el("encode-source-browse-btn");
+const encodeSourceInfo = el("encode-source-info");
+const encodeModeCrfBtn = el("encode-mode-crf-btn");
+const encodeModeSizeBtn = el("encode-mode-size-btn");
+const encodeCrfFields = el("encode-crf-fields");
+const encodeSizeFields = el("encode-size-fields");
+const encodeCodecSelect = el("encode-codec-select");
+const encodeBackendSelect = el("encode-backend-select");
+const encodeCrfSlider = el("encode-crf-slider");
+const encodeCrfValue = el("encode-crf-value");
+const encodeCrfHint = el("encode-crf-hint");
+const encodePresetSelect = el("encode-preset-select");
+const encodeTargetSizeInput = el("encode-target-size-input");
+const encodeResolutionSelect = el("encode-resolution-select");
+const encodeResolutionLabel = el("encode-resolution-label");
+const encodeForceArCheck = el("encode-force-ar-check");
+const encodeForceArFields = el("encode-force-ar-fields");
+const encodeAspectQuickRow = el("encode-aspect-quick-row");
+const encodeArWidthInput = el("encode-ar-width-input");
+const encodeArHeightInput = el("encode-ar-height-input");
+const encodeDeinterlaceCheck = el("encode-deinterlace-check");
+const encodeAutocropCheck = el("encode-autocrop-check");
+const encodeAdvancedToggle = el("encode-advanced-toggle");
+const encodeAdvancedBody = el("encode-advanced-body");
+const encodeAdvancedCaret = el("encode-advanced-caret");
+const encodeAudioSelect = el("encode-audio-select");
+const encodeContainerSelect = el("encode-container-select");
+const encodeDenoiseCheck = el("encode-denoise-check");
+const encodeSubtitlesSelect = el("encode-subtitles-select");
+const encodeOversizedSelect = el("encode-oversized-select");
+const encodeEstimateLabel = el("encode-estimate-label");
+const encodeEstimateValue = el("encode-estimate-value");
+const encodeJobError = el("encode-job-error");
+
+async function loadEncodeCapabilities() {
+  try {
+    const res = await fetch("/api/encode/capabilities");
+    state.encodeCapabilities = await res.json();
+  } catch (e) {
+    state.encodeCapabilities = null;
+  }
+}
+
+async function refreshEncodeSources() {
+  try {
+    const res = await fetch("/api/encode/sources");
+    const data = await res.json();
+    state.encodeSources = data.sources || [];
+  } catch (e) {
+    state.encodeSources = [];
+  }
+}
+
+async function loadEncodeJobsSnapshot() {
+  try {
+    const res = await fetch("/api/encode/jobs");
+    const jobs = await res.json();
+    state.encodeJobs.clear();
+    for (const job of jobs) state.encodeJobs.set(job.id, job);
+    renderEncodeLedger();
+    renderLedger();
+  } catch (e) {
+    // backend not reachable yet; ignore
+  }
+}
+
+function savingsPct(job) {
+  const finalSize = job.final_bytes || job.estimated_bytes;
+  if (!finalSize || !job.source_size) return 0;
+  return (1 - finalSize / job.source_size) * 100;
+}
+
+function getFilteredSortedEncodeJobs() {
+  const jobs = Array.from(state.encodeJobs.values());
+  const query = state.encodeFilterText.trim().toLowerCase();
+  const filtered = query ? jobs.filter((j) => j.source_filename.toLowerCase().includes(query)) : jobs;
+
+  if (state.encodeSortField === "added") {
+    // The server already orders this list correctly (active/pending in
+    // real run order, then finished jobs newest-first) - respect sort
+    // direction rather than re-deriving an "added" order client-side,
+    // which would fight with move-up reordering.
+    return state.encodeSortDir === "desc" ? filtered : [...filtered].reverse();
+  }
+
+  const dirMul = state.encodeSortDir === "asc" ? 1 : -1;
+  const sorted = [...filtered];
+  sorted.sort((a, b) => {
+    const cmp = state.encodeSortField === "size"
+      ? (a.source_size || 0) - (b.source_size || 0)
+      : savingsPct(a) - savingsPct(b);
+    return cmp * dirMul;
+  });
+  return sorted;
+}
+
+function renderEncodeLedger() {
+  encodeQueueList.innerHTML = "";
+  for (const job of getFilteredSortedEncodeJobs()) {
+    encodeQueueList.appendChild(buildEncodeJobCard(job));
+  }
+}
+
+function updateEncodeJobCard(job) {
+  const card = encodeQueueList.querySelector(`.job-card[data-job-id="${cssEscape(job.id)}"]`);
+  if (!card) { renderEncodeLedger(); return; }
+  // Encode cards change shape enough between states (badges, action
+  // buttons, progress bar) that a full rebuild-and-swap is simpler and
+  // plenty fast for the handful of cards a personal queue will ever show.
+  card.replaceWith(buildEncodeJobCard(job));
+}
+
+function formatEta(seconds) {
+  if (seconds == null) return "?";
+  const s = Math.max(0, Math.round(seconds));
+  const m = Math.floor(s / 60);
+  const rem = s % 60;
+  return `${m}:${String(rem).padStart(2, "0")}`;
+}
+
+function formatDuration(seconds) {
+  if (!seconds) return "";
+  const s = Math.round(seconds);
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  const rem = s % 60;
+  return h > 0
+    ? `${h}:${String(m).padStart(2, "0")}:${String(rem).padStart(2, "0")}`
+    : `${m}:${String(rem).padStart(2, "0")}`;
+}
+
+function resolutionTargetLabel(job) {
+  if (!job.output_width || !job.output_height) return "";
+  if (job.resolution_cap && job.resolution_cap !== "source" && !job.force_ar) {
+    return job.resolution_cap;
+  }
+  return `${job.output_width}×${job.output_height}`;
+}
+
+function buildEncodeSettingsSummary(job) {
+  const parts = [job.resolution_cap && job.resolution_cap !== "source" ? job.resolution_cap : "Source res"];
+  if (job.deinterlace) parts.push("deinterlace on");
+  if (job.auto_crop) parts.push("auto-crop");
+  if (job.denoise) parts.push("denoise on");
+  if (job.audio_mode !== "copy") parts.push(`audio ${job.audio_mode}`);
+  if (job.status === "DONE") {
+    parts.push("saved to Converted/");
+    if (job.elapsed_seconds) parts.push(`took ${formatEta(job.elapsed_seconds)}`);
+  }
+  return parts.join(" · ");
+}
+
+function buildEncodeJobCard(job) {
+  const card = document.createElement("div");
+  card.className = "job-card";
+  card.dataset.jobId = job.id;
+
+  const statusClass = job.status === "DONE" ? "done"
+    : job.status === "ERROR" ? "error"
+    : job.status === "CANCELLED" ? "cancelled"
+    : job.status === "QUEUED" ? "queued"
+    : "";
+  if (statusClass) card.classList.add(statusClass);
+
+  const thumb = document.createElement("div");
+  thumb.className = "job-thumb";
+  const placeholder = document.createElement("span");
+  placeholder.className = "job-thumb-placeholder";
+  placeholder.textContent = job.status === "DONE" ? "▶" : job.status === "ERROR" ? "!" : "▤";
+  thumb.appendChild(placeholder);
+  card.appendChild(thumb);
+
+  const body = document.createElement("div");
+  body.className = "job-card-body";
+
+  const titleRow = document.createElement("div");
+  titleRow.className = "job-title-row";
+  const title = document.createElement("div");
+  title.className = "job-title";
+  title.textContent = job.source_filename;
+  title.title = job.source_path;
+  titleRow.appendChild(title);
+
+  if (job.status === "ENCODING" || job.status === "QUEUED") {
+    const codecBadge = document.createElement("span");
+    codecBadge.className = "codec-badge";
+    const shortCodec = (job.codec_label || "").split(" ")[0];
+    codecBadge.textContent = job.mode === "size" ? shortCodec : `${shortCodec} · CRF${job.crf}`;
+    titleRow.appendChild(codecBadge);
+
+    if (job.encoder_backend && job.encoder_backend !== "software") {
+      const fastBadge = document.createElement("span");
+      fastBadge.className = "fast-badge";
+      fastBadge.textContent = job.encoder_backend.toUpperCase();
+      titleRow.appendChild(fastBadge);
+    }
+  }
+
+  if (job.oversized) {
+    const oversizedBadge = document.createElement("span");
+    oversizedBadge.className = "oversized-badge";
+    oversizedBadge.textContent = "OVERSIZED";
+    titleRow.appendChild(oversizedBadge);
+  }
+
+  const statusPill = document.createElement("span");
+  if (job.status === "ENCODING") {
+    statusPill.className = "status-pill pct";
+    statusPill.textContent = `${job.pct}%`;
+  } else if (job.status === "QUEUED") {
+    statusPill.className = "status-pill queued";
+    statusPill.textContent = "QUEUED";
+  } else {
+    statusPill.className = `status-pill ${statusClass}`;
+    statusPill.textContent = job.status;
+  }
+  titleRow.appendChild(statusPill);
+  body.appendChild(titleRow);
+
+  if (job.status === "DONE") {
+    const size = document.createElement("div");
+    size.className = "job-size";
+    const pct = job.source_size && job.final_bytes ? Math.round((1 - job.final_bytes / job.source_size) * 100) : null;
+    size.innerHTML = `${job.source_size_label} <span class="arrow">→</span> ${job.final_size_label}`
+      + (pct !== null ? ` <span class="saved">(${pct >= 0 ? "-" : "+"}${Math.abs(pct)}%)</span>` : "");
+    body.appendChild(size);
+  } else if (job.status === "ERROR") {
+    const stats = document.createElement("div");
+    stats.className = "job-stats";
+    stats.style.color = "var(--error-text)";
+    stats.textContent = job.error_message || "Encoding failed.";
+    body.appendChild(stats);
+  } else if (job.status === "CANCELLED") {
+    const size = document.createElement("div");
+    size.className = "job-size";
+    size.textContent = job.source_size_label;
+    body.appendChild(size);
+  } else {
+    const size = document.createElement("div");
+    size.className = "job-size";
+    const estClass = job.estimate_kind === "live" ? "est" : `est ${job.estimate_kind}`;
+    const estLabel = !job.estimated_size_label ? "-"
+      : job.estimate_kind === "target" ? job.estimated_size_label
+      : `~${job.estimated_size_label}`;
+    size.innerHTML = `${job.source_size_label} <span class="arrow">→ est.</span> <span class="${estClass}">${estLabel}</span>`;
+    body.appendChild(size);
+  }
+
+  if (job.source_width && job.source_height) {
+    const resLine = document.createElement("div");
+    resLine.className = "job-res-line";
+    const sourceRes = `${job.source_width}×${job.source_height}`;
+    const targetLabel = (job.status === "CANCELLED" || job.status === "ERROR") ? "" : resolutionTargetLabel(job);
+    if (targetLabel && targetLabel !== sourceRes) {
+      resLine.innerHTML = `<span class="res-icon">▦</span> ${sourceRes} <span class="res-arrow">→</span> <span class="res-target">${targetLabel}</span>`
+        + (job.force_ar ? ` <span class="res-tag">AR fix</span>` : "");
+    } else {
+      resLine.innerHTML = `<span class="res-icon">▦</span> ${sourceRes}`;
+    }
+    body.appendChild(resLine);
+  }
+
+  if (job.status === "ENCODING") {
+    const track = document.createElement("div");
+    track.className = "job-progress-track";
+    const fill = document.createElement("div");
+    fill.className = "job-progress-fill";
+    fill.style.width = `${job.pct || 0}%`;
+    track.appendChild(fill);
+    body.appendChild(track);
+
+    const stats = document.createElement("div");
+    stats.className = "job-stats";
+    const parts = [];
+    if (job.speed) parts.push(`${job.speed} speed`);
+    if (job.eta_seconds != null) parts.push(`ETA ${formatEta(job.eta_seconds)}`);
+    stats.textContent = parts.join(" · ") || "Starting...";
+    body.appendChild(stats);
+  }
+
+  const settingsLine = document.createElement("div");
+  settingsLine.className = "job-settings-line";
+  settingsLine.textContent = buildEncodeSettingsSummary(job);
+  body.appendChild(settingsLine);
+
+  card.appendChild(body);
+
+  const actions = document.createElement("div");
+  actions.className = "job-card-actions";
+  if (job.status === "QUEUED") {
+    const upBtn = document.createElement("button");
+    upBtn.className = "job-mini-btn";
+    upBtn.title = "Move up";
+    upBtn.textContent = "↑";
+    upBtn.addEventListener("click", (e) => { e.stopPropagation(); moveUpEncodeJob(job.id); });
+    actions.appendChild(upBtn);
+
+    const cancelBtn = document.createElement("button");
+    cancelBtn.className = "job-mini-btn";
+    cancelBtn.title = "Cancel";
+    cancelBtn.textContent = "✕";
+    cancelBtn.addEventListener("click", (e) => { e.stopPropagation(); cancelEncodeJob(job.id); });
+    actions.appendChild(cancelBtn);
+  } else if (job.status === "ENCODING") {
+    const cancelBtn = document.createElement("button");
+    cancelBtn.className = "job-mini-btn";
+    cancelBtn.title = "Cancel";
+    cancelBtn.textContent = "✕";
+    cancelBtn.addEventListener("click", (e) => { e.stopPropagation(); cancelEncodeJob(job.id); });
+    actions.appendChild(cancelBtn);
+  } else if (job.status === "ERROR" || job.status === "CANCELLED") {
+    const retryBtn = document.createElement("button");
+    retryBtn.className = "job-mini-btn";
+    retryBtn.title = "Retry";
+    retryBtn.textContent = "↻";
+    retryBtn.addEventListener("click", (e) => { e.stopPropagation(); retryEncodeJob(job.id); });
+    actions.appendChild(retryBtn);
+
+    const deleteBtn = document.createElement("button");
+    deleteBtn.className = "job-mini-btn";
+    deleteBtn.title = "Remove from list";
+    deleteBtn.textContent = "🗑";
+    deleteBtn.addEventListener("click", (e) => { e.stopPropagation(); deleteEncodeJob(job.id); });
+    actions.appendChild(deleteBtn);
+  } else if (job.status === "DONE") {
+    const deleteBtn = document.createElement("button");
+    deleteBtn.className = "job-mini-btn";
+    deleteBtn.title = "Remove from list (keeps the encoded file)";
+    deleteBtn.textContent = "🗑";
+    deleteBtn.addEventListener("click", (e) => { e.stopPropagation(); deleteEncodeJob(job.id); });
+    actions.appendChild(deleteBtn);
+  }
+  card.appendChild(actions);
+
+  if (job.status === "DONE") {
+    card.addEventListener("click", () => openEncodeJobFolder(job.id));
+  }
+
+  return card;
+}
+
+encodeFilterInput.addEventListener("input", () => {
+  state.encodeFilterText = encodeFilterInput.value;
+  renderEncodeLedger();
+});
+encodeSortSelect.addEventListener("change", () => {
+  state.encodeSortField = encodeSortSelect.value;
+  renderEncodeLedger();
+});
+encodeSortDirBtn.addEventListener("click", () => {
+  state.encodeSortDir = state.encodeSortDir === "asc" ? "desc" : "asc";
+  encodeSortDirBtn.textContent = state.encodeSortDir === "asc" ? "↑" : "↓";
+  renderEncodeLedger();
+});
+
+async function cancelEncodeJob(id) {
+  await fetch("/api/encode/jobs/cancel", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ job_id: id }),
+  });
+}
+
+async function retryEncodeJob(id) {
+  try {
+    const res = await fetch("/api/encode/jobs/retry", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ job_id: id }),
+    });
+    const data = await res.json();
+    if (res.ok) { state.encodeJobs.set(data.job.id, data.job); updateEncodeJobCard(data.job); }
+    else flashStatus(data.error || "Couldn't retry that job.");
+  } catch (e) {
+    flashStatus("Couldn't reach the server.");
+  }
+}
+
+async function deleteEncodeJob(id) {
+  try {
+    const res = await fetch("/api/encode/jobs/delete", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ job_id: id, delete_output: false }),
+    });
+    const data = await res.json();
+    if (res.ok) { state.encodeJobs.delete(id); renderEncodeLedger(); }
+    else flashStatus(data.error || "Couldn't remove that job.");
+  } catch (e) {
+    flashStatus("Couldn't reach the server.");
+  }
+}
+
+async function moveUpEncodeJob(id) {
+  try {
+    const res = await fetch("/api/encode/jobs/move-up", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ job_id: id }),
+    });
+    // No websocket broadcast for a pure reorder (no job's own state
+    // changed) - just re-sync the snapshot to reflect the new order.
+    if (res.ok) await loadEncodeJobsSnapshot();
+  } catch (e) {
+    flashStatus("Couldn't reach the server.");
+  }
+}
+
+async function openEncodeJobFolder(id) {
+  if (!IS_LOCAL) { flashStatus(REMOTE_ONLY_TOOLTIP); return; }
+  try {
+    const res = await fetch("/api/encode/jobs/open-folder", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ job_id: id }),
+    });
+    const data = await res.json();
+    if (!res.ok) flashStatus(data.error || "Couldn't open that file's folder.");
+  } catch (e) {
+    flashStatus("Couldn't reach the server.");
+  }
+}
+
+newEncodeJobBtn.addEventListener("click", openNewEncodeJobModal);
+openConvertedBtn.addEventListener("click", async () => {
+  try {
+    const res = await fetch("/api/encode/open-converted-folder", { method: "POST" });
+    const data = await res.json();
+    if (!res.ok) flashStatus(data.error || "Couldn't open the folder.");
+  } catch (e) {
+    flashStatus("Couldn't reach the server.");
+  }
+});
+
+// ── New Encode Job modal ────────────────────────────────────────
+function presetOptionsFor(kind) {
+  if (kind === "x26x") {
+    return ["ultrafast", "superfast", "veryfast", "faster", "fast", "medium", "slow", "slower", "veryslow"]
+      .map((p) => [p, p]);
+  }
+  if (kind === "svt") {
+    // libsvtav1: 0 (best/slowest) .. 13 (fastest)
+    return [["2", "2 (slow, best)"], ["4", "4"], ["6", "6 (balanced)"], ["8", "8"], ["10", "10"], ["12", "12 (fast)"]];
+  }
+  if (kind === "vpx") {
+    // libvpx-vp9 -cpu-used: 0 (best/slowest) .. 5 (fastest)
+    return [["0", "0 (slow, best)"], ["1", "1"], ["2", "2 (balanced)"], ["3", "3"], ["4", "4"], ["5", "5 (fast)"]];
+  }
+  return [];
+}
+
+function populateEncodeSourceSelect() {
+  encodeSourceSelect.innerHTML = "";
+  for (const src of state.encodeSources) {
+    const opt = document.createElement("option");
+    opt.value = src.filename;
+    opt.textContent = `${src.filename} — ${src.file_size}`;
+    encodeSourceSelect.appendChild(opt);
+  }
+  const browseOpt = document.createElement("option");
+  browseOpt.value = "__browse__";
+  browseOpt.textContent = "Browse for a file not in the ledger...";
+  encodeSourceSelect.appendChild(browseOpt);
+}
+
+function populateEncodeCodecSelect() {
+  encodeCodecSelect.innerHTML = "";
+  if (!state.encodeCapabilities) return;
+  for (const [key, def] of Object.entries(state.encodeCapabilities.codecs)) {
+    const opt = document.createElement("option");
+    opt.value = key;
+    opt.textContent = def.label;
+    encodeCodecSelect.appendChild(opt);
+  }
+  encodeCodecSelect.value = "h265";
+}
+
+function populateEncodeResolutionSelect() {
+  encodeResolutionSelect.innerHTML = "";
+  const caps = (state.encodeCapabilities && state.encodeCapabilities.resolution_caps)
+    || ["source", "2160p", "1440p", "1080p", "720p", "480p"];
+  for (const cap of caps) {
+    const opt = document.createElement("option");
+    opt.value = cap;
+    opt.textContent = cap === "source" ? "Source (no downscale)" : cap;
+    encodeResolutionSelect.appendChild(opt);
+  }
+}
+
+function applyActiveAspectRatio() {
+  const activeBtn = encodeAspectQuickRow.querySelector(".aspect-quick-btn.active");
+  if (!activeBtn || activeBtn.dataset.ratio === "Custom" || !state.encodeSourceInfo) return;
+  const [rw, rh] = activeBtn.dataset.ratio.split(":").map(Number);
+  const h = state.encodeSourceInfo.height;
+  encodeArHeightInput.value = h;
+  encodeArWidthInput.value = Math.round((h * (rw / rh)) / 2) * 2; // keep it even
+}
+
+function populateAspectQuickRow() {
+  encodeAspectQuickRow.innerHTML = "";
+  const ratios = (state.encodeCapabilities && state.encodeCapabilities.aspect_ratios) || ["16:9", "4:3", "21:9"];
+  for (const ratio of [...ratios, "Custom"]) {
+    const btn = document.createElement("div");
+    btn.className = "aspect-quick-btn";
+    btn.textContent = ratio;
+    btn.dataset.ratio = ratio;
+    btn.addEventListener("click", () => {
+      encodeAspectQuickRow.querySelectorAll(".aspect-quick-btn").forEach((b) => b.classList.remove("active"));
+      btn.classList.add("active");
+      applyActiveAspectRatio();
+      requestEncodeEstimate();
+    });
+    encodeAspectQuickRow.appendChild(btn);
+  }
+  encodeAspectQuickRow.firstChild?.classList.add("active");
+}
+
+function onEncodeCodecChange() {
+  const codec = encodeCodecSelect.value;
+  const def = state.encodeCapabilities?.codecs?.[codec];
+  if (!def) return;
+
+  encodeBackendSelect.innerHTML = "";
+  for (const backend of def.available_backends) {
+    const opt = document.createElement("option");
+    opt.value = backend;
+    opt.textContent = backend === "software" ? "Software (recommended)" : `${backend.toUpperCase()} (hardware, faster, larger files)`;
+    encodeBackendSelect.appendChild(opt);
+  }
+  encodeBackendSelect.value = "software";
+
+  const [crfMin, crfMax] = def.crf_range;
+  encodeCrfSlider.min = crfMin;
+  encodeCrfSlider.max = crfMax;
+  encodeCrfSlider.value = def.default_crf;
+  encodeCrfValue.textContent = def.default_crf;
+  encodeCrfHint.textContent = `Lower = higher quality, bigger file. This codec's typical default is ${def.default_crf}.`;
+
+  encodePresetSelect.innerHTML = "";
+  for (const [value, label] of presetOptionsFor(def.preset_kind)) {
+    const opt = document.createElement("option");
+    opt.value = value;
+    opt.textContent = label;
+    encodePresetSelect.appendChild(opt);
+  }
+  encodePresetSelect.value = def.default_preset;
+
+  encodeContainerSelect.value = def.container_default;
+
+  requestEncodeEstimate();
+}
+encodeCodecSelect.addEventListener("change", onEncodeCodecChange);
+encodeBackendSelect.addEventListener("change", requestEncodeEstimate);
+encodePresetSelect.addEventListener("change", requestEncodeEstimate);
+encodeResolutionSelect.addEventListener("change", requestEncodeEstimate);
+encodeAudioSelect.addEventListener("change", requestEncodeEstimate);
+encodeDenoiseCheck.addEventListener("change", requestEncodeEstimate);
+encodeCrfSlider.addEventListener("input", () => {
+  encodeCrfValue.textContent = encodeCrfSlider.value;
+  requestEncodeEstimate();
+});
+encodeTargetSizeInput.addEventListener("input", requestEncodeEstimate);
+
+encodeForceArCheck.addEventListener("change", () => {
+  encodeForceArFields.classList.toggle("disabled-field", !encodeForceArCheck.checked);
+  requestEncodeEstimate();
+});
+
+encodeModeCrfBtn.addEventListener("click", () => setEncodeMode("crf"));
+encodeModeSizeBtn.addEventListener("click", () => setEncodeMode("size"));
+function setEncodeMode(mode) {
+  encodeModeCrfBtn.classList.toggle("active", mode === "crf");
+  encodeModeSizeBtn.classList.toggle("active", mode === "size");
+  encodeCrfFields.style.display = mode === "crf" ? "block" : "none";
+  encodeSizeFields.style.display = mode === "size" ? "block" : "none";
+  requestEncodeEstimate();
+}
+
+encodeAdvancedToggle.addEventListener("click", () => {
+  const isOpen = encodeAdvancedBody.classList.toggle("open");
+  encodeAdvancedCaret.textContent = isOpen ? "▴" : "▾";
+});
+
+function currentSourceRequestBody() {
+  const val = encodeSourceSelect.value;
+  if (val === "__browse__") {
+    const path = encodeSourceBrowsePath.value.trim();
+    return path ? { path } : null;
+  }
+  return val ? { filename: val } : null;
+}
+
+async function onEncodeSourceChange() {
+  const val = encodeSourceSelect.value;
+  encodeSourceBrowseRow.classList.toggle("hidden", val !== "__browse__");
+  if (val === "__browse__" && !encodeSourceBrowsePath.value.trim()) {
+    encodeSourceInfo.textContent = "";
+    state.encodeSourceInfo = null;
+    return;
+  }
+  await probeSelectedSource();
+}
+encodeSourceSelect.addEventListener("change", onEncodeSourceChange);
+
+encodeSourceBrowseBtn.addEventListener("click", async () => {
+  try {
+    const res = await fetch("/api/encode/browse-source", { method: "POST" });
+    const data = await res.json();
+    if (data.path) {
+      encodeSourceBrowsePath.value = data.path;
+      await probeSelectedSource();
+    }
+  } catch (e) {
+    flashStatus("Couldn't reach the server.");
+  }
+});
+encodeSourceBrowsePath.addEventListener("change", probeSelectedSource);
+
+async function probeSelectedSource() {
+  const body = currentSourceRequestBody();
+  if (!body) return;
+  encodeSourceInfo.textContent = "Probing source file...";
+  try {
+    const res = await fetch("/api/encode/probe", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      state.encodeSourceInfo = null;
+      encodeSourceInfo.textContent = data.error || "Couldn't read that file.";
+      return;
+    }
+    state.encodeSourceInfo = data;
+    encodeSourceInfo.textContent = `${data.width}×${data.height} · ${formatDuration(data.duration)} · ${data.size_label}`;
+    encodeResolutionLabel.textContent = `Resolution cap (downscale only) — source is ${data.width}×${data.height}`;
+    encodeArWidthInput.value = data.width;
+    encodeArHeightInput.value = data.height;
+    applyActiveAspectRatio();
+    requestEncodeEstimate();
+  } catch (e) {
+    state.encodeSourceInfo = null;
+    encodeSourceInfo.textContent = "Couldn't reach the server to probe that file.";
+  }
+}
+
+function collectEncodeOptions() {
+  const mode = encodeModeCrfBtn.classList.contains("active") ? "crf" : "size";
+  const activeRatioBtn = encodeAspectQuickRow.querySelector(".aspect-quick-btn.active");
+  return {
+    mode,
+    codec: encodeCodecSelect.value,
+    encoder_backend: encodeBackendSelect.value,
+    crf: parseInt(encodeCrfSlider.value, 10),
+    preset: encodePresetSelect.value,
+    target_size_mb: encodeTargetSizeInput.value ? parseFloat(encodeTargetSizeInput.value) : null,
+    resolution_cap: encodeResolutionSelect.value,
+    force_ar: encodeForceArCheck.checked,
+    force_ar_label: activeRatioBtn ? activeRatioBtn.dataset.ratio : "",
+    force_ar_width: encodeForceArCheck.checked ? (parseInt(encodeArWidthInput.value, 10) || null) : null,
+    force_ar_height: encodeForceArCheck.checked ? (parseInt(encodeArHeightInput.value, 10) || null) : null,
+    deinterlace: encodeDeinterlaceCheck.checked,
+    auto_crop: encodeAutocropCheck.checked,
+    denoise: encodeDenoiseCheck.checked,
+    audio_mode: encodeAudioSelect.value,
+    subtitles_mode: encodeSubtitlesSelect.value,
+    container: encodeContainerSelect.value,
+    oversized_behavior: encodeOversizedSelect.value,
+  };
+}
+
+let encodeEstimateTimer = null;
+function requestEncodeEstimate() {
+  clearTimeout(encodeEstimateTimer);
+  encodeEstimateTimer = setTimeout(doRequestEncodeEstimate, 250);
+}
+
+async function doRequestEncodeEstimate() {
+  const sourceBody = currentSourceRequestBody();
+  if (!sourceBody || !state.encodeSourceInfo) return;
+  const mySeq = ++state.encodeEstimateSeq;
+  const options = collectEncodeOptions();
+  encodeEstimateLabel.textContent = options.mode === "size" ? "Target output size" : "Estimated output size";
+  try {
+    const res = await fetch("/api/encode/estimate", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ...sourceBody, options }),
+    });
+    const data = await res.json();
+    if (mySeq !== state.encodeEstimateSeq) return; // superseded by a newer request
+    if (!res.ok) { encodeEstimateValue.textContent = "-"; return; }
+    const prefix = options.mode === "size" ? "" : "~";
+    encodeEstimateValue.textContent = data.estimated_size_label ? `${prefix}${data.estimated_size_label}` : "-";
+  } catch (e) {
+    if (mySeq === state.encodeEstimateSeq) encodeEstimateValue.textContent = "-";
+  }
+}
+
+async function openNewEncodeJobModal() {
+  encodeJobError.classList.add("hidden");
+  if (!state.encodeCapabilities) await loadEncodeCapabilities();
+  // Check the download folder for anything new (manually dropped files,
+  // etc.) before listing candidate sources, same as pressing Refresh.
+  await refreshDownloadLedger();
+  await refreshEncodeSources();
+
+  populateEncodeSourceSelect();
+  populateEncodeCodecSelect();
+  populateEncodeResolutionSelect();
+  populateAspectQuickRow();
+
+  encodeSourceBrowseRow.classList.add("hidden");
+  encodeSourceBrowsePath.value = "";
+  encodeForceArCheck.checked = false;
+  encodeForceArFields.classList.add("disabled-field");
+  encodeArWidthInput.value = "";
+  encodeArHeightInput.value = "";
+  encodeDeinterlaceCheck.checked = false;
+  encodeAutocropCheck.checked = false;
+  encodeDenoiseCheck.checked = false;
+  encodeAudioSelect.value = "copy";
+  encodeSubtitlesSelect.value = "copy";
+  encodeOversizedSelect.value = "flag";
+  encodeTargetSizeInput.value = "";
+  encodeAdvancedBody.classList.remove("open");
+  encodeAdvancedCaret.textContent = "▾";
+  setEncodeMode("crf");
+
+  onEncodeCodecChange();
+
+  if (encodeSourceSelect.options.length > 0) await onEncodeSourceChange();
+
+  newEncodeJobModal.classList.remove("hidden");
+  const modalBox = newEncodeJobModal.querySelector(".modal-box");
+  if (modalBox) modalBox.scrollTop = 0;
+}
+
+function closeNewEncodeJobModal() {
+  newEncodeJobModal.classList.add("hidden");
+}
+
+closeEncodeJobModalBtn.addEventListener("click", closeNewEncodeJobModal);
+cancelEncodeJobModalBtn.addEventListener("click", closeNewEncodeJobModal);
+newEncodeJobModal.addEventListener("click", (e) => { if (e.target === newEncodeJobModal) closeNewEncodeJobModal(); });
+
+addEncodeJobBtn.addEventListener("click", async () => {
+  encodeJobError.classList.add("hidden");
+  const sourceBody = currentSourceRequestBody();
+  if (!sourceBody) {
+    encodeJobError.textContent = "Choose a source file first.";
+    encodeJobError.classList.remove("hidden");
+    return;
+  }
+  const options = collectEncodeOptions();
+  if (options.mode === "size" && !options.target_size_mb) {
+    encodeJobError.textContent = "Enter a target size in MB.";
+    encodeJobError.classList.remove("hidden");
+    return;
+  }
+
+  addEncodeJobBtn.disabled = true;
+  try {
+    const res = await fetch("/api/encode/jobs", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ...sourceBody, options }),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      encodeJobError.textContent = data.error || "Couldn't queue that job.";
+      encodeJobError.classList.remove("hidden");
+      return;
+    }
+    state.encodeJobs.set(data.job.id, data.job);
+    renderEncodeLedger();
+    closeNewEncodeJobModal();
+  } catch (e) {
+    encodeJobError.textContent = "Couldn't reach the server.";
+    encodeJobError.classList.remove("hidden");
+  } finally {
+    addEncodeJobBtn.disabled = false;
   }
 });
 

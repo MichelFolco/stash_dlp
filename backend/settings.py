@@ -8,7 +8,7 @@ import json
 import os
 import uuid
 
-from config import SETTINGS_JSON_PATH, DEFAULT_SAVE_DIR, VIDEO_EXTENSIONS, AUDIO_EXTENSIONS
+from config import SETTINGS_JSON_PATH, DEFAULT_SAVE_DIR, VIDEO_EXTENSIONS, AUDIO_EXTENSIONS, CONVERTED_DIR_NAME
 
 _cache = None
 
@@ -271,6 +271,23 @@ def get_queue_json_path() -> str:
 
 def get_log_file_path() -> str:
     return os.path.join(get_data_dir(), "downloads_history.log")
+
+
+# ── Encode Manager ──────────────────────────────────────────────
+def get_converted_dir() -> str:
+    """Where finished encodes land - a subfolder of the CURRENT download
+    folder, alongside the originals. Recomputed on every call (not cached)
+    since it depends on get_save_dir(), which can change at runtime."""
+    path = os.path.join(get_save_dir(), CONVERTED_DIR_NAME)
+    try:
+        os.makedirs(path, exist_ok=True)
+    except Exception:
+        pass
+    return path
+
+
+def get_encode_queue_json_path() -> str:
+    return os.path.join(get_data_dir(), "_encode_queue.json")
 
 
 def migrate_legacy_layout() -> None:

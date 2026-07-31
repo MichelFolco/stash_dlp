@@ -3,6 +3,7 @@ import mimetypes
 import os
 import subprocess
 import sys
+from typing import Optional
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request
 from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
@@ -13,9 +14,10 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from config import PROJECT_ROOT, BUNDLE_DIR, FROZEN, HOST, PORT
 from diskspace import get_free_space_label
+from encode_manager import EncodeManager
 from filesystem_scan import scan_filesystem
 from folder_dialog import ask_directory, ask_file_path
-from job_manager import JobManager
+from job_manager import JobManager, ConnectionManager
 from m3u8_finder import find_m3u8, M3u8NotFound
 from procflags import NO_CONSOLE_KWARGS
 from settings import (
@@ -23,12 +25,13 @@ from settings import (
     get_target_dir, set_target_dir, get_recent_target_dirs, remove_recent_target_dir,
     get_external_programs, get_external_program, add_external_program,
     update_external_program, delete_external_program,
+    get_converted_dir,
 )
 from storage import search_history
 from thumbnails import get_thumbnail_path
 from ytdlp_utils import (
     clean_filename, fetch_title, get_domain, check_and_update_ytdlp, find_media_file,
-    build_open_with_command,
+    build_open_with_command, format_file_size,
 )
 
 STREAM_CHUNK_SIZE = 1024 * 1024  # 1 MB
@@ -37,7 +40,12 @@ app = FastAPI(title="Stash DLP Web")
 
 STATIC_DIR = os.path.join(str(BUNDLE_DIR), "static")
 
-job_manager = JobManager()
+# Shared across both managers so downloads and encode jobs broadcast over
+# the SAME websocket connection - the frontend only has to manage one
+# socket rather than juggling two.
+connections = ConnectionManager()
+job_manager = JobManager(connections=connections)
+encode_manager = EncodeManager(connections=connections)
 
 # yt-dlp version state, populated on startup (mirrors ytdlp_version /
 # ytdlp_just_updated on the desktop app's main window)
@@ -51,7 +59,9 @@ async def on_startup():
     version_state["just_updated"] = just_updated
 
     done_jobs = scan_filesystem()
-    job_manager.seed_from_filesystem(done_jobs)
+    await job_manager.seed_from_filesystem(done_jobs)
+
+    encode_manager.start()
 
 
 # ── Request/response models ────────────────────────────────────
@@ -124,6 +134,53 @@ class OpenWithRequest(BaseModel):
     program_id: str
 
 
+class EncodeOptionsRequest(BaseModel):
+    mode: str = "crf"                       # "crf" | "size"
+    codec: str = "h265"
+    encoder_backend: str = "software"       # "software" | "amf" | "nvenc" | "qsv"
+    crf: int = 22
+    preset: str = "medium"
+    target_size_mb: Optional[float] = None
+    resolution_cap: str = "source"
+    force_ar: bool = False
+    force_ar_label: str = ""
+    force_ar_width: Optional[int] = None
+    force_ar_height: Optional[int] = None
+    deinterlace: bool = False
+    auto_crop: bool = False
+    denoise: bool = False
+    audio_mode: str = "copy"
+    subtitles_mode: str = "copy"
+    container: str = "mp4"
+    oversized_behavior: str = "flag"        # "flag" | "discard"
+
+
+class EncodeSourceRequest(BaseModel):
+    filename: Optional[str] = None          # a ledger entry, resolved via find_media_file
+    path: Optional[str] = None              # or an arbitrary absolute path (from Browse...)
+
+
+class EncodeEstimateRequest(BaseModel):
+    filename: Optional[str] = None
+    path: Optional[str] = None
+    options: EncodeOptionsRequest
+
+
+class EnqueueEncodeRequest(BaseModel):
+    filename: Optional[str] = None
+    path: Optional[str] = None
+    options: EncodeOptionsRequest
+
+
+class EncodeJobIdRequest(BaseModel):
+    job_id: str
+
+
+class EncodeDeleteRequest(BaseModel):
+    job_id: str
+    delete_output: bool = False
+
+
 # ── REST endpoints ──────────────────────────────────────────────
 @app.get("/api/version")
 async def get_version():
@@ -149,7 +206,7 @@ async def api_set_settings(req: SaveDirRequest):
 
     # The folder changed, so re-scan it and refresh every connected client
     done_jobs = scan_filesystem()
-    job_manager.seed_from_filesystem(done_jobs, replace=True)
+    await job_manager.seed_from_filesystem(done_jobs, replace=True)
     snapshot = job_manager.snapshot()
     await job_manager.connections.broadcast({"type": "refresh", "jobs": snapshot})
     return {
@@ -572,10 +629,195 @@ async def api_history_search(req: HistorySearchRequest):
 @app.post("/api/refresh")
 async def api_refresh():
     done_jobs = scan_filesystem()
-    job_manager.seed_from_filesystem(done_jobs, replace=True)
+    await job_manager.seed_from_filesystem(done_jobs, replace=True)
     snapshot = job_manager.snapshot()
     await job_manager.connections.broadcast({"type": "refresh", "jobs": snapshot})
     return {"jobs": snapshot}
+
+
+# ── Encode Manager ────────────────────────────────────────────────
+def _resolve_source_path(filename: Optional[str], path: Optional[str]) -> str:
+    """Resolves an encode job's intended source to an actual path on disk -
+    either a ledger entry (looked up by filename) or an arbitrary path from
+    the Browse... option. Raises ValueError if neither resolves."""
+    if path:
+        return os.path.abspath(os.path.expanduser(path))
+    if filename:
+        media_path = find_media_file(filename)
+        if not media_path:
+            raise ValueError(f"Couldn't find '{filename}' in the current download folder.")
+        return media_path
+    raise ValueError("No source file specified.")
+
+
+def _is_localhost(request: Request) -> bool:
+    client_host = request.client.host if request.client else ""
+    return client_host in ("127.0.0.1", "::1", "localhost")
+
+
+def _open_in_explorer(path: str):
+    if sys.platform == "win32":
+        subprocess.Popen(["explorer", "/select,", path], **NO_CONSOLE_KWARGS)
+    elif sys.platform == "darwin":
+        subprocess.Popen(["open", "-R", path], **NO_CONSOLE_KWARGS)
+    else:
+        subprocess.Popen(["xdg-open", os.path.dirname(path)], **NO_CONSOLE_KWARGS)
+
+
+@app.get("/api/encode/capabilities")
+async def api_encode_capabilities():
+    return await encode_manager.get_capabilities()
+
+
+@app.get("/api/encode/jobs")
+async def api_get_encode_jobs():
+    return encode_manager.snapshot()
+
+
+@app.get("/api/encode/sources")
+async def api_encode_sources():
+    """Candidate source files for the 'New Encode Job' modal's dropdown -
+    completed, non-audio ledger entries. Arbitrary files are still
+    reachable via the Browse... option (see /api/encode/browse-source)."""
+    return {
+        "sources": [
+            {"filename": j["filename"], "file_size": j.get("file_size", "")}
+            for j in job_manager.snapshot()
+            if j.get("status") == "DONE" and not j.get("is_audio")
+        ]
+    }
+
+
+@app.post("/api/encode/browse-source")
+async def api_encode_browse_source(request: Request):
+    """Native file-picker for choosing a source file that isn't in the
+    ledger. Same localhost gating as the download folder's Browse... -
+    see api_browse_folder for why."""
+    if not _is_localhost(request):
+        return JSONResponse(
+            status_code=400,
+            content={"error": "Browse only works when the browser is on the same machine as the server."},
+        )
+    try:
+        path = await ask_file_path(get_save_dir())
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"error": str(e)})
+    return {"path": path}
+
+
+@app.post("/api/encode/probe")
+async def api_encode_probe(req: EncodeSourceRequest):
+    try:
+        source_path = _resolve_source_path(req.filename, req.path)
+        info = await encode_manager.probe_source(source_path)
+    except (ValueError, RuntimeError) as e:
+        return JSONResponse(status_code=400, content={"error": str(e)})
+    info["source_path"] = source_path
+    return info
+
+
+@app.post("/api/encode/estimate")
+async def api_encode_estimate(req: EncodeEstimateRequest):
+    try:
+        source_path = _resolve_source_path(req.filename, req.path)
+        source_info = await encode_manager.probe_source(source_path)
+    except (ValueError, RuntimeError) as e:
+        return JSONResponse(status_code=400, content={"error": str(e)})
+
+    options = req.options.dict()
+    if options.get("mode") == "size":
+        estimated_bytes = int(float(options.get("target_size_mb") or 0) * 1024 * 1024)
+    else:
+        estimated_bytes = encode_manager.estimate(source_info=source_info, options=options)
+    return {
+        "estimated_bytes": estimated_bytes,
+        "estimated_size_label": format_file_size(estimated_bytes) if estimated_bytes else "",
+        "source_info": source_info,
+    }
+
+
+@app.post("/api/encode/jobs")
+async def api_enqueue_encode_job(req: EnqueueEncodeRequest):
+    try:
+        source_path = _resolve_source_path(req.filename, req.path)
+        job = await encode_manager.enqueue(source_path, req.options.dict())
+    except (ValueError, RuntimeError) as e:
+        return JSONResponse(status_code=400, content={"error": str(e)})
+    return {"ok": True, "job": job}
+
+
+@app.post("/api/encode/jobs/cancel")
+async def api_cancel_encode_job(req: EncodeJobIdRequest):
+    ok = encode_manager.cancel_job(req.job_id)
+    return {"ok": ok}
+
+
+@app.post("/api/encode/jobs/retry")
+async def api_retry_encode_job(req: EncodeJobIdRequest):
+    try:
+        job = await encode_manager.retry_job(req.job_id)
+    except ValueError as e:
+        return JSONResponse(status_code=400, content={"error": str(e)})
+    return {"ok": True, "job": job}
+
+
+@app.post("/api/encode/jobs/delete")
+async def api_delete_encode_job(req: EncodeDeleteRequest):
+    try:
+        ok = encode_manager.delete_job(req.job_id, delete_output=req.delete_output)
+    except ValueError as e:
+        return JSONResponse(status_code=400, content={"error": str(e)})
+    if ok:
+        await connections.broadcast({"type": "encode_job_deleted", "job_id": req.job_id})
+    return {"ok": ok}
+
+
+@app.post("/api/encode/jobs/move-up")
+async def api_move_up_encode_job(req: EncodeJobIdRequest):
+    ok = encode_manager.move_up(req.job_id)
+    return {"ok": ok}
+
+
+@app.post("/api/encode/jobs/open-folder")
+async def api_open_encode_job_folder(req: EncodeJobIdRequest, request: Request):
+    """Opens the OS file browser at a finished encode's output file.
+    Localhost-gated, same reasoning as the download ledger's
+    open-folder endpoint."""
+    if not _is_localhost(request):
+        return JSONResponse(
+            status_code=400,
+            content={"error": "Only works when the browser is on the same machine as the server."},
+        )
+    job = encode_manager.jobs.get(req.job_id)
+    if not job or not os.path.isfile(job.get("output_path", "")):
+        return JSONResponse(status_code=404, content={"error": "Output file not found."})
+    try:
+        _open_in_explorer(job["output_path"])
+        return {"ok": True}
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"error": str(e)})
+
+
+@app.post("/api/encode/open-converted-folder")
+async def api_open_converted_folder(request: Request):
+    """Localhost-gated, same reasoning as the other open-folder
+    endpoints."""
+    if not _is_localhost(request):
+        return JSONResponse(
+            status_code=400,
+            content={"error": "Only works when the browser is on the same machine as the server."},
+        )
+    converted_dir = get_converted_dir()
+    try:
+        if sys.platform == "win32":
+            subprocess.Popen(["explorer", converted_dir], **NO_CONSOLE_KWARGS)
+        elif sys.platform == "darwin":
+            subprocess.Popen(["open", converted_dir], **NO_CONSOLE_KWARGS)
+        else:
+            subprocess.Popen(["xdg-open", converted_dir], **NO_CONSOLE_KWARGS)
+        return {"ok": True}
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"error": str(e)})
 
 
 # ── WebSocket ────────────────────────────────────────────────────

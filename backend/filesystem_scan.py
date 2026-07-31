@@ -70,6 +70,10 @@ def scan_filesystem():
                     "file_size": file_size_str,
                     "is_audio": is_audio,
                     "playback_position": info.get("playback_position", 0),
+                    "width": info.get("width", 0),
+                    "height": info.get("height", 0),
+                    "duration": info.get("duration", 0),
+                    "ext": info.get("ext", ""),
                 }
             )
         else:

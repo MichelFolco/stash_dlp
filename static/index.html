@@ -21,29 +21,53 @@
 
     <div id="mode-container" class="mode-container">
       <button id="dl-mode-btn" class="mode-btn mode-btn-left" title="Download Mode Active">⬇️</button>
-      <button id="find-mode-btn" class="mode-btn mode-btn-right" title="Switch to Find Link Mode (Ctrl+F)">🔍</button>
+      <button id="find-mode-btn" class="mode-btn mode-btn-mid" title="Switch to Find Link Mode (Ctrl+F)">🔍</button>
+      <button id="encode-mode-btn" class="mode-btn mode-btn-right" title="Encode Manager">🎞️</button>
     </div>
 
     <button id="ui-mode-btn" class="icon-btn" title="Toggle Mini Mode (Ctrl+M)">⛶</button>
   </div>
 
-  <div id="control-bar" class="control-bar">
-    <button id="refresh-btn" class="btn">Refresh</button>
-    <button id="move-all-btn" class="btn">Move All to Target</button>
+  <div id="download-view">
+    <div id="control-bar" class="control-bar">
+      <button id="refresh-btn" class="btn">Refresh</button>
+      <button id="move-all-btn" class="btn">Move All to Target</button>
+    </div>
+
+    <div id="ledger-toolbar" class="ledger-toolbar">
+      <input id="ledger-filter" class="ledger-filter-input" type="text"
+             placeholder="Filter by name..." autocomplete="off" spellcheck="false">
+      <button id="ledger-audio-filter-btn" class="icon-btn" title="Show audio-only downloads">🎵</button>
+      <select id="ledger-sort" class="ledger-sort-select">
+        <option value="added">Date Added</option>
+        <option value="size">File Size</option>
+        <option value="name">Filename</option>
+      </select>
+      <button id="ledger-sort-dir" class="icon-btn" title="Toggle sort direction">↓</button>
+    </div>
+
+    <div id="queue-list" class="queue-list"></div>
   </div>
 
-  <div id="ledger-toolbar" class="ledger-toolbar">
-    <input id="ledger-filter" class="ledger-filter-input" type="text"
-           placeholder="Filter by name..." autocomplete="off" spellcheck="false">
-    <select id="ledger-sort" class="ledger-sort-select">
-      <option value="added">Date Added</option>
-      <option value="size">File Size</option>
-      <option value="name">Filename</option>
-    </select>
-    <button id="ledger-sort-dir" class="icon-btn" title="Toggle sort direction">↓</button>
-  </div>
+  <div id="encode-view" class="hidden">
+    <div id="encode-control-bar" class="control-bar">
+      <button id="new-encode-job-btn" class="btn btn-primary">+ New Encode Job</button>
+      <button id="open-converted-btn" class="btn">Open "Converted" Folder</button>
+    </div>
 
-  <div id="queue-list" class="queue-list"></div>
+    <div id="encode-toolbar" class="ledger-toolbar">
+      <input id="encode-filter" class="ledger-filter-input" type="text"
+             placeholder="Filter by name..." autocomplete="off" spellcheck="false">
+      <select id="encode-sort" class="ledger-sort-select">
+        <option value="added">Date Added</option>
+        <option value="size">Original Size</option>
+        <option value="savings">Savings %</option>
+      </select>
+      <button id="encode-sort-dir" class="icon-btn" title="Toggle sort direction">↓</button>
+    </div>
+
+    <div id="encode-queue-list" class="queue-list"></div>
+  </div>
 
 </div>
 
@@ -217,6 +241,158 @@
     <div class="modal-actions">
       <button id="target-folder-cancel-btn" class="btn">Cancel</button>
       <button id="target-folder-set-btn" class="btn btn-primary">Set Folder</button>
+    </div>
+  </div>
+</div>
+
+<div id="new-encode-job-modal" class="modal-overlay hidden">
+  <div class="modal-box wide">
+    <div class="modal-title">
+      <span>New Encode Job</span>
+      <button id="close-encode-job-modal" class="icon-btn">✕</button>
+    </div>
+
+    <div class="form-field">
+      <label>Source file</label>
+      <select id="encode-source-select"></select>
+    </div>
+    <div id="encode-source-browse-row" class="form-field hidden">
+      <div class="modal-row">
+        <input id="encode-source-browse-path" class="input-field" type="text" placeholder="Full path to the file" spellcheck="false">
+        <button id="encode-source-browse-btn" class="btn modal-browse-btn">Browse...</button>
+      </div>
+    </div>
+    <div id="encode-source-info" class="hint"></div>
+
+    <div class="section-label">Quality</div>
+    <div class="form-field">
+      <div class="pill-toggle-group">
+        <div id="encode-mode-crf-btn" class="pill-toggle active">Quality (CRF)</div>
+        <div id="encode-mode-size-btn" class="pill-toggle">Target Size</div>
+      </div>
+    </div>
+
+    <div id="encode-crf-fields">
+      <div class="field-grid">
+        <div class="form-field">
+          <label>Codec</label>
+          <select id="encode-codec-select"></select>
+        </div>
+        <div class="form-field">
+          <label>Encoder</label>
+          <select id="encode-backend-select"></select>
+        </div>
+      </div>
+      <div class="form-field">
+        <label>CRF (lower = higher quality, bigger file)</label>
+        <div class="range-row">
+          <input type="range" id="encode-crf-slider">
+          <span class="range-value" id="encode-crf-value"></span>
+        </div>
+        <div class="hint" id="encode-crf-hint"></div>
+      </div>
+      <div class="form-field">
+        <label>Preset (speed vs. compression)</label>
+        <select id="encode-preset-select"></select>
+      </div>
+    </div>
+
+    <div id="encode-size-fields" style="display:none;">
+      <div class="form-field">
+        <label>Target output size (MB)</label>
+        <input type="number" id="encode-target-size-input" min="1" step="1" placeholder="e.g. 1500">
+        <div class="hint">Two-pass encode. File size is precise; visual quality will vary depending on how ambitious the target is.</div>
+      </div>
+    </div>
+
+    <div class="section-label">Resolution &amp; Correction</div>
+    <div class="form-field">
+      <label id="encode-resolution-label">Resolution cap (downscale only)</label>
+      <select id="encode-resolution-select"></select>
+    </div>
+
+    <div class="checkbox-row">
+      <input type="checkbox" id="encode-force-ar-check">
+      <label for="encode-force-ar-check">Force aspect ratio (fix stretched/squished source)</label>
+    </div>
+    <div class="form-field disabled-field" id="encode-force-ar-fields">
+      <div class="aspect-quick-row" id="encode-aspect-quick-row"></div>
+      <div class="field-grid" style="margin-top:6px;">
+        <div class="form-field">
+          <label>Target width</label>
+          <input type="number" id="encode-ar-width-input" min="2" step="2">
+        </div>
+        <div class="form-field">
+          <label>Target height</label>
+          <input type="number" id="encode-ar-height-input" min="2" step="2">
+        </div>
+      </div>
+      <div class="hint">Re-scales pixel dimensions to correct proportions - for sources that are actually stored squished, not just flagged wrong.</div>
+    </div>
+
+    <div class="checkbox-row">
+      <input type="checkbox" id="encode-deinterlace-check">
+      <label for="encode-deinterlace-check">Deinterlace (bwdif)</label>
+    </div>
+    <div class="checkbox-row">
+      <input type="checkbox" id="encode-autocrop-check">
+      <label for="encode-autocrop-check">Auto-crop black bars</label>
+    </div>
+
+    <div class="advanced-toggle" id="encode-advanced-toggle">
+      <span>Advanced options</span>
+      <span id="encode-advanced-caret">▾</span>
+    </div>
+    <div class="advanced-body" id="encode-advanced-body">
+      <div class="field-grid">
+        <div class="form-field">
+          <label>Audio</label>
+          <select id="encode-audio-select">
+            <option value="copy" selected>Copy (no re-encode)</option>
+            <option value="aac128">Re-encode AAC 128k</option>
+            <option value="aac192">Re-encode AAC 192k</option>
+          </select>
+        </div>
+        <div class="form-field">
+          <label>Container</label>
+          <select id="encode-container-select">
+            <option value="mp4">MP4</option>
+            <option value="mkv">MKV</option>
+          </select>
+        </div>
+      </div>
+      <div class="checkbox-row">
+        <input type="checkbox" id="encode-denoise-check">
+        <label for="encode-denoise-check">Light denoise (helps grainy/noisy sources compress smaller)</label>
+      </div>
+      <div class="form-field">
+        <label>Subtitles</label>
+        <select id="encode-subtitles-select">
+          <option value="copy" selected>Copy if present</option>
+          <option value="drop">Drop</option>
+        </select>
+      </div>
+      <div class="form-field">
+        <label>If encoded output ends up larger than the source</label>
+        <select id="encode-oversized-select">
+          <option value="flag" selected>Keep both, flag it</option>
+          <option value="discard">Discard the encode</option>
+        </select>
+      </div>
+    </div>
+
+    <div class="est-size-box">
+      <span class="label" id="encode-estimate-label">Estimated output size</span>
+      <span class="value" id="encode-estimate-value">-</span>
+    </div>
+
+    <div id="encode-job-error" class="modal-error hidden"></div>
+
+    <div class="hint" style="margin-top:6px;">Output saves to <b style="color:var(--text)">Converted/</b> alongside the source folder.</div>
+
+    <div class="modal-actions">
+      <button id="cancel-encode-job-modal" class="btn">Cancel</button>
+      <button id="add-encode-job-btn" class="btn btn-primary">Add to Queue</button>
     </div>
   </div>
 </div>
