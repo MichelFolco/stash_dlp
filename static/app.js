@@ -2216,6 +2216,7 @@ const encodeSubtitlesSelect = el("encode-subtitles-select");
 const encodeOversizedSelect = el("encode-oversized-select");
 const encodeEstimateLabel = el("encode-estimate-label");
 const encodeEstimateValue = el("encode-estimate-value");
+const encodeEstimateRefreshBtn = el("encode-estimate-refresh-btn");
 const encodeJobError = el("encode-job-error");
 
 async function loadEncodeCapabilities() {
@@ -2855,6 +2856,14 @@ function requestEncodeEstimate() {
   clearTimeout(encodeEstimateTimer);
   encodeEstimateTimer = setTimeout(doRequestEncodeEstimate, 250);
 }
+
+encodeEstimateRefreshBtn.addEventListener("click", () => {
+  clearTimeout(encodeEstimateTimer);
+  encodeEstimateRefreshBtn.classList.remove("spinning");
+  void encodeEstimateRefreshBtn.offsetWidth; // restart animation if clicked repeatedly
+  encodeEstimateRefreshBtn.classList.add("spinning");
+  doRequestEncodeEstimate();
+});
 
 async function doRequestEncodeEstimate() {
   const sourceBody = currentSourceRequestBody();

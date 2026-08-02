@@ -936,3 +936,35 @@ html, body {
   font-weight: bold;
   font-family: "SF Mono", Consolas, monospace;
 }
+.est-size-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.est-refresh-btn {
+  width: 24px;
+  height: 24px;
+  flex-shrink: 0;
+  background: var(--panel);
+  color: var(--text-dim);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 13px;
+  line-height: 1;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.est-refresh-btn:hover {
+  background: var(--border);
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.est-refresh-btn:active { background: var(--bg); }
+.est-refresh-btn.spinning { animation: est-refresh-spin 0.6s linear; }
+@keyframes est-refresh-spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
