@@ -231,7 +231,7 @@ def estimate_heuristic_bytes(
     base_bpp = _BASE_BPP.get(codec, 0.06)
     default_crf = codec_def["default_crf"]
 
-    crf_delta = crf - default_crf
+    crf_delta = default_crf - crf
     scale = 2 ** (crf_delta / 6.0)
     bpp = base_bpp * scale
 
