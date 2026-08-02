@@ -91,24 +91,50 @@ class JobManager:
             ext = job.get("ext", "")
             video_codec = job.get("video_codec", "")
             audio_codec = job.get("audio_codec", "")
+            is_audio = job.get("is_audio", False)
 
-            if not ext:
+            # Probe if we're missing the extension, or if we don't have any
+            # real media info yet. The latter case covers a prior probe
+            # attempt that failed (flaky ffprobe call, file still being
+            # copied/synced onto a network drive, etc.) - without this,
+            # a failed attempt's zeros would look identical to a
+            # successfully-probed audio file's, and we'd never retry.
+            needs_probe = not ext or not duration or (not is_audio and not (width and height))
+
+            if needs_probe:
                 media_path = find_media_file(filename)
                 if media_path:
-                    ext = os.path.splitext(media_path)[1].lstrip(".").upper()
+                    if not ext:
+                        ext = os.path.splitext(media_path)[1].lstrip(".").upper()
                     try:
                         probed = await probe_basic_info(media_path)
                     except Exception:
                         probed = {"width": 0, "height": 0, "duration": 0.0, "video_codec": "", "audio_codec": ""}
-                    width, height, duration = probed["width"], probed["height"], probed["duration"]
-                    video_codec = probed.get("video_codec", "")
-                    audio_codec = probed.get("audio_codec", "")
-                    if filename in disk_queue:
-                        disk_queue[filename].update({
-                            "width": width, "height": height,
-                            "duration": duration, "ext": ext,
-                            "video_codec": video_codec, "audio_codec": audio_codec,
-                        })
+                    new_width, new_height, new_duration = probed["width"], probed["height"], probed["duration"]
+                    new_video_codec = probed.get("video_codec", "")
+                    new_audio_codec = probed.get("audio_codec", "")
+
+                    # Only treat this as a successful probe - and only
+                    # permanently cache it - if ffprobe actually returned
+                    # something usable. Otherwise leave width/height/duration
+                    # uncached so the next scan (e.g. pressing Refresh) tries
+                    # probing again instead of getting stuck at 0x0 forever.
+                    probed_ok = bool(new_duration or new_width or new_height or new_video_codec or new_audio_codec)
+                    if probed_ok:
+                        width, height, duration = new_width, new_height, new_duration
+                        video_codec, audio_codec = new_video_codec, new_audio_codec
+                        if filename in disk_queue:
+                            disk_queue[filename].update({
+                                "width": width, "height": height,
+                                "duration": duration, "ext": ext,
+                                "video_codec": video_codec, "audio_codec": audio_codec,
+                            })
+                            queue_dirty = True
+                    elif filename in disk_queue and disk_queue[filename].get("ext") != ext:
+                        # Still cache the extension so the ledger's file
+                        # path displays correctly, without falsely marking
+                        # the media info as resolved.
+                        disk_queue[filename]["ext"] = ext
                         queue_dirty = True
 
             self.jobs[filename] = {
