@@ -785,9 +785,13 @@ function openJobMenu(x, y, job) {
   // rather than flat top-level items - the trigger itself is shown
   // whenever at least one of its children would be, and the individual
   // rows inside each flyout are toggled the same way they always were.
-  el("ctx-copy-link").classList.toggle("hidden", isDownloading);
-  el("ctx-copy-filename").classList.toggle("hidden", isDownloading);
-  el("ctx-copy-submenu").classList.toggle("hidden", isDownloading);
+  // Copying the link/filename works fine mid-download too (both are
+  // already known the moment the job starts), so these stay visible
+  // regardless of status - only file-system actions below (rename,
+  // move, open folder, delete) still require the download to be done.
+  el("ctx-copy-link").classList.remove("hidden");
+  el("ctx-copy-filename").classList.remove("hidden");
+  el("ctx-copy-submenu").classList.remove("hidden");
 
   el("ctx-rename-file").classList.toggle("hidden", isDownloading);
   el("ctx-move-to-target").classList.toggle("hidden", !isDone);
@@ -797,6 +801,7 @@ function openJobMenu(x, y, job) {
   el("ctx-delete-file").classList.toggle("hidden", isDownloading);
 
   jobMenu.dataset.filename = job.filename;
+  jobMenu.dataset.url = job.url || "";
   positionMenu(jobMenu, x, y);
 }
 
@@ -1138,18 +1143,27 @@ el("ctx-rename-file").addEventListener("click", async () => {
 
 el("ctx-copy-link").addEventListener("click", async () => {
   const filename = jobMenu.dataset.filename;
+  const directUrl = jobMenu.dataset.url || "";
   closeMenus();
   try {
-    const res = await fetch("/api/history-search", {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ query: filename }),
-    });
-    const data = await res.json();
-    if (data.url) {
-      await navigator.clipboard.writeText(data.url);
+    let urlToCopy = directUrl;
+    if (!urlToCopy) {
+      // Fallback for ledger entries with no recorded url (e.g. a file
+      // picked up straight off disk with no queue record) - only the
+      // history log might have it. Downloading/queued jobs always have
+      // a url on the job object itself, so this path is skipped for them.
+      const res = await fetch("/api/history-search", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ query: filename }),
+      });
+      const data = await res.json();
+      urlToCopy = data.url || "";
+    }
+    if (urlToCopy) {
+      await navigator.clipboard.writeText(urlToCopy);
       flashStatus("Link copied to clipboard.");
     } else {
-      flashStatus("No link found in history for this file.");
+      flashStatus("No link found for this file.");
     }
   } catch (e) {
     flashStatus("Couldn't copy the link.");
