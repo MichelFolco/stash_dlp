@@ -326,6 +326,15 @@ html, body {
 .job-card.cancelled .job-title { color: var(--cancelled-text); }
 .job-card.error .job-title { color: var(--error-text); }
 
+.job-path {
+  color: var(--text-dim);
+  font-size: calc(var(--base-font) - 2px);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  margin-top: 1px;
+}
+
 .job-size {
   color: var(--done-size-text);
   margin-top: 4px;

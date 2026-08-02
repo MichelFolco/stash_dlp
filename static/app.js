@@ -37,6 +37,7 @@ const state = {
   tagDomain: true,
   m3uSniffer: false,
   jobs: new Map(),            // filename -> job dict
+  saveDirPath: "",            // current download folder, kept in sync by setSaveDirDisplay
   historyEntries: [],         // Search History Mode's flat list of log entries
   ws: null,
   recentDirs: [],
@@ -168,8 +169,23 @@ function setSaveDirDisplay(path, freeSpace) {
   ctxSaveDir.querySelector("#ctx-save-free").textContent = freeSpace || "";
   ctxSaveDir.title = path;
 
+  state.saveDirPath = path || "";
+
   folderStatusSave.textContent = `DL: ${path}${freeSpace ? " (" + freeSpace + ")" : ""}`;
   folderStatusSave.title = path || "";
+}
+
+// Builds a display-only full path for a job's file. Not used for any
+// file operation - just so the card can show where the file lives (or
+// would land, if it's still downloading/pending) without a server
+// round-trip. Matches whichever separator style the folder path
+// already uses, so it doesn't look out of place on Windows vs. *nix.
+function joinDisplayPath(dir, filename, ext) {
+  if (!dir) return filename;
+  const sep = dir.includes("\\") ? "\\" : "/";
+  const trimmedDir = dir.replace(/[\\/]+$/, "");
+  const name = ext ? `${filename}.${ext.toLowerCase()}` : filename;
+  return `${trimmedDir}${sep}${name}`;
 }
 
 async function refreshTargetDir() {
@@ -563,6 +579,13 @@ function buildJobCard(job) {
   }
   body.appendChild(titleRow);
 
+  const filePath = joinDisplayPath(state.saveDirPath, job.filename, job.ext);
+  const pathEl = document.createElement("div");
+  pathEl.className = "job-path";
+  pathEl.textContent = filePath;
+  pathEl.title = filePath;
+  body.appendChild(pathEl);
+
   const status = job.status;
   if (status === "DOWNLOADING") {
     const stats = document.createElement("div");
@@ -656,7 +679,7 @@ async function retryJob(filename) {
 }
 
 function buildTooltip(job) {
-  let t = `File: ${job.filename}\nURL: ${job.url || ""}`;
+  let t = `File: ${job.filename}\nPath: ${joinDisplayPath(state.saveDirPath, job.filename, job.ext)}\nURL: ${job.url || ""}`;
   if (job.ext) t += `\nType: ${job.ext}`;
   if (!job.is_audio && job.width && job.height) {
     t += `\nResolution: ${job.width}\u00d7${job.height}`;
