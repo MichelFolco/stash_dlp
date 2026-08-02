@@ -9,6 +9,7 @@ both the download ledger and the encode queue.
 import asyncio
 import json
 import os
+import tempfile
 import time
 import uuid
 from typing import Dict, Optional
@@ -17,6 +18,7 @@ from config import ENCODE_CODECS, RESOLUTION_CAPS, ASPECT_RATIOS, AUDIO_MODES
 from ffmpeg_encode import (
     probe_media, detect_crop, detect_available_hw_encoders,
     estimate_heuristic_bytes, build_video_filters, build_ffmpeg_cmd,
+    build_audio_sync_cmd,
 )
 from procflags import NO_CONSOLE_KWARGS
 from settings import get_converted_dir, get_encode_queue_json_path
@@ -54,6 +56,7 @@ class EncodeManager:
         self.connections = connections
         self._work_event = asyncio.Event()
         self._worker_task: Optional[asyncio.Task] = None
+        self.last_preview_path: Optional[str] = None  # most recent Audio Sync preview clip
 
     # ── Bootstrapping ────────────────────────────────────────────
     def start(self):
@@ -238,6 +241,151 @@ class EncodeManager:
         await self._broadcast({"type": "encode_job_added", "job": job})
         return _public_job(job)
 
+    # ── Audio Sync: enqueueing ──────────────────────────────────
+    async def enqueue_audio_sync(self, source_path: str, delay_ms: int) -> dict:
+        """Queues a pure-remux audio-delay job - same source and output
+        container, only the audio track's timing changes. Shares the
+        same job dict shape as a normal encode job (see enqueue() above)
+        so the rest of EncodeManager and the frontend card renderer
+        don't need to special-case missing keys; encode-specific fields
+        just get neutral placeholder values."""
+        if not os.path.isfile(source_path):
+            raise ValueError("That source file doesn't exist.")
+        try:
+            delay_ms = int(delay_ms)
+        except (TypeError, ValueError):
+            raise ValueError("Invalid delay value.")
+
+        source_info = await probe_media(source_path)
+        if not source_info["has_audio"]:
+            raise ValueError("That file has no audio track to sync.")
+        source_size = os.path.getsize(source_path)
+        source_size_label = format_file_size(source_size)
+
+        job_id = uuid.uuid4().hex
+        # Original filename/extension, unchanged - a straight remux stays
+        # in the same container the source was already in.
+        output_filename = os.path.basename(source_path)
+        container = os.path.splitext(source_path)[1].lstrip(".").lower()
+        reserved = {
+            j["output_path"] for j in self.jobs.values()
+            if j.get("status") in ("QUEUED", "ENCODING")
+        }
+        output_path = _unique_output_path(get_converted_dir(), output_filename, reserved)
+        output_filename = os.path.basename(output_path)
+
+        job = {
+            "id": job_id,
+            "job_type": "audio_sync",
+            "source_path": source_path,
+            "source_filename": os.path.basename(source_path),
+            "source_size": source_size,
+            "source_size_label": source_size_label,
+            "source_width": source_info["width"],
+            "source_height": source_info["height"],
+            "source_duration": source_info["duration"],
+            "source_fps": source_info["fps"],
+            "has_audio": source_info["has_audio"],
+            "status": "QUEUED",
+            "pct": 0,
+            "mode": "audio_sync",
+            "codec": None,
+            "codec_label": "Audio Sync",
+            "encoder_backend": "software",
+            "crf": None,
+            "preset": None,
+            "target_size_mb": None,
+            "resolution_cap": "source",
+            "output_width": source_info["width"],
+            "output_height": source_info["height"],
+            "force_ar": False,
+            "force_ar_label": "",
+            "force_ar_width": None,
+            "force_ar_height": None,
+            "deinterlace": False,
+            "auto_crop": False,
+            "crop_value": None,
+            "denoise": False,
+            "audio_mode": "copy",
+            "subtitles_mode": "copy",
+            "container": container,
+            "oversized_behavior": "flag",
+            "output_path": output_path,
+            "output_filename": output_filename,
+            "delay_ms": delay_ms,
+            "estimated_bytes": source_size,          # a remux barely changes size
+            "estimated_size_label": source_size_label,
+            "estimate_kind": "heuristic",
+            "final_bytes": None,
+            "final_size_label": "",
+            "oversized": False,
+            "speed": "",
+            "eta_seconds": None,
+            "elapsed_seconds": 0,
+            "error_message": "",
+            "created_at": time.time(),
+        }
+
+        self.jobs[job_id] = job
+        self._pending.append(job_id)
+        self._persist()
+        self._work_event.set()
+
+        await self._broadcast({"type": "encode_job_added", "job": job})
+        return _public_job(job)
+
+    # ── Audio Sync: live "Preview Final" render ─────────────────
+    async def render_audio_sync_preview(
+        self, source_path: str, delay_ms: int, start_seconds: float, preview_len: float = 10.0,
+    ) -> str:
+        """Renders a short (~preview_len second) clip with the requested
+        delay actually applied via the same remux ffmpeg would use for
+        the real job - so what the user hears/sees here is exactly what
+        the final output will do, not an approximation. Overwrites a
+        single reusable temp file each call (this is a single-user local
+        app; no need to accumulate preview files)."""
+        if not os.path.isfile(source_path):
+            raise ValueError("That file doesn't exist.")
+        try:
+            delay_ms = int(delay_ms)
+            start_seconds = max(0.0, float(start_seconds))
+        except (TypeError, ValueError):
+            raise ValueError("Invalid preview parameters.")
+
+        ext = os.path.splitext(source_path)[1] or ".mp4"
+        preview_path = os.path.join(tempfile.gettempdir(), f"stash_dlp_audio_sync_preview{ext}")
+
+        cmd = build_audio_sync_cmd(
+            source_path=source_path, output_path=preview_path, delay_ms=delay_ms,
+            start_seconds=start_seconds, duration=preview_len,
+        )
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdout=asyncio.subprocess.DEVNULL,
+                stderr=asyncio.subprocess.PIPE,
+                **NO_CONSOLE_KWARGS,
+            )
+        except FileNotFoundError:
+            raise RuntimeError("ffmpeg isn't installed/available on PATH.")
+
+        try:
+            _, stderr_bytes = await asyncio.wait_for(proc.communicate(), timeout=30)
+        except asyncio.TimeoutError:
+            try:
+                proc.kill()
+            except ProcessLookupError:
+                pass
+            raise RuntimeError("Rendering the preview timed out.")
+
+        if proc.returncode != 0 or not os.path.exists(preview_path):
+            tail_lines = stderr_bytes.decode("utf-8", errors="ignore").strip().splitlines()
+            tail_text = "\n".join(tail_lines[-12:])
+            raise RuntimeError(f"Couldn't render the preview.\n{tail_text}" if tail_text else "Couldn't render the preview.")
+
+        self.last_preview_path = preview_path
+        return preview_path
+
     # ── Serial worker ─────────────────────────────────────────────
     async def _worker_loop(self):
         while True:
@@ -270,6 +418,10 @@ class EncodeManager:
         started = time.time()
         await self._broadcast({"type": "encode_job_updated", "job": job})
 
+        if job.get("job_type") == "audio_sync":
+            await self._run_audio_sync(job, started)
+            return
+
         # Auto-crop detection happens once, right before building the
         # filter chain, since it needs to sample the actual source.
         crop_value = None
@@ -294,6 +446,38 @@ class EncodeManager:
             await self._run_two_pass(job, video_filters, started)
         else:
             await self._run_single_pass(job, video_filters, started)
+
+    async def _run_audio_sync(self, job: dict, started: float):
+        """Mirrors _run_single_pass below, but with a remux (build_audio_
+        sync_cmd) instead of a real encode - same subprocess/progress/
+        finalize plumbing, since -progress pipe:1 reports usefully even
+        for a stream-copy job."""
+        os.makedirs(os.path.dirname(job["output_path"]), exist_ok=True)
+        cmd = build_audio_sync_cmd(
+            source_path=job["source_path"], output_path=job["output_path"],
+            delay_ms=job["delay_ms"],
+        )
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                **NO_CONSOLE_KWARGS,
+            )
+        except FileNotFoundError:
+            job["status"] = "ERROR"
+            job["error_message"] = "ffmpeg isn't installed/available on PATH."
+            self._persist()
+            await self._broadcast({"type": "encode_job_updated", "job": job})
+            return
+
+        self._process = proc
+        stderr_tail: list = []
+        stderr_task = asyncio.create_task(_drain_stderr(proc, stderr_tail))
+        await self._pump_progress(job, proc, started, pct_floor=0, pct_ceiling=100)
+        returncode = await proc.wait()
+        await stderr_task
+        await self._finalize(job, returncode, started, stderr_tail=stderr_tail, cmd=cmd)
 
     async def _run_single_pass(self, job: dict, video_filters: str, started: float):
         cmd = build_ffmpeg_cmd(
@@ -436,7 +620,7 @@ class EncodeManager:
             # fast encode can buffer most output right up until the end,
             # making bytes-on-disk a poor proxy until real time catches
             # up). Below either threshold, keep showing the heuristic.
-            if frac > 0.05 and job["elapsed_seconds"] >= 2 and job["mode"] == "crf":
+            if frac > 0.05 and job["elapsed_seconds"] >= 2 and job.get("mode") == "crf":
                 try:
                     bytes_so_far = os.path.getsize(job["output_path"])
                 except OSError:
@@ -480,7 +664,7 @@ class EncodeManager:
             job["final_size_label"] = format_file_size(final_bytes)
             job["pct"] = 100
 
-            if final_bytes >= job["source_size"]:
+            if job.get("job_type") != "audio_sync" and final_bytes >= job["source_size"]:
                 job["oversized"] = True
                 if job["oversized_behavior"] == "discard":
                     _remove_partial_output(job["output_path"])

@@ -52,6 +52,7 @@
   <div id="encode-view" class="hidden">
     <div id="encode-control-bar" class="control-bar">
       <button id="new-encode-job-btn" class="btn btn-primary">+ New Encode Job</button>
+      <button id="new-audio-sync-job-btn" class="btn btn-primary">+ New Audio Sync Job</button>
       <button id="open-converted-btn" class="btn">Open "Converted" Folder</button>
     </div>
 
@@ -393,6 +394,59 @@
     <div class="modal-actions">
       <button id="cancel-encode-job-modal" class="btn">Cancel</button>
       <button id="add-encode-job-btn" class="btn btn-primary">Add to Queue</button>
+    </div>
+  </div>
+</div>
+
+<div id="new-audio-sync-modal" class="modal-overlay hidden">
+  <div class="modal-box wide">
+    <div class="modal-title">
+      <span>New Audio Sync Job</span>
+      <button id="close-audio-sync-modal" class="icon-btn">✕</button>
+    </div>
+
+    <div class="form-field">
+      <label>Source file</label>
+      <div class="modal-row">
+        <select id="sync-source-select" style="flex:1;"></select>
+        <button id="sync-source-refresh-btn" class="btn modal-browse-btn" title="Refresh list">↻</button>
+      </div>
+    </div>
+    <div id="sync-source-info" class="hint"></div>
+
+    <div class="form-field sync-player-field">
+      <video id="sync-video-player" muted playsinline controls></video>
+      <audio id="sync-audio-player"></audio>
+      <video id="sync-final-preview-player" controls class="hidden"></video>
+      <div id="sync-back-to-live-row" class="hidden">
+        <button id="sync-back-to-live-btn" class="btn">← Back to live scrubbing</button>
+      </div>
+    </div>
+
+    <div class="form-field">
+      <label>Audio delay (ms) — positive delays the audio, negative advances it</label>
+      <div class="sync-delay-row">
+        <button type="button" class="btn sync-delay-btn" data-delta="-100">-100</button>
+        <button type="button" class="btn sync-delay-btn" data-delta="-10">-10</button>
+        <input type="number" id="sync-delay-input" class="sync-delay-input" step="1" value="0">
+        <button type="button" class="btn sync-delay-btn" data-delta="10">+10</button>
+        <button type="button" class="btn sync-delay-btn" data-delta="100">+100</button>
+      </div>
+      <div class="hint">Playing the video above previews this offset live. Drag the scrub bar to any point first for a more meaningful preview.</div>
+    </div>
+
+    <div class="form-field">
+      <button id="sync-preview-final-btn" class="btn">Preview Final (exact remux)</button>
+      <div id="sync-preview-status" class="hint"></div>
+    </div>
+
+    <div id="sync-job-error" class="modal-error hidden"></div>
+
+    <div class="hint" style="margin-top:6px;">Output saves to <b style="color:var(--text)">Converted/</b> with the same filename and container as the source - audio timing only, no re-encoding.</div>
+
+    <div class="modal-actions">
+      <button id="cancel-audio-sync-modal" class="btn">Cancel</button>
+      <button id="add-audio-sync-job-btn" class="btn btn-primary" disabled>Add to Queue</button>
     </div>
   </div>
 </div>

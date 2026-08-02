@@ -748,6 +748,17 @@ html, body {
   border-radius: 3px;
   padding: 1px 5px;
 }
+.sync-badge {
+  flex: 0 0 auto;
+  font-size: 9px;
+  font-weight: bold;
+  letter-spacing: 0.04em;
+  color: #c9a0ff;
+  background: #251638;
+  border: 1px solid #4d2f70;
+  border-radius: 3px;
+  padding: 1px 5px;
+}
 
 .status-pill {
   flex: 0 0 auto;
@@ -897,4 +908,40 @@ html, body {
   color: var(--accent);
   font-weight: bold;
   font-family: "SF Mono", Consolas, monospace;
+}
+
+.sync-player-field { display: flex; flex-direction: column; gap: 6px; }
+.sync-player-field video {
+  display: block;
+  width: 100%;
+  max-height: 50vh;
+  background: #000;
+  border-radius: 4px;
+}
+.sync-player-field video.hidden { display: none; }
+#sync-audio-player { display: none; } /* audio backend for the live dual-track preview - never shown */
+#sync-back-to-live-row.hidden { display: none; }
+
+.sync-delay-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.sync-delay-btn {
+  flex: 0 0 auto;
+  font-family: "SF Mono", Consolas, monospace;
+  min-width: 44px;
+}
+.sync-delay-input {
+  flex: 1;
+  min-width: 0;
+  background: #15151a;
+  border: 1px solid var(--border);
+  color: var(--accent);
+  font-family: "SF Mono", Consolas, monospace;
+  font-weight: bold;
+  font-size: calc(var(--base-font) + 2px);
+  text-align: center;
+  border-radius: 4px;
+  padding: 6px 4px;
 }

@@ -1915,6 +1915,15 @@ function resolutionTargetLabel(job) {
 }
 
 function buildEncodeSettingsSummary(job) {
+  if (job.job_type === "audio_sync") {
+    const sign = job.delay_ms > 0 ? "+" : job.delay_ms < 0 ? "" : "±";
+    const parts = [`Audio delayed ${sign}${job.delay_ms}ms`];
+    if (job.status === "DONE") {
+      parts.push("saved to Converted/");
+      if (job.elapsed_seconds) parts.push(`took ${formatEta(job.elapsed_seconds)}`);
+    }
+    return parts.join(" · ");
+  }
   const parts = [job.resolution_cap && job.resolution_cap !== "source" ? job.resolution_cap : "Source res"];
   if (job.deinterlace) parts.push("deinterlace on");
   if (job.auto_crop) parts.push("auto-crop");
@@ -1959,17 +1968,25 @@ function buildEncodeJobCard(job) {
   titleRow.appendChild(title);
 
   if (job.status === "ENCODING" || job.status === "QUEUED") {
-    const codecBadge = document.createElement("span");
-    codecBadge.className = "codec-badge";
-    const shortCodec = (job.codec_label || "").split(" ")[0];
-    codecBadge.textContent = job.mode === "size" ? shortCodec : `${shortCodec} · CRF${job.crf}`;
-    titleRow.appendChild(codecBadge);
+    if (job.job_type === "audio_sync") {
+      const syncBadge = document.createElement("span");
+      syncBadge.className = "sync-badge";
+      const sign = job.delay_ms > 0 ? "+" : job.delay_ms < 0 ? "" : "±";
+      syncBadge.textContent = `SYNC ${sign}${job.delay_ms}ms`;
+      titleRow.appendChild(syncBadge);
+    } else {
+      const codecBadge = document.createElement("span");
+      codecBadge.className = "codec-badge";
+      const shortCodec = (job.codec_label || "").split(" ")[0];
+      codecBadge.textContent = job.mode === "size" ? shortCodec : `${shortCodec} · CRF${job.crf}`;
+      titleRow.appendChild(codecBadge);
 
-    if (job.encoder_backend && job.encoder_backend !== "software") {
-      const fastBadge = document.createElement("span");
-      fastBadge.className = "fast-badge";
-      fastBadge.textContent = job.encoder_backend.toUpperCase();
-      titleRow.appendChild(fastBadge);
+      if (job.encoder_backend && job.encoder_backend !== "software") {
+        const fastBadge = document.createElement("span");
+        fastBadge.className = "fast-badge";
+        fastBadge.textContent = job.encoder_backend.toUpperCase();
+        titleRow.appendChild(fastBadge);
+      }
     }
   }
 
@@ -2550,6 +2567,252 @@ addEncodeJobBtn.addEventListener("click", async () => {
     encodeJobError.classList.remove("hidden");
   } finally {
     addEncodeJobBtn.disabled = false;
+  }
+});
+
+// ── New Audio Sync Job modal ─────────────────────────────────────
+const newAudioSyncJobBtn = el("new-audio-sync-job-btn");
+const newAudioSyncModal = el("new-audio-sync-modal");
+const closeAudioSyncModalBtn = el("close-audio-sync-modal");
+const cancelAudioSyncModalBtn = el("cancel-audio-sync-modal");
+const addAudioSyncJobBtn = el("add-audio-sync-job-btn");
+const syncSourceSelect = el("sync-source-select");
+const syncSourceRefreshBtn = el("sync-source-refresh-btn");
+const syncSourceInfoEl = el("sync-source-info");
+const syncVideoPlayer = el("sync-video-player");
+const syncAudioPlayer = el("sync-audio-player");
+const syncFinalPreviewPlayer = el("sync-final-preview-player");
+const syncBackToLiveRow = el("sync-back-to-live-row");
+const syncBackToLiveBtn = el("sync-back-to-live-btn");
+const syncDelayInput = el("sync-delay-input");
+const syncPreviewFinalBtn = el("sync-preview-final-btn");
+const syncPreviewStatus = el("sync-preview-status");
+const syncJobError = el("sync-job-error");
+
+let syncDelayMs = 0;
+let syncDriftInterval = null;
+let syncCurrentSourceFilename = null;
+
+function syncOffsetSeconds() {
+  return syncDelayMs / 1000;
+}
+
+// Keeps the (muted) video element and the separate audio element - both
+// pointed at the same stream URL - offset from each other by the current
+// delay, so scrubbing/playing previews exactly what the eventual remux
+// will sound/look like without needing a server round-trip per tweak.
+function resyncAudioToVideo() {
+  if (!syncAudioPlayer.src) return;
+  const target = Math.max(0, syncVideoPlayer.currentTime - syncOffsetSeconds());
+  if (Math.abs(syncAudioPlayer.currentTime - target) > 0.15) {
+    syncAudioPlayer.currentTime = target;
+  }
+}
+
+function startSyncDriftCorrection() {
+  stopSyncDriftCorrection();
+  syncDriftInterval = setInterval(resyncAudioToVideo, 1000);
+}
+function stopSyncDriftCorrection() {
+  if (syncDriftInterval) {
+    clearInterval(syncDriftInterval);
+    syncDriftInterval = null;
+  }
+}
+
+syncVideoPlayer.addEventListener("play", async () => {
+  resyncAudioToVideo();
+  try { await syncAudioPlayer.play(); } catch (e) { /* autoplay restrictions, ignore */ }
+  startSyncDriftCorrection();
+});
+syncVideoPlayer.addEventListener("pause", () => {
+  syncAudioPlayer.pause();
+  stopSyncDriftCorrection();
+});
+syncVideoPlayer.addEventListener("seeked", resyncAudioToVideo);
+
+function setSyncDelay(ms) {
+  syncDelayMs = ms;
+  syncDelayInput.value = String(ms);
+  resyncAudioToVideo();
+}
+
+document.querySelectorAll(".sync-delay-btn").forEach((btn) => {
+  btn.addEventListener("click", () => {
+    setSyncDelay((parseInt(syncDelayInput.value, 10) || 0) + parseInt(btn.dataset.delta, 10));
+  });
+});
+syncDelayInput.addEventListener("change", () => setSyncDelay(parseInt(syncDelayInput.value, 10) || 0));
+
+function populateSyncSourceSelect() {
+  syncSourceSelect.innerHTML = "";
+  for (const src of state.encodeSources) {
+    const opt = document.createElement("option");
+    opt.value = src.filename;
+    opt.textContent = `${src.filename} — ${src.file_size}`;
+    syncSourceSelect.appendChild(opt);
+  }
+}
+
+function showLiveSyncPlayer() {
+  syncFinalPreviewPlayer.pause();
+  syncFinalPreviewPlayer.removeAttribute("src");
+  syncFinalPreviewPlayer.classList.add("hidden");
+  syncBackToLiveRow.classList.add("hidden");
+  syncVideoPlayer.classList.remove("hidden");
+}
+syncBackToLiveBtn.addEventListener("click", showLiveSyncPlayer);
+
+async function onSyncSourceChange() {
+  const filename = syncSourceSelect.value;
+  addAudioSyncJobBtn.disabled = true;
+  syncCurrentSourceFilename = null;
+  if (!filename) return;
+  syncSourceInfoEl.textContent = "Probing source file...";
+  try {
+    const res = await fetch("/api/encode/probe", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ filename }),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      syncSourceInfoEl.textContent = data.error || "Couldn't read that file.";
+      return;
+    }
+    if (!data.has_audio) {
+      syncSourceInfoEl.textContent = "That file has no audio track - pick another source.";
+      return;
+    }
+    syncCurrentSourceFilename = filename;
+    syncSourceInfoEl.textContent = `${data.width}×${data.height} · ${formatDuration(data.duration)} · ${data.size_label}`;
+    addAudioSyncJobBtn.disabled = false;
+
+    const streamUrl = `/api/jobs/stream?filename=${encodeURIComponent(filename)}`;
+    syncVideoPlayer.pause();
+    syncVideoPlayer.src = streamUrl;
+    syncVideoPlayer.load();
+    syncAudioPlayer.pause();
+    syncAudioPlayer.src = streamUrl;
+    syncAudioPlayer.load();
+    showLiveSyncPlayer();
+  } catch (e) {
+    syncSourceInfoEl.textContent = "Couldn't reach the server to probe that file.";
+  }
+}
+syncSourceSelect.addEventListener("change", onSyncSourceChange);
+
+syncSourceRefreshBtn.addEventListener("click", async () => {
+  await refreshDownloadLedger();
+  await refreshEncodeSources();
+  const previous = syncSourceSelect.value;
+  populateSyncSourceSelect();
+  if (previous && [...syncSourceSelect.options].some((o) => o.value === previous)) {
+    syncSourceSelect.value = previous;
+  } else if (syncSourceSelect.options.length > 0) {
+    await onSyncSourceChange();
+  }
+});
+
+syncPreviewFinalBtn.addEventListener("click", async () => {
+  if (!syncCurrentSourceFilename) return;
+  syncPreviewStatus.textContent = "Rendering preview clip...";
+  syncPreviewFinalBtn.disabled = true;
+  syncVideoPlayer.pause();
+  syncAudioPlayer.pause();
+  stopSyncDriftCorrection();
+  try {
+    // Center the preview on wherever the user last scrubbed to, so it
+    // isn't judged against a cold-open/silent intro; fall back to the
+    // 25% mark if they haven't moved the scrub bar yet.
+    const startSeconds = syncVideoPlayer.currentTime > 0.5
+      ? syncVideoPlayer.currentTime
+      : (syncVideoPlayer.duration || 0) * 0.25;
+    const res = await fetch("/api/encode/audio-sync/preview", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ filename: syncCurrentSourceFilename, delay_ms: syncDelayMs, start_seconds: startSeconds }),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      syncPreviewStatus.textContent = data.error || "Couldn't render the preview.";
+      return;
+    }
+    syncVideoPlayer.classList.add("hidden");
+    syncFinalPreviewPlayer.src = `/api/encode/audio-sync/preview-file?v=${encodeURIComponent(data.preview_token)}`;
+    syncFinalPreviewPlayer.classList.remove("hidden");
+    syncBackToLiveRow.classList.remove("hidden");
+    syncFinalPreviewPlayer.load();
+    syncFinalPreviewPlayer.play().catch(() => {});
+    syncPreviewStatus.textContent = "Previewing the exact final sync.";
+  } catch (e) {
+    syncPreviewStatus.textContent = "Couldn't reach the server.";
+  } finally {
+    syncPreviewFinalBtn.disabled = false;
+  }
+});
+
+async function openNewAudioSyncModal() {
+  syncJobError.classList.add("hidden");
+  syncPreviewStatus.textContent = "";
+  setSyncDelay(0);
+  syncCurrentSourceFilename = null;
+  addAudioSyncJobBtn.disabled = true;
+  showLiveSyncPlayer();
+
+  await refreshDownloadLedger();
+  await refreshEncodeSources();
+  populateSyncSourceSelect();
+
+  if (syncSourceSelect.options.length > 0) {
+    await onSyncSourceChange();
+  } else {
+    syncSourceInfoEl.textContent = "No completed downloads available - download something first.";
+  }
+
+  newAudioSyncModal.classList.remove("hidden");
+}
+
+function closeNewAudioSyncModal() {
+  syncVideoPlayer.pause();
+  syncAudioPlayer.pause();
+  stopSyncDriftCorrection();
+  syncFinalPreviewPlayer.pause();
+  newAudioSyncModal.classList.add("hidden");
+}
+
+newAudioSyncJobBtn.addEventListener("click", openNewAudioSyncModal);
+closeAudioSyncModalBtn.addEventListener("click", closeNewAudioSyncModal);
+cancelAudioSyncModalBtn.addEventListener("click", closeNewAudioSyncModal);
+newAudioSyncModal.addEventListener("click", (e) => {
+  if (e.target === newAudioSyncModal) closeNewAudioSyncModal();
+});
+
+addAudioSyncJobBtn.addEventListener("click", async () => {
+  syncJobError.classList.add("hidden");
+  if (!syncCurrentSourceFilename) {
+    syncJobError.textContent = "Choose a source file first.";
+    syncJobError.classList.remove("hidden");
+    return;
+  }
+  addAudioSyncJobBtn.disabled = true;
+  try {
+    const res = await fetch("/api/encode/audio-sync/jobs", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ filename: syncCurrentSourceFilename, delay_ms: syncDelayMs }),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      syncJobError.textContent = data.error || "Couldn't queue that job.";
+      syncJobError.classList.remove("hidden");
+      return;
+    }
+    state.encodeJobs.set(data.job.id, data.job);
+    renderEncodeLedger();
+    closeNewAudioSyncModal();
+  } catch (e) {
+    syncJobError.textContent = "Couldn't reach the server.";
+    syncJobError.classList.remove("hidden");
+  } finally {
+    addAudioSyncJobBtn.disabled = false;
   }
 });
 

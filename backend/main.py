@@ -3,6 +3,7 @@ import mimetypes
 import os
 import subprocess
 import sys
+import time
 from typing import Optional
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request
@@ -179,6 +180,19 @@ class EncodeJobIdRequest(BaseModel):
 class EncodeDeleteRequest(BaseModel):
     job_id: str
     delete_output: bool = False
+
+
+class EnqueueAudioSyncRequest(BaseModel):
+    filename: Optional[str] = None
+    path: Optional[str] = None
+    delay_ms: int = 0
+
+
+class AudioSyncPreviewRequest(BaseModel):
+    filename: Optional[str] = None
+    path: Optional[str] = None
+    delay_ms: int = 0
+    start_seconds: float = 0.0
 
 
 # ── REST endpoints ──────────────────────────────────────────────
@@ -568,7 +582,14 @@ async def api_stream_video(filename: str, request: Request):
     media_path = find_media_file(filename)
     if not media_path or not os.path.isfile(media_path):
         return JSONResponse(status_code=404, content={"error": "File not found."})
+    return _range_response(media_path, request)
 
+
+def _range_response(media_path: str, request: Request):
+    """Shared Range-request responder for /api/jobs/stream and the Audio
+    Sync 'Preview Final' clip endpoint - same reasoning as the docstring
+    above applies to both: mobile Safari requires proper Range handling
+    to play anything at all, and desktop browsers need it for seeking."""
     file_size = os.path.getsize(media_path)
     media_type = mimetypes.guess_type(media_path)[0] or "video/mp4"
     range_header = request.headers.get("range")
@@ -818,6 +839,39 @@ async def api_open_converted_folder(request: Request):
         return {"ok": True}
     except Exception as e:
         return JSONResponse(status_code=500, content={"error": str(e)})
+
+
+@app.post("/api/encode/audio-sync/jobs")
+async def api_enqueue_audio_sync_job(req: EnqueueAudioSyncRequest):
+    try:
+        source_path = _resolve_source_path(req.filename, req.path)
+        job = await encode_manager.enqueue_audio_sync(source_path, req.delay_ms)
+    except (ValueError, RuntimeError) as e:
+        return JSONResponse(status_code=400, content={"error": str(e)})
+    return {"ok": True, "job": job}
+
+
+@app.post("/api/encode/audio-sync/preview")
+async def api_audio_sync_preview(req: AudioSyncPreviewRequest):
+    """Renders a short clip with the requested delay actually applied
+    (same remux the real job uses) so 'Preview Final' shows the exact
+    result, not an approximation. Returns a cache-busting token the
+    frontend appends to the GET below, since the clip is saved to a
+    single reusable filename."""
+    try:
+        source_path = _resolve_source_path(req.filename, req.path)
+        await encode_manager.render_audio_sync_preview(source_path, req.delay_ms, req.start_seconds)
+    except (ValueError, RuntimeError) as e:
+        return JSONResponse(status_code=400, content={"error": str(e)})
+    return {"ok": True, "preview_token": str(time.time())}
+
+
+@app.get("/api/encode/audio-sync/preview-file")
+async def api_audio_sync_preview_file(request: Request):
+    preview_path = encode_manager.last_preview_path
+    if not preview_path or not os.path.isfile(preview_path):
+        return JSONResponse(status_code=404, content={"error": "No preview has been rendered yet."})
+    return _range_response(preview_path, request)
 
 
 # ── WebSocket ────────────────────────────────────────────────────

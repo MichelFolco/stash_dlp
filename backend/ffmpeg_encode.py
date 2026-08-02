@@ -297,6 +297,13 @@ def build_video_filters(
 
     working_w, working_h = source_width, source_height
     if force_ar and force_ar_width and force_ar_height:
+        # Round to even - libx265 (and most other encoders, at yuv420p)
+        # require both dimensions to be a multiple of 2 for 4:2:0 chroma
+        # subsampling. The frontend's quick-ratio buttons already compute
+        # even values, but this is a safety net for the "Custom" ratio
+        # path where the person can type in any number by hand.
+        force_ar_width = force_ar_width - (force_ar_width % 2)
+        force_ar_height = force_ar_height - (force_ar_height % 2)
         filters.append(f"scale={force_ar_width}:{force_ar_height}:flags=lanczos,setsar=1")
         working_w, working_h = force_ar_width, force_ar_height
 
@@ -305,7 +312,14 @@ def build_video_filters(
         working_h = int(crop.split(":")[1])
 
     if resolution_cap and working_h > resolution_cap:
-        filters.append(f"scale=-2:{resolution_cap}:force_original_aspect_ratio=decrease")
+        # force_divisible_by=2 is required here, not just cosmetic: with
+        # only "-2" for the free dimension, force_original_aspect_ratio's
+        # own fit-to-box math can still land on an odd width once the
+        # source's actual aspect ratio isn't a clean fraction (e.g. a
+        # 1280x720 source scaled to a 480p cap) - which libx265 then
+        # rejects outright ("Picture width must be an integer multiple
+        # of the specified chroma subsampling") instead of just warning.
+        filters.append(f"scale=-2:{resolution_cap}:force_original_aspect_ratio=decrease:force_divisible_by=2")
 
     if denoise:
         filters.append("hqdn3d=2:1.5:3:2.5")
@@ -331,6 +345,42 @@ def build_subtitle_args(subtitles_mode: str, container: str) -> list:
     if container == "mp4":
         return ["-c:s", "mov_text"]
     return ["-c:s", "copy"]
+
+
+def build_audio_sync_cmd(
+    *, source_path: str, output_path: str, delay_ms: int,
+    start_seconds: float = None, duration: float = None,
+) -> list:
+    """Builds an ffmpeg argv that shifts a file's audio relative to its
+    video by delay_ms milliseconds, with both streams left as -c copy -
+    a pure remux, no re-encoding of either stream.
+
+    Achieved by opening the source twice: once for video (untouched,
+    input 0) and once for audio with -itsoffset applied (input 1).
+    Positive delay_ms delays the audio (it starts later); negative
+    delay_ms advances it (ffmpeg trims the leading edge of the audio
+    instead, since presentation timestamps can't go negative).
+
+    If start_seconds/duration are given, seeks both inputs to the same
+    point and caps output length - used to render a short preview clip
+    instead of remuxing the whole file. Both get identical -ss so the
+    two demuxers start reading from the same point in the source
+    timeline; -itsoffset is layered on top of that for the audio input.
+    """
+    offset_sec = delay_ms / 1000.0
+
+    cmd = ["ffmpeg", "-y"]
+    if start_seconds is not None:
+        cmd += ["-ss", f"{start_seconds:.3f}"]
+    cmd += ["-i", source_path]
+    if start_seconds is not None:
+        cmd += ["-ss", f"{start_seconds:.3f}"]
+    cmd += ["-itsoffset", f"{offset_sec:.3f}", "-i", source_path]
+    cmd += ["-map", "0:v:0", "-map", "1:a:0", "-c", "copy"]
+    if duration is not None:
+        cmd += ["-t", f"{duration:.3f}"]
+    cmd += ["-progress", "pipe:1", "-nostats", output_path]
+    return cmd
 
 
 def build_ffmpeg_cmd(
