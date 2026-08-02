@@ -74,11 +74,39 @@ def scan_filesystem():
                     "height": info.get("height", 0),
                     "duration": info.get("duration", 0),
                     "ext": info.get("ext", ""),
+                    "video_codec": info.get("video_codec", ""),
+                    "audio_codec": info.get("audio_codec", ""),
                 }
             )
         else:
             if status == "DOWNLOADING":
                 updated_tracker[filename] = info
+            elif status in ("ERROR", "CANCELLED"):
+                # Failed/cancelled downloads stay in the ledger until the
+                # user explicitly deletes them via the card - even if no
+                # file ever landed on disk (or it was cleaned up since).
+                # This only preserves entries already tracked in
+                # queue.json going forward; it never reconstructs
+                # anything from the plain-text history log, so nothing
+                # from before this behavior existed comes back.
+                updated_tracker[filename] = info
+                done_jobs.append(
+                    {
+                        "filename": filename,
+                        "url": url,
+                        "res_cap": res_cap,
+                        "status": status,
+                        "file_size": info.get("file_size", ""),
+                        "is_audio": info.get("is_audio", False),
+                        "playback_position": info.get("playback_position", 0),
+                        "width": info.get("width", 0),
+                        "height": info.get("height", 0),
+                        "duration": info.get("duration", 0),
+                        "ext": info.get("ext", ""),
+                        "video_codec": info.get("video_codec", ""),
+                        "audio_codec": info.get("audio_codec", ""),
+                    }
+                )
 
     for stem in sorted(completed_files):
         if stem not in updated_tracker:
@@ -100,6 +128,8 @@ def scan_filesystem():
                     "status": "DONE",
                     "file_size": file_size_str,
                     "is_audio": is_audio,
+                    "video_codec": "",
+                    "audio_codec": "",
                 }
             )
 

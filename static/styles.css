@@ -67,8 +67,11 @@ html, body {
 /* ── Folder status row ─────────────────────────────────────── */
 .folder-status-row {
   display: flex;
-  align-items: center;
-  gap: 6px;
+  flex-direction: column;
+  gap: 2px;
+  padding: 1px 0;
+}
+.folder-status-item {
   padding: 1px 4px;
   border-radius: 4px;
   font-size: 10px;
@@ -76,21 +79,11 @@ html, body {
   color: var(--text-dim);
   cursor: pointer;
   user-select: none;
+  word-break: break-all;
 }
-.folder-status-row:hover {
+.folder-status-item:hover {
   color: var(--text);
   background: var(--panel);
-}
-.folder-status-item {
-  flex: 1 1 0;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.folder-status-sep {
-  flex-shrink: 0;
-  color: var(--border);
 }
 
 .history-empty {
@@ -383,6 +376,14 @@ html, body {
 
 .ctx-folder-info {
   max-width: 280px;
+}
+
+.folder-quickmenu {
+  max-width: 320px;
+}
+.folder-quickmenu .ctx-item {
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .ctx-folder-path {

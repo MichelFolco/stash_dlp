@@ -74,12 +74,13 @@ async def probe_media(path: str) -> dict:
 
 async def probe_basic_info(path: str) -> dict:
     """Lightweight probe for download-ledger metadata: returns
-    {width, height, duration} for ANY media file, audio or video -
-    unlike probe_media() above (which is Encode-Manager-specific and
-    raises if there's no video stream). width/height come back 0 for
-    audio-only files. Best-effort: probing failures return zeros
-    rather than raising, since this is just display data and shouldn't
-    block a completed download over a flaky ffprobe call."""
+    {width, height, duration, video_codec, audio_codec} for ANY media
+    file, audio or video - unlike probe_media() above (which is
+    Encode-Manager-specific and raises if there's no video stream).
+    width/height/video_codec come back 0/"" for audio-only files.
+    Best-effort: probing failures return zeros/blanks rather than
+    raising, since this is just display data and shouldn't block a
+    completed download over a flaky ffprobe call."""
     try:
         proc = await asyncio.create_subprocess_exec(
             "ffprobe", "-v", "error",
@@ -93,21 +94,29 @@ async def probe_basic_info(path: str) -> dict:
         stdout_bytes, _ = await asyncio.wait_for(proc.communicate(), timeout=PROBE_TIMEOUT)
         data = json.loads(stdout_bytes.decode("utf-8", errors="ignore"))
     except Exception:
-        return {"width": 0, "height": 0, "duration": 0.0}
+        return {"width": 0, "height": 0, "duration": 0.0, "video_codec": "", "audio_codec": ""}
 
     streams = data.get("streams", [])
     video_stream = next((s for s in streams if s.get("codec_type") == "video"), None)
+    audio_stream = next((s for s in streams if s.get("codec_type") == "audio"), None)
     fmt = data.get("format", {})
     duration = _safe_float(fmt.get("duration")) or 0.0
 
     width = height = 0
+    video_codec = audio_codec = ""
     if video_stream:
         width = int(video_stream.get("width") or 0)
         height = int(video_stream.get("height") or 0)
+        video_codec = video_stream.get("codec_name", "") or ""
         if not duration:
             duration = _safe_float(video_stream.get("duration")) or 0.0
+    if audio_stream:
+        audio_codec = audio_stream.get("codec_name", "") or ""
 
-    return {"width": width, "height": height, "duration": duration}
+    return {
+        "width": width, "height": height, "duration": duration,
+        "video_codec": video_codec, "audio_codec": audio_codec,
+    }
 
 
 def _safe_float(value):

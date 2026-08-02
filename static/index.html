@@ -26,10 +26,9 @@
     <button id="gear-btn" class="icon-btn" title="Options">⚙️</button>
   </div>
 
-  <div id="folder-status-row" class="folder-status-row" title="Click to manage folders">
-    <span id="folder-status-save" class="folder-status-item">Folder: …</span>
-    <span class="folder-status-sep">·</span>
-    <span id="folder-status-target" class="folder-status-item">Target: …</span>
+  <div id="folder-status-row" class="folder-status-row">
+    <div id="folder-status-save" class="folder-status-item" title="Click to choose a download folder">DL: …</div>
+    <div id="folder-status-target" class="folder-status-item" title="Click to choose a target folder">Target: …</div>
   </div>
 
   <div id="download-view">
@@ -104,6 +103,15 @@
     <div id="ctx-target-free" class="ctx-folder-free"></div>
   </div>
   <div id="ctx-change-target" class="ctx-item">Change Target Folder...</div>
+</div>
+
+<!-- Quick folder-switch dropdowns: opened by clicking the DL: / Target:
+     lines in the main UI, listing saved folders for one-tap switching -->
+<div id="dl-folder-quickmenu" class="ctx-menu folder-quickmenu hidden">
+  <div id="dl-folder-quickmenu-list"></div>
+</div>
+<div id="target-folder-quickmenu" class="ctx-menu folder-quickmenu hidden">
+  <div id="target-folder-quickmenu-list"></div>
 </div>
 
 <!-- Settings flyout: Max Res + toggles -->

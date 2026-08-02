@@ -83,6 +83,10 @@ const folderStatusRow = el("folder-status-row");
 const folderStatusSave = el("folder-status-save");
 const folderStatusTarget = el("folder-status-target");
 const targetFolderModalEl = el("target-folder-modal");
+const dlFolderQuickMenu = el("dl-folder-quickmenu");
+const dlFolderQuickList = el("dl-folder-quickmenu-list");
+const targetFolderQuickMenu = el("target-folder-quickmenu");
+const targetFolderQuickList = el("target-folder-quickmenu-list");
 const videoModal = el("video-modal");
 const videoPlayer = el("video-player");
 const videoModalTitle = el("video-modal-title");
@@ -145,13 +149,6 @@ async function refreshExternalPrograms() {
   }
 }
 
-function basenameOf(path) {
-  if (!path) return "";
-  const trimmed = path.replace(/[\\/]+$/, "");
-  const parts = trimmed.split(/[\\/]/);
-  return parts[parts.length - 1] || trimmed;
-}
-
 async function refreshSaveDir() {
   try {
     const res = await fetch("/api/settings");
@@ -171,7 +168,7 @@ function setSaveDirDisplay(path, freeSpace) {
   ctxSaveDir.querySelector("#ctx-save-free").textContent = freeSpace || "";
   ctxSaveDir.title = path;
 
-  folderStatusSave.textContent = `Folder: ${basenameOf(path)}${freeSpace ? " (" + freeSpace + ")" : ""}`;
+  folderStatusSave.textContent = `DL: ${path}${freeSpace ? " (" + freeSpace + ")" : ""}`;
   folderStatusSave.title = path || "";
 }
 
@@ -200,7 +197,7 @@ function setTargetDirDisplay(path, freeSpace) {
   } else {
     pathEl.textContent = `Target: ${path}`;
     freeEl.textContent = freeSpace || "";
-    folderStatusTarget.textContent = `Target: ${basenameOf(path)}${freeSpace ? " (" + freeSpace + ")" : ""}`;
+    folderStatusTarget.textContent = `Target: ${path}${freeSpace ? " (" + freeSpace + ")" : ""}`;
     folderStatusTarget.title = path;
   }
   ctxTargetDir.title = path || "";
@@ -268,6 +265,12 @@ function connectWebSocket() {
         job.status = msg.status;
         job.file_size = msg.file_size;
         job.is_audio = msg.is_audio;
+        job.width = msg.width;
+        job.height = msg.height;
+        job.duration = msg.duration;
+        job.ext = msg.ext;
+        job.video_codec = msg.video_codec;
+        job.audio_codec = msg.audio_codec;
         renderLedger();
       }
     } else if (msg.type === "job_deleted") {
@@ -586,6 +589,8 @@ function buildJobCard(job) {
         const ar = aspectRatioLabel(job.width, job.height);
         if (ar) metaParts.push(ar);
       }
+      if (!job.is_audio && job.video_codec) metaParts.push(job.video_codec.toUpperCase());
+      if (job.is_audio && job.audio_codec) metaParts.push(job.audio_codec.toUpperCase());
       const durText = formatDuration(job.duration);
       if (durText) metaParts.push(durText);
       if (job.file_size) metaParts.push(job.file_size);
@@ -658,6 +663,8 @@ function buildTooltip(job) {
     const ar = aspectRatioLabel(job.width, job.height);
     if (ar) t += ` (${ar})`;
   }
+  if (!job.is_audio && job.video_codec) t += `\nCodec: ${job.video_codec.toUpperCase()}`;
+  if (job.is_audio && job.audio_codec) t += `\nCodec: ${job.audio_codec.toUpperCase()}`;
   const durText = formatDuration(job.duration);
   if (durText) t += `\nDuration: ${durText}`;
   if (job.file_size) t += `\nSize: ${job.file_size}`;
@@ -740,7 +747,7 @@ function cssEscape(s) {
 // Every submenu flyout in the app - Copy/File (job menu) and
 // Folders/Settings (logo menu) all share this one open/close/position
 // mechanism, so anything that resets menu state just walks this list.
-const ALL_FLYOUTS = [openWithFlyout, copyFlyout, fileFlyout, foldersFlyout, settingsFlyout];
+const ALL_FLYOUTS = [openWithFlyout, copyFlyout, fileFlyout, foldersFlyout, settingsFlyout, dlFolderQuickMenu, targetFolderQuickMenu];
 
 function hideAllFlyouts() {
   for (const flyout of ALL_FLYOUTS) flyout.classList.add("hidden");
@@ -890,6 +897,29 @@ function positionFlyoutNextTo(flyoutEl, anchorMenu) {
   flyoutEl.style.left = `${left}px`;
   flyoutEl.style.top = `${top}px`;
   lastMenuOpenAt = Date.now(); // extend the ghost-click grace window
+}
+
+// Used by the DL/Target quick-select dropdowns, which drop straight down
+// from the folder-status line that was clicked rather than opening to
+// the side like the submenu flyouts above.
+function positionDropdownBelow(dropdownEl, anchorEl) {
+  dropdownEl.classList.remove("hidden");
+  const anchorRect = anchorEl.getBoundingClientRect();
+  const dropdownRect = dropdownEl.getBoundingClientRect();
+
+  let left = anchorRect.left;
+  if (left + dropdownRect.width > window.innerWidth - 8) {
+    left = window.innerWidth - dropdownRect.width - 8;
+  }
+  left = Math.max(8, left);
+
+  let top = anchorRect.bottom + 4;
+  const maxTop = window.innerHeight - dropdownRect.height - 8;
+  top = Math.min(top, Math.max(8, maxTop));
+
+  dropdownEl.style.left = `${left}px`;
+  dropdownEl.style.top = `${top}px`;
+  lastMenuOpenAt = Date.now();
 }
 
 function openOpenWithFlyout() {
@@ -1621,7 +1651,7 @@ function createFolderModalController({
     if (e.key === "Escape") close();
   });
 
-  return { open, close };
+  return { open, close, applyPath: apply };
 }
 
 const downloadFolderModal = createFolderModalController({
@@ -1766,15 +1796,84 @@ gearBtn.addEventListener("click", (e) => {
   openLogoMenu(rect.left, rect.bottom + 4);
 });
 
-// ── Folder status row (click opens the folder manager directly) ──
-folderStatusRow.addEventListener("click", (e) => {
+// ── Folder quick-select dropdowns (click the DL:/Target: line) ──
+// Lists saved folders for one-tap switching, dropping straight down
+// from whichever line was clicked; falls through to the full
+// modal (Browse.../type a path) via the last entry.
+function openFolderQuickDropdown({ dropdownEl, listEl, anchorEl, getRecentDirs, getCurrentPath, applyPath, openAdvanced, noneLabel }) {
+  closeOtherFlyouts(dropdownEl);
+  listEl.innerHTML = "";
+
+  const current = getCurrentPath() || "";
+  const dirs = getRecentDirs();
+
+  if (dirs.length === 0) {
+    const empty = document.createElement("div");
+    empty.className = "ctx-item ctx-disabled";
+    empty.textContent = noneLabel;
+    listEl.appendChild(empty);
+  } else {
+    for (const path of dirs) {
+      const item = document.createElement("div");
+      item.className = "ctx-item";
+      item.textContent = path;
+      item.title = path;
+      if (path === current) {
+        item.classList.add("ctx-disabled");
+      } else {
+        item.addEventListener("click", () => {
+          dropdownEl.classList.add("hidden");
+          applyPath(path);
+        });
+      }
+      listEl.appendChild(item);
+    }
+  }
+
+  const sep = document.createElement("div");
+  sep.className = "ctx-separator";
+  listEl.appendChild(sep);
+
+  const advanced = document.createElement("div");
+  advanced.className = "ctx-item";
+  advanced.textContent = "Browse / set custom folder...";
+  advanced.addEventListener("click", () => {
+    dropdownEl.classList.add("hidden");
+    openAdvanced();
+  });
+  listEl.appendChild(advanced);
+
+  positionDropdownBelow(dropdownEl, anchorEl);
+}
+
+folderStatusSave.addEventListener("click", (e) => {
   e.stopPropagation();
   logoMenu.classList.add("hidden");
   jobMenu.classList.add("hidden");
-  closeOtherFlyouts(foldersFlyout);
-  refreshSaveDir();
-  refreshTargetDir();
-  positionFlyoutNextTo(foldersFlyout, folderStatusRow);
+  historyMenu.classList.add("hidden");
+  openFolderQuickDropdown({
+    dropdownEl: dlFolderQuickMenu, listEl: dlFolderQuickList, anchorEl: folderStatusSave,
+    getRecentDirs: () => state.recentDirs,
+    getCurrentPath: () => ctxSaveDir.title || "",
+    applyPath: downloadFolderModal.applyPath,
+    openAdvanced: () => downloadFolderModal.open(),
+    noneLabel: "No saved download folders yet",
+  });
+});
+
+folderStatusTarget.addEventListener("click", (e) => {
+  e.stopPropagation();
+  logoMenu.classList.add("hidden");
+  jobMenu.classList.add("hidden");
+  historyMenu.classList.add("hidden");
+  openFolderQuickDropdown({
+    dropdownEl: targetFolderQuickMenu, listEl: targetFolderQuickList, anchorEl: folderStatusTarget,
+    getRecentDirs: () => state.recentTargetDirs,
+    getCurrentPath: () => ctxTargetDir.title || "",
+    applyPath: targetFolderModal.applyPath,
+    openAdvanced: () => targetFolderModal.open(),
+    noneLabel: "No saved target folders yet",
+  });
 });
 
 // ── Control bar ────────────────────────────────────────────────

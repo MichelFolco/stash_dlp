@@ -89,6 +89,8 @@ class JobManager:
             height = job.get("height", 0)
             duration = job.get("duration", 0)
             ext = job.get("ext", "")
+            video_codec = job.get("video_codec", "")
+            audio_codec = job.get("audio_codec", "")
 
             if not ext:
                 media_path = find_media_file(filename)
@@ -97,12 +99,15 @@ class JobManager:
                     try:
                         probed = await probe_basic_info(media_path)
                     except Exception:
-                        probed = {"width": 0, "height": 0, "duration": 0.0}
+                        probed = {"width": 0, "height": 0, "duration": 0.0, "video_codec": "", "audio_codec": ""}
                     width, height, duration = probed["width"], probed["height"], probed["duration"]
+                    video_codec = probed.get("video_codec", "")
+                    audio_codec = probed.get("audio_codec", "")
                     if filename in disk_queue:
                         disk_queue[filename].update({
                             "width": width, "height": height,
                             "duration": duration, "ext": ext,
+                            "video_codec": video_codec, "audio_codec": audio_codec,
                         })
                         queue_dirty = True
 
@@ -118,6 +123,8 @@ class JobManager:
                 "height": height,
                 "duration": duration,
                 "ext": ext,
+                "video_codec": video_codec,
+                "audio_codec": audio_codec,
                 "pct": 100,
                 "total": "",
                 "speed": "",
@@ -151,6 +158,8 @@ class JobManager:
             "height": 0,
             "duration": 0,
             "ext": "",
+            "video_codec": "",
+            "audio_codec": "",
             "pct": 0,
             "total": "",
             "speed": "",
@@ -285,6 +294,7 @@ class JobManager:
         file_size_str = ""
         is_audio = job.get("is_audio", False)
         width, height, duration, ext = 0, 0, 0, ""
+        video_codec, audio_codec = "", ""
         if status == "DONE":
             size_bytes = get_downloaded_file_size(filename)
             if size_bytes is not None:
@@ -296,6 +306,8 @@ class JobManager:
                 try:
                     probed = await probe_basic_info(media_path)
                     width, height, duration = probed["width"], probed["height"], probed["duration"]
+                    video_codec = probed.get("video_codec", "")
+                    audio_codec = probed.get("audio_codec", "")
                 except Exception:
                     pass
             self._relocate_downloaded_thumbnail(filename)
@@ -307,6 +319,8 @@ class JobManager:
         job["height"] = height
         job["duration"] = duration
         job["ext"] = ext
+        job["video_codec"] = video_codec
+        job["audio_codec"] = audio_codec
 
         if filename in self.saved_queue:
             self.saved_queue[filename]["status"] = status
@@ -317,6 +331,8 @@ class JobManager:
             self.saved_queue[filename]["height"] = height
             self.saved_queue[filename]["duration"] = duration
             self.saved_queue[filename]["ext"] = ext
+            self.saved_queue[filename]["video_codec"] = video_codec
+            self.saved_queue[filename]["audio_codec"] = audio_codec
             save_queue_to_disk(self.saved_queue)
 
         write_to_history_log(
@@ -335,6 +351,8 @@ class JobManager:
             "height": height,
             "duration": duration,
             "ext": ext,
+            "video_codec": video_codec,
+            "audio_codec": audio_codec,
         })
 
     def _relocate_downloaded_thumbnail(self, filename: str) -> None:
