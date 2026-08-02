@@ -19,7 +19,7 @@
 
     <div id="mode-container" class="mode-container">
       <button id="dl-mode-btn" class="mode-btn mode-btn-left" title="Download Mode Active">⬇️</button>
-      <button id="find-mode-btn" class="mode-btn mode-btn-mid" title="Switch to Find Link Mode (Ctrl+F)">🔍</button>
+      <button id="history-mode-btn" class="mode-btn mode-btn-mid" title="Switch to Search History Mode (Ctrl+F)">🔍</button>
       <button id="encode-mode-btn" class="mode-btn mode-btn-right" title="Encode Manager">🎞️</button>
     </div>
 
@@ -142,6 +142,18 @@
   <div class="ctx-separator"></div>
   <div id="ctx-delete-file" class="ctx-item ctx-danger hidden">Delete File</div>
 </div>
+
+<!-- Search History Mode's per-entry menu - a history record isn't a
+     ledger job (the file may no longer even exist), so it gets its own
+     small, flat menu rather than reusing job-menu's conditional rows. -->
+<div id="history-menu" class="ctx-menu hidden">
+  <div id="ctx-history-copy-link" class="ctx-item">Copy Link</div>
+  <div id="ctx-history-copy-name" class="ctx-item">Copy Name</div>
+  <div id="ctx-history-open-location" class="ctx-item">Open Location</div>
+  <div class="ctx-separator"></div>
+  <div id="ctx-history-delete" class="ctx-item ctx-danger">Delete from History</div>
+</div>
+
 
 <!-- Copy/File submenu flyouts - same click-to-toggle, flip-to-fit
      positioning as the "Open With..." flyout below. -->

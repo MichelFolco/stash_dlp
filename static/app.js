@@ -1,8 +1,8 @@
 // Stash DLP Web — ported from stash_dlp.py's YtdlpManagerApp.
 // State machine (READY / EDITING / FETCHING / INTERCEPTING) and app_mode
-// (DOWNLOAD / FIND_LINK) mirror the desktop app; URLs are pasted manually
-// into the input field rather than auto-read from the clipboard, and
-// window-chrome pieces differ due to browser sandboxing.
+// (DOWNLOAD / SEARCH_HISTORY) mirror the desktop app; URLs are pasted
+// manually into the input field rather than auto-read from the
+// clipboard, and window-chrome pieces differ due to browser sandboxing.
 
 // The server's snapshot endpoints (GET /api/jobs, refresh, folder-change,
 // folder-change, etc.) all return newest-first. We want the Map's own
@@ -29,7 +29,7 @@ const IS_LOCAL = ["127.0.0.1", "localhost", "::1"].includes(window.location.host
 const REMOTE_ONLY_TOOLTIP = "Only available when browsing from the same machine as the server.";
 
 const state = {
-  appMode: "DOWNLOAD",        // DOWNLOAD | FIND_LINK
+  appMode: "DOWNLOAD",        // DOWNLOAD | SEARCH_HISTORY
   currentView: "downloads",   // downloads | encode
   current: "READY",           // READY | EDITING | FETCHING | INTERCEPTING
   targetUrl: "",
@@ -37,6 +37,7 @@ const state = {
   tagDomain: true,
   m3uSniffer: false,
   jobs: new Map(),            // filename -> job dict
+  historyEntries: [],         // Search History Mode's flat list of log entries
   ws: null,
   recentDirs: [],
   recentTargetDirs: [],
@@ -62,7 +63,7 @@ const app = el("app");
 const queueList = el("queue-list");
 const gearBtn = el("gear-btn");
 const dlModeBtn = el("dl-mode-btn");
-const findModeBtn = el("find-mode-btn");
+const historyModeBtn = el("history-mode-btn");
 const encodeModeBtn = el("encode-mode-btn");
 const modeContainer = el("mode-container");
 const resDropdown = el("res-dropdown");
@@ -71,6 +72,7 @@ const ctxSaveDir = el("ctx-save-dir");
 const ctxChangeFolder = el("ctx-change-folder");
 const logoMenu = el("logo-menu");
 const jobMenu = el("job-menu");
+const historyMenu = el("history-menu");
 const folderModal = el("folder-modal");
 const folderInput = el("folder-input");
 const folderError = el("folder-error");
@@ -121,7 +123,7 @@ async function boot() {
 // so this just needs to run once at boot rather than on every menu open.
 function applyLocalOnlyUI() {
   if (IS_LOCAL) return;
-  for (const id of ["ctx-manage-programs", "ctx-open-with", "flyout-manage-programs"]) {
+  for (const id of ["ctx-manage-programs", "ctx-open-with", "flyout-manage-programs", "ctx-history-open-location"]) {
     const item = el(id);
     item.classList.add("ctx-disabled");
     item.title = REMOTE_ONLY_TOOLTIP;
@@ -290,6 +292,11 @@ function connectWebSocket() {
       state.encodeJobs.delete(msg.job_id);
       renderEncodeLedger();
       renderLedger();
+    } else if (msg.type === "history_entry_deleted") {
+      state.historyEntries = state.historyEntries.filter(
+        (e) => !(e.timestamp === msg.timestamp && e.filename === msg.filename && e.url === msg.url)
+      );
+      if (state.appMode === "SEARCH_HISTORY") renderHistoryLedger();
     }
   };
 
@@ -339,11 +346,73 @@ function getFilteredSortedJobs() {
   return filtered.map(({ job }) => job);
 }
 
+function getFilteredSortedHistory() {
+  const query = state.filterText.trim().toLowerCase();
+  let filtered = query
+    ? state.historyEntries.filter((e) => e.filename.toLowerCase().includes(query))
+    : state.historyEntries.slice();
+
+  const dirMul = state.sortDir === "asc" ? 1 : -1;
+  filtered.sort((a, b) => {
+    let cmp;
+    if (state.sortField === "name") {
+      cmp = a.filename.toLowerCase().localeCompare(b.filename.toLowerCase());
+    } else {
+      // "added" (and "size", which doesn't apply to history entries and
+      // is disabled in the sort dropdown while this mode is active)
+      // both fall back to chronological order via the log timestamp.
+      cmp = a.timestamp < b.timestamp ? -1 : a.timestamp > b.timestamp ? 1 : 0;
+    }
+    return cmp * dirMul;
+  });
+
+  return filtered;
+}
+
 function renderLedger() {
+  if (state.appMode === "SEARCH_HISTORY") {
+    renderHistoryLedger();
+    return;
+  }
   queueList.innerHTML = "";
   for (const job of getFilteredSortedJobs()) {
     queueList.appendChild(buildJobCard(job));
   }
+}
+
+function renderHistoryLedger() {
+  queueList.innerHTML = "";
+  const entries = getFilteredSortedHistory();
+  if (entries.length === 0) {
+    const empty = document.createElement("div");
+    empty.className = "history-empty";
+    empty.textContent = state.filterText.trim()
+      ? "No history entries match your filter."
+      : "No download history found yet.";
+    queueList.appendChild(empty);
+    return;
+  }
+  for (const entry of entries) {
+    queueList.appendChild(buildHistoryCard(entry));
+  }
+}
+
+async function refreshSearchHistory() {
+  queueList.innerHTML = "";
+  const loading = document.createElement("div");
+  loading.className = "history-empty";
+  loading.textContent = "Loading download history...";
+  queueList.appendChild(loading);
+
+  try {
+    const res = await fetch("/api/history");
+    const data = await res.json();
+    state.historyEntries = data.entries || [];
+  } catch (e) {
+    state.historyEntries = [];
+  }
+
+  if (state.appMode === "SEARCH_HISTORY") renderHistoryLedger();
 }
 
 // Common video aspect ratios, checked against the actual pixel ratio so
@@ -566,6 +635,56 @@ function buildTooltip(job) {
   return t;
 }
 
+// A history entry is a plain log record (timestamp/status/filename/url) -
+// not a ledger job, since the file it refers to may have been moved,
+// renamed, or deleted since it was downloaded. It gets its own simpler
+// card, built from the same visual pieces as buildJobCard for a
+// consistent look, with a status icon standing in for the thumbnail.
+const HISTORY_STATUS_ICON = { DONE: "🎬", ERROR: "⚠️", CANCELLED: "🚫" };
+
+function buildHistoryCard(entry) {
+  const card = document.createElement("div");
+  card.className = "job-card history-card";
+  card.classList.add(
+    entry.status === "DONE" ? "done" : entry.status === "CANCELLED" ? "cancelled" : "error"
+  );
+  card.dataset.filename = entry.filename;
+
+  const thumb = document.createElement("div");
+  thumb.className = "job-thumb";
+  const placeholder = document.createElement("span");
+  placeholder.className = "job-thumb-placeholder";
+  placeholder.textContent = HISTORY_STATUS_ICON[entry.status] || "🕓";
+  thumb.appendChild(placeholder);
+  card.appendChild(thumb);
+
+  const body = document.createElement("div");
+  body.className = "job-card-body";
+
+  const titleRow = document.createElement("div");
+  titleRow.className = "job-title-row";
+  const title = document.createElement("div");
+  title.className = "job-title";
+  title.textContent = entry.filename;
+  title.title = `File: ${entry.filename}\nURL: ${entry.url}\nWhen: ${entry.timestamp}\nStatus: ${entry.status}`;
+  titleRow.appendChild(title);
+  body.appendChild(titleRow);
+
+  const meta = document.createElement("div");
+  meta.className = "job-size";
+  meta.textContent = `${entry.timestamp}  •  ${entry.status}`;
+  body.appendChild(meta);
+
+  card.appendChild(body);
+
+  card.addEventListener("click", (e) => {
+    e.stopPropagation();
+    openHistoryMenu(e.clientX, e.clientY, entry);
+  });
+
+  return card;
+}
+
 function updateJobCardProgress(filename, job) {
   const card = queueList.querySelector(`.job-card[data-filename="${cssEscape(filename)}"]`);
   if (card) updateProgressDOM(card, job);
@@ -600,8 +719,8 @@ function hideAllFlyouts() {
 // ── Context menus ─────────────────────────────────────────────
 function openLogoMenu(x, y) {
   jobMenu.classList.add("hidden");
+  historyMenu.classList.add("hidden");
   hideAllFlyouts();
-  el("ctx-m3u-toggle").style.display = state.appMode === "DOWNLOAD" ? "" : "none";
   positionMenu(logoMenu, x, y);
   refreshSaveDir();
   refreshTargetDir();
@@ -609,6 +728,7 @@ function openLogoMenu(x, y) {
 
 function openJobMenu(x, y, job) {
   logoMenu.classList.add("hidden");
+  historyMenu.classList.add("hidden");
   hideAllFlyouts();
 
   const isDownloading = job.status === "DOWNLOADING";
@@ -641,6 +761,20 @@ function openJobMenu(x, y, job) {
 
   jobMenu.dataset.filename = job.filename;
   positionMenu(jobMenu, x, y);
+}
+
+// Search History Mode's per-card menu - flat (no submenus needed for
+// just four actions) and independent of job status, since a history
+// record isn't a ledger job.
+function openHistoryMenu(x, y, entry) {
+  logoMenu.classList.add("hidden");
+  jobMenu.classList.add("hidden");
+  hideAllFlyouts();
+
+  historyMenu.dataset.filename = entry.filename;
+  historyMenu.dataset.url = entry.url;
+  historyMenu.dataset.timestamp = entry.timestamp;
+  positionMenu(historyMenu, x, y);
 }
 
 el("ctx-cancel-job").addEventListener("click", async () => {
@@ -1011,6 +1145,75 @@ el("ctx-open-folder").addEventListener("click", async () => {
   }
 });
 
+// ── Search History Mode's per-entry menu actions ────────────────
+el("ctx-history-copy-link").addEventListener("click", async () => {
+  const url = historyMenu.dataset.url || "";
+  closeMenus();
+  if (!url) { flashStatus("No link recorded for this entry."); return; }
+  try {
+    await navigator.clipboard.writeText(url);
+    flashStatus("Link copied to clipboard.");
+  } catch (e) {
+    flashStatus("Couldn't copy the link.");
+  }
+});
+
+el("ctx-history-copy-name").addEventListener("click", async () => {
+  const filename = historyMenu.dataset.filename || "";
+  closeMenus();
+  try {
+    await navigator.clipboard.writeText(filename);
+    flashStatus(`Copied name: ${filename}`);
+  } catch (e) {
+    flashStatus("Couldn't copy the file name.");
+  }
+});
+
+el("ctx-history-open-location").addEventListener("click", async () => {
+  if (!IS_LOCAL) { flashStatus(REMOTE_ONLY_TOOLTIP); return; }
+  const filename = historyMenu.dataset.filename;
+  closeMenus();
+  try {
+    const res = await fetch("/api/jobs/open-folder", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ filename }),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      window.alert(`Couldn't open Explorer:\n${data.error || "File not found - it may have been moved or deleted."}`);
+    }
+  } catch (e) {
+    window.alert("Couldn't reach the server to open Explorer.");
+  }
+});
+
+el("ctx-history-delete").addEventListener("click", async () => {
+  const filename = historyMenu.dataset.filename;
+  const url = historyMenu.dataset.url;
+  const timestamp = historyMenu.dataset.timestamp;
+  closeMenus();
+  if (!window.confirm(`Remove "${filename}" from download history?\n\nThis only removes the history record - it doesn't delete any file.`)) return;
+
+  try {
+    const res = await fetch("/api/history/delete", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ timestamp, filename, url }),
+    });
+    const data = await res.json();
+    if (!data.ok) {
+      flashStatus("Couldn't find that entry to delete.");
+      return;
+    }
+    state.historyEntries = state.historyEntries.filter(
+      (e) => !(e.timestamp === timestamp && e.filename === filename && e.url === url)
+    );
+    renderLedger();
+    flashStatus("Removed from history.");
+  } catch (e) {
+    window.alert("Couldn't reach the server to delete that history entry.");
+  }
+});
+
 function flashStatus(message) {
   const original = inputField.placeholder;
   inputField.placeholder = message;
@@ -1033,6 +1236,7 @@ function positionMenu(menu, x, y) {
 function closeMenus() {
   logoMenu.classList.add("hidden");
   jobMenu.classList.add("hidden");
+  historyMenu.classList.add("hidden");
   hideAllFlyouts();
 }
 
@@ -1046,6 +1250,7 @@ document.addEventListener("click", (e) => {
   const clickedInsideAMenu =
     logoMenu.contains(e.target) ||
     jobMenu.contains(e.target) ||
+    historyMenu.contains(e.target) ||
     ALL_FLYOUTS.some((flyout) => flyout.contains(e.target));
   if (!clickedInsideAMenu) closeMenus();
 });
@@ -1423,22 +1628,22 @@ const targetFolderModal = createFolderModalController({
 
 resDropdown.addEventListener("click", (e) => e.stopPropagation());
 
-// ── Mode buttons (Download / Find Link / Encode) ───────────────
+// ── Mode buttons (Download / Search History / Encode) ───────────
 function setAppModeDownload() {
   setView("downloads");
-  state.appMode = "DOWNLOAD";
   resetToReady();
   updateModeButtons();
 }
 
-function setAppModeFindLink() {
+function setAppModeSearchHistory() {
   setView("downloads");
-  state.appMode = "FIND_LINK";
-  inputField.disabled = false;
+  state.appMode = "SEARCH_HISTORY";
+  inputField.disabled = true;
   inputField.value = "";
-  inputField.placeholder = "Paste target file name to find link...";
-  inputField.focus();
+  inputField.placeholder = "Browse, search, and manage your download history below.";
   updateModeButtons();
+  enterHistoryModeUI();
+  refreshSearchHistory();
 }
 
 function setView(view) {
@@ -1450,9 +1655,9 @@ function setView(view) {
   if (isEncode) {
     inputField.disabled = true;
     inputField.value = "";
-    inputField.placeholder = "Switch to Download or Find Link mode to paste a URL";
+    inputField.placeholder = "Switch to Download or Search History mode to paste a URL";
     if (state.encodeSources.length === 0) refreshEncodeSources();
-  } else {
+  } else if (state.appMode !== "SEARCH_HISTORY") {
     inputField.disabled = false;
   }
 }
@@ -1465,13 +1670,34 @@ function setAppModeEncode() {
 function updateModeButtons() {
   const isEncode = state.currentView === "encode";
   const isDl = !isEncode && state.appMode === "DOWNLOAD";
-  const isFind = !isEncode && state.appMode === "FIND_LINK";
+  const isHistory = !isEncode && state.appMode === "SEARCH_HISTORY";
   dlModeBtn.classList.toggle("active", isDl);
-  findModeBtn.classList.toggle("active", isFind);
+  historyModeBtn.classList.toggle("active", isHistory);
   encodeModeBtn.classList.toggle("active", isEncode);
   dlModeBtn.title = isDl ? "Download Mode Active" : "Switch to Download Mode (Ctrl+D)";
-  findModeBtn.title = isFind ? "Find Link Mode Active" : "Switch to Find Link Mode (Ctrl+F)";
+  historyModeBtn.title = isHistory ? "Search History Mode Active" : "Switch to Search History Mode (Ctrl+F)";
   encodeModeBtn.title = isEncode ? "Encode Manager Active" : "Switch to Encode Manager";
+}
+
+// Search History Mode reuses the same ledger toolbar (filter + sort),
+// but "Move All to Target"/"Refresh" and the audio-only filter don't
+// apply to history records, and there's no file size to sort by.
+function enterHistoryModeUI() {
+  el("control-bar").classList.add("hidden");
+  ledgerAudioFilterBtn.classList.add("hidden");
+  const sizeOption = ledgerSortSelect.querySelector('option[value="size"]');
+  if (sizeOption) sizeOption.disabled = true;
+  if (state.sortField === "size") {
+    state.sortField = "added";
+    ledgerSortSelect.value = "added";
+  }
+}
+
+function exitHistoryModeUI() {
+  el("control-bar").classList.remove("hidden");
+  ledgerAudioFilterBtn.classList.remove("hidden");
+  const sizeOption = ledgerSortSelect.querySelector('option[value="size"]');
+  if (sizeOption) sizeOption.disabled = false;
 }
 
 dlModeBtn.addEventListener("click", () => {
@@ -1493,7 +1719,7 @@ dlModeBtn.addEventListener("click", () => {
     setAppModeDownload();
   }
 });
-findModeBtn.addEventListener("click", setAppModeFindLink);
+historyModeBtn.addEventListener("click", setAppModeSearchHistory);
 encodeModeBtn.addEventListener("click", setAppModeEncode);
 
 // ── Gear button (opens the options/logo menu; this menu is no longer
@@ -1563,6 +1789,7 @@ el("move-all-btn").addEventListener("click", async () => {
 
 // ── Core pipeline: READY -> (fetch title | sniff m3u8) -> EDITING -> submit ──
 function resetToReady() {
+  const wasHistoryMode = state.appMode === "SEARCH_HISTORY";
   state.appMode = "DOWNLOAD";
   state.current = "READY";
   state.stagedUrl = "";
@@ -1572,6 +1799,10 @@ function resetToReady() {
   inputField.value = "";
   inputField.placeholder = "Paste a link, then press ENTER...";
   updateModeButtons();
+  if (wasHistoryMode) {
+    exitHistoryModeUI();
+    renderLedger();
+  }
 }
 
 async function handleEnterPipeline() {
@@ -1665,21 +1896,6 @@ function handleInterceptionFailure(message) {
   inputField.placeholder = `Failed: ${message}`;
 }
 
-async function executeHistorySearch() {
-  const query = inputField.value.trim();
-  if (!query) return "";
-  try {
-    const res = await fetch("/api/history-search", {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ query }),
-    });
-    const data = await res.json();
-    return data.url || "";
-  } catch (e) {
-    return "";
-  }
-}
-
 // ── Keyboard handling (mirrors keyPressEvent) ─────────────────
 let baseFontSize = 12;
 
@@ -1710,7 +1926,7 @@ document.addEventListener("keydown", async (e) => {
       e.preventDefault();
       return;
     }
-    if (e.key.toLowerCase() === "f") { setAppModeFindLink(); e.preventDefault(); return; }
+    if (e.key.toLowerCase() === "f") { setAppModeSearchHistory(); e.preventDefault(); return; }
     if (e.key.toLowerCase() === "d") { setAppModeDownload(); e.preventDefault(); return; }
   }
 
@@ -1727,19 +1943,7 @@ document.addEventListener("keydown", async (e) => {
 
   if (e.key === "Enter") {
     if (document.activeElement !== inputField) return;
-    if (state.appMode === "FIND_LINK") {
-      const found = await executeHistorySearch();
-      if (found) {
-        inputField.value = found;
-        inputField.focus();
-        inputField.select();
-      } else {
-        inputField.value = "";
-        inputField.placeholder = "No matches found in history.";
-      }
-    } else {
-      handleEnterPipeline();
-    }
+    handleEnterPipeline();
   }
 });
 

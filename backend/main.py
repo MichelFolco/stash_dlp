@@ -27,7 +27,7 @@ from settings import (
     update_external_program, delete_external_program,
     get_converted_dir,
 )
-from storage import search_history
+from storage import search_history, get_history_entries, delete_history_entry
 from thumbnails import get_thumbnail_path
 from ytdlp_utils import (
     clean_filename, fetch_title, get_domain, check_and_update_ytdlp, find_media_file,
@@ -84,6 +84,12 @@ class FindLinkRequest(BaseModel):
 
 class HistorySearchRequest(BaseModel):
     query: str
+
+
+class HistoryDeleteRequest(BaseModel):
+    timestamp: str
+    filename: str
+    url: str
 
 
 class CancelRequest(BaseModel):
@@ -624,6 +630,27 @@ async def _iter_file_range(media_path: str, start: int, length: int):
 @app.post("/api/history-search")
 async def api_history_search(req: HistorySearchRequest):
     return {"url": search_history(req.query)}
+
+
+@app.get("/api/history")
+async def api_get_history():
+    """Full download history for Search History Mode - every entry ever
+    logged, newest first, regardless of whether the file is still on
+    disk (it may have since been moved, renamed, or deleted)."""
+    return {"entries": list(reversed(get_history_entries()))}
+
+
+@app.post("/api/history/delete")
+async def api_delete_history_entry(req: HistoryDeleteRequest):
+    """Removes a single record from the history log. This only removes
+    the log line - it never touches any file on disk."""
+    ok = delete_history_entry(req.timestamp, req.filename, req.url)
+    if ok:
+        await connections.broadcast({
+            "type": "history_entry_deleted",
+            "timestamp": req.timestamp, "filename": req.filename, "url": req.url,
+        })
+    return {"ok": ok}
 
 
 @app.post("/api/refresh")
