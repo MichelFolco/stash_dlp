@@ -314,7 +314,16 @@ def build_video_filters(
         working_h = int(crop.split(":")[1])
 
     if resolution_cap and working_h > resolution_cap:
-        filters.append(f"scale=-2:{resolution_cap}:force_original_aspect_ratio=decrease")
+        # Compute the scaled width ourselves rather than leaning on
+        # ffmpeg's "scale=-2:H:force_original_aspect_ratio=decrease"
+        # combo - that pairing has a known libavfilter quirk where the
+        # rounding-to-even for "-2" can be skipped, handing libx265 an
+        # odd width and crashing it ("Picture width must be an integer
+        # multiple of the specified chroma subsampling"). Rounding to
+        # even here first sidesteps that entirely.
+        new_width = int(round(working_w * (resolution_cap / working_h) / 2) * 2)
+        filters.append(f"scale={new_width}:{resolution_cap}:flags=lanczos")
+        working_w, working_h = new_width, resolution_cap
 
     if denoise:
         filters.append("hqdn3d=2:1.5:3:2.5")
