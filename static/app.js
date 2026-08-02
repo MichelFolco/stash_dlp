@@ -1638,9 +1638,10 @@ function setAppModeDownload() {
 function setAppModeSearchHistory() {
   setView("downloads");
   state.appMode = "SEARCH_HISTORY";
-  inputField.disabled = true;
+  inputField.disabled = false;
   inputField.value = "";
-  inputField.placeholder = "Browse, search, and manage your download history below.";
+  inputField.placeholder = "Paste target file name to find link...";
+  inputField.focus();
   updateModeButtons();
   enterHistoryModeUI();
   refreshSearchHistory();
@@ -1657,7 +1658,7 @@ function setView(view) {
     inputField.value = "";
     inputField.placeholder = "Switch to Download or Search History mode to paste a URL";
     if (state.encodeSources.length === 0) refreshEncodeSources();
-  } else if (state.appMode !== "SEARCH_HISTORY") {
+  } else {
     inputField.disabled = false;
   }
 }
@@ -1712,7 +1713,12 @@ dlModeBtn.addEventListener("click", () => {
   const currentValue = inputField.value.trim();
   const isValidUrl = /^https?:\/\//i.test(currentValue);
   if (isValidUrl && state.current === "READY") {
+    const wasHistoryMode = state.appMode === "SEARCH_HISTORY";
     state.appMode = "DOWNLOAD";
+    if (wasHistoryMode) {
+      exitHistoryModeUI();
+      renderLedger();
+    }
     updateModeButtons();
     beginDownloadPipeline(currentValue);
   } else {
@@ -1896,6 +1902,21 @@ function handleInterceptionFailure(message) {
   inputField.placeholder = `Failed: ${message}`;
 }
 
+async function executeHistorySearch() {
+  const query = inputField.value.trim();
+  if (!query) return "";
+  try {
+    const res = await fetch("/api/history-search", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ query }),
+    });
+    const data = await res.json();
+    return data.url || "";
+  } catch (e) {
+    return "";
+  }
+}
+
 // ── Keyboard handling (mirrors keyPressEvent) ─────────────────
 let baseFontSize = 12;
 
@@ -1943,7 +1964,19 @@ document.addEventListener("keydown", async (e) => {
 
   if (e.key === "Enter") {
     if (document.activeElement !== inputField) return;
-    handleEnterPipeline();
+    if (state.appMode === "SEARCH_HISTORY") {
+      const found = await executeHistorySearch();
+      if (found) {
+        inputField.value = found;
+        inputField.focus();
+        inputField.select();
+      } else {
+        inputField.value = "";
+        inputField.placeholder = "No matches found in history.";
+      }
+    } else {
+      handleEnterPipeline();
+    }
   }
 });
 
