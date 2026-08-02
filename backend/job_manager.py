@@ -371,6 +371,27 @@ class JobManager:
             save_queue_to_disk(self.saved_queue)
         return True
 
+    # ── Retrying a failed/cancelled download ───────────────────────
+    async def retry_job(self, filename: str) -> Optional[dict]:
+        """Re-runs a failed or cancelled download using the same URL and
+        resolution it was originally queued with. Reuses the same
+        ledger slot (start_job overwrites self.jobs[filename] in place),
+        so the card stays put rather than duplicating. Returns the
+        refreshed job dict, or None if there was nothing retryable."""
+        job = self.jobs.get(filename)
+        if not job or job["status"] not in ("ERROR", "CANCELLED"):
+            return None
+
+        queue_entry = self.saved_queue.get(filename, {})
+        url = job.get("url") or queue_entry.get("url", "")
+        if not url:
+            return None
+        res_cap = job.get("res_cap") or queue_entry.get("res_cap", "720p")
+        original_pasted_url = queue_entry.get("original_input_url", url)
+
+        await self.start_job(url, filename, res_cap, original_pasted_url)
+        return self.jobs[filename]
+
     # ── Cancelling ────────────────────────────────────────────────
     def cancel_job(self, filename: str) -> bool:
         proc = self._processes.get(filename)

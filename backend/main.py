@@ -440,6 +440,14 @@ async def api_cancel_job(req: CancelRequest):
     return {"ok": ok}
 
 
+@app.post("/api/jobs/retry")
+async def api_retry_job(req: CancelRequest):
+    job = await job_manager.retry_job(req.filename)
+    if job is None:
+        return JSONResponse(status_code=400, content={"error": "That item isn't retryable."})
+    return {"ok": True, "job": job}
+
+
 @app.post("/api/jobs/delete")
 async def api_delete_job(req: CancelRequest):
     ok = job_manager.delete_job(req.filename)

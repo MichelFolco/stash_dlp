@@ -598,6 +598,18 @@ function buildJobCard(job) {
       }
     }
     card.appendChild(body);
+
+    if (status === "ERROR" || status === "CANCELLED") {
+      const actions = document.createElement("div");
+      actions.className = "job-card-actions";
+      const retryBtn = document.createElement("button");
+      retryBtn.className = "job-mini-btn";
+      retryBtn.title = "Retry";
+      retryBtn.textContent = "↻";
+      retryBtn.addEventListener("click", (e) => { e.stopPropagation(); retryJob(job.filename); });
+      actions.appendChild(retryBtn);
+      card.appendChild(actions);
+    }
   }
 
   // Clicking the thumbnail itself starts playback directly (for
@@ -618,6 +630,24 @@ function buildJobCard(job) {
   });
 
   return card;
+}
+
+async function retryJob(filename) {
+  try {
+    const res = await fetch("/api/jobs/retry", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ filename }),
+    });
+    const data = await res.json();
+    if (res.ok) {
+      state.jobs.set(data.job.filename, data.job);
+      renderLedger();
+    } else {
+      flashStatus(data.error || "Couldn't retry that download.");
+    }
+  } catch (e) {
+    flashStatus("Couldn't reach the server to retry that download.");
+  }
 }
 
 function buildTooltip(job) {
