@@ -254,9 +254,24 @@ def estimate_heuristic_bytes(
 
 
 # ── ffmpeg command construction ──────────────────────────────────
-def _preset_args(codec: str, encoder: str, preset: str) -> list:
+def _preset_args(codec: str, encoder_backend: str, encoder: str, preset: str) -> list:
     codec_def = ENCODE_CODECS[codec]
     kind = codec_def["preset_kind"]
+
+    if kind == "x26x" and encoder_backend == "amf":
+        # AMF's -preset option only accepts speed/balanced/quality, not
+        # the x264/x265-style named presets (ultrafast..veryslow) that
+        # the "x26x" preset_kind normally passes straight through. Passing
+        # e.g. "medium" causes ffmpeg to fail opening the encoder with
+        # "Undefined constant or missing '(' in 'medium'". Map the slider
+        # value onto AMF's three-tier enum instead.
+        amf_map = {
+            "ultrafast": "speed", "superfast": "speed", "veryfast": "speed", "faster": "speed",
+            "fast": "balanced", "medium": "balanced",
+            "slow": "quality", "slower": "quality", "veryslow": "quality",
+        }
+        return ["-preset", amf_map.get(preset, "balanced")]
+
     if kind == "x26x":
         return ["-preset", preset]
     if kind == "svt":
@@ -370,7 +385,7 @@ def build_ffmpeg_cmd(
     if video_filters:
         cmd += ["-vf", video_filters]
     cmd += ["-c:v", encoder]
-    cmd += _preset_args(codec, encoder, preset)
+    cmd += _preset_args(codec, encoder_backend, encoder, preset)
 
     if two_pass_bitrate:
         cmd += ["-b:v", f"{two_pass_bitrate}", "-pass", str(pass_num), "-passlogfile", pass_log_path]
