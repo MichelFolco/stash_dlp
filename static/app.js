@@ -219,13 +219,18 @@ function setTargetDirDisplay(path, freeSpace) {
   ctxTargetDir.title = path || "";
 }
 
+function applyVersionState(data) {
+  let text = data.version ? `yt-dlp v${data.version}` : "yt-dlp version unknown";
+  if (data.version && data.just_updated) text += " (just updated)";
+  ctxVersion.textContent = text;
+  return text;
+}
+
 async function refreshVersion() {
   try {
     const res = await fetch("/api/version");
     const data = await res.json();
-    let text = data.version ? `yt-dlp v${data.version}` : "yt-dlp version unknown";
-    if (data.version && data.just_updated) text += " (just updated)";
-    ctxVersion.textContent = text;
+    applyVersionState(data);
   } catch (e) {
     ctxVersion.textContent = "yt-dlp version unknown";
   }
@@ -1381,6 +1386,25 @@ el("ctx-restart-app").addEventListener("click", async () => {
   }
   inputField.disabled = true;
   inputField.placeholder = "Restarting... reconnecting automatically once it's back up.";
+});
+
+el("ctx-check-ytdlp-update").addEventListener("click", async () => {
+  closeMenus();
+  flashStatus("Checking for yt-dlp update...");
+  try {
+    const res = await fetch("/api/version/check", { method: "POST" });
+    const data = await res.json();
+    applyVersionState(data);
+    if (!data.version) {
+      flashStatus("Couldn't reach yt-dlp to check for an update.");
+    } else if (data.just_updated) {
+      flashStatus(`yt-dlp updated to v${data.version}.`);
+    } else {
+      flashStatus(`yt-dlp is up to date (v${data.version}).`);
+    }
+  } catch (e) {
+    flashStatus("Couldn't check for a yt-dlp update.");
+  }
 });
 
 el("ctx-change-folder").addEventListener("click", () => {

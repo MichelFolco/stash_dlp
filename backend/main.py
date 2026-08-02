@@ -193,6 +193,18 @@ async def get_version():
     return version_state
 
 
+@app.post("/api/version/check")
+async def api_check_ytdlp_update():
+    """Manually re-runs the same yt-dlp -U check done at startup, so the
+    user doesn't have to restart the whole app just to pick up a newer
+    yt-dlp release (sites break yt-dlp often enough that this is worth
+    a one-click action rather than only checking once per boot)."""
+    version, just_updated = await check_and_update_ytdlp()
+    version_state["version"] = version
+    version_state["just_updated"] = just_updated
+    return version_state
+
+
 @app.get("/api/settings")
 async def api_get_settings():
     save_dir = get_save_dir()
