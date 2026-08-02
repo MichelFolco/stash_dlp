@@ -36,7 +36,6 @@ const state = {
   stagedUrl: "",
   tagDomain: true,
   m3uSniffer: false,
-  isMiniMode: false,
   jobs: new Map(),            // filename -> job dict
   ws: null,
   recentDirs: [],
@@ -61,7 +60,7 @@ const state = {
 const inputField = el("input-field");
 const app = el("app");
 const queueList = el("queue-list");
-const miniStats = el("mini-stats");
+const gearBtn = el("gear-btn");
 const dlModeBtn = el("dl-mode-btn");
 const findModeBtn = el("find-mode-btn");
 const encodeModeBtn = el("encode-mode-btn");
@@ -78,6 +77,9 @@ const folderError = el("folder-error");
 const folderRecentWrap = el("folder-recent-wrap");
 const folderRecentList = el("folder-recent-list");
 const ctxTargetDir = el("ctx-target-dir");
+const folderStatusRow = el("folder-status-row");
+const folderStatusSave = el("folder-status-save");
+const folderStatusTarget = el("folder-status-target");
 const targetFolderModalEl = el("target-folder-modal");
 const videoModal = el("video-modal");
 const videoPlayer = el("video-player");
@@ -141,6 +143,13 @@ async function refreshExternalPrograms() {
   }
 }
 
+function basenameOf(path) {
+  if (!path) return "";
+  const trimmed = path.replace(/[\\/]+$/, "");
+  const parts = trimmed.split(/[\\/]/);
+  return parts[parts.length - 1] || trimmed;
+}
+
 async function refreshSaveDir() {
   try {
     const res = await fetch("/api/settings");
@@ -150,6 +159,8 @@ async function refreshSaveDir() {
   } catch (e) {
     ctxSaveDir.querySelector(".ctx-folder-path").textContent = "Folder: (unavailable)";
     ctxSaveDir.querySelector("#ctx-save-free").textContent = "";
+    folderStatusSave.textContent = "Folder: (unavailable)";
+    folderStatusSave.title = "";
   }
 }
 
@@ -157,6 +168,9 @@ function setSaveDirDisplay(path, freeSpace) {
   ctxSaveDir.querySelector(".ctx-folder-path").textContent = `Folder: ${path}`;
   ctxSaveDir.querySelector("#ctx-save-free").textContent = freeSpace || "";
   ctxSaveDir.title = path;
+
+  folderStatusSave.textContent = `Folder: ${basenameOf(path)}${freeSpace ? " (" + freeSpace + ")" : ""}`;
+  folderStatusSave.title = path || "";
 }
 
 async function refreshTargetDir() {
@@ -168,6 +182,8 @@ async function refreshTargetDir() {
   } catch (e) {
     ctxTargetDir.querySelector(".ctx-folder-path").textContent = "Target: (unavailable)";
     ctxTargetDir.querySelector("#ctx-target-free").textContent = "";
+    folderStatusTarget.textContent = "Target: (unavailable)";
+    folderStatusTarget.title = "";
   }
 }
 
@@ -177,9 +193,13 @@ function setTargetDirDisplay(path, freeSpace) {
   if (!path) {
     pathEl.textContent = "Target: (none set)";
     freeEl.textContent = "";
+    folderStatusTarget.textContent = "Target: (none set)";
+    folderStatusTarget.title = "";
   } else {
     pathEl.textContent = `Target: ${path}`;
     freeEl.textContent = freeSpace || "";
+    folderStatusTarget.textContent = `Target: ${basenameOf(path)}${freeSpace ? " (" + freeSpace + ")" : ""}`;
+    folderStatusTarget.title = path;
   }
   ctxTargetDir.title = path || "";
 }
@@ -239,7 +259,6 @@ function connectWebSocket() {
       if (job) {
         job.pct = msg.pct; job.total = msg.total; job.speed = msg.speed; job.eta = msg.eta;
         updateJobCardProgress(msg.filename, job);
-        updateMiniStats();
       }
     } else if (msg.type === "job_finished") {
       const job = state.jobs.get(msg.filename);
@@ -248,7 +267,6 @@ function connectWebSocket() {
         job.file_size = msg.file_size;
         job.is_audio = msg.is_audio;
         renderLedger();
-        updateMiniStats();
       }
     } else if (msg.type === "job_deleted") {
       state.jobs.delete(msg.filename);
@@ -568,37 +586,6 @@ function updateProgressDOM(card, job) {
 
 function cssEscape(s) {
   return s.replace(/["\\]/g, "\\$&");
-}
-
-// ── Mini-mode aggregate telemetry (client-side, since progress events
-// already arrive in the browser — no need for a server-side aggregate) ──
-function updateMiniStats() {
-  if (!state.isMiniMode) { miniStats.classList.add("hidden"); return; }
-
-  const active = Array.from(state.jobs.values()).filter((j) => j.status === "DOWNLOADING");
-  if (active.length === 0) { miniStats.classList.add("hidden"); return; }
-
-  let totalKbps = 0;
-  let maxEta = 0;
-  for (const job of active) {
-    const speedMatch = /([\d.]+)\s*(MB|KB|B)\/s/.exec(job.speed || "");
-    if (speedMatch) {
-      const val = parseFloat(speedMatch[1]);
-      totalKbps += speedMatch[2] === "MB" ? val * 1024 : speedMatch[2] === "KB" ? val : val / 1024;
-    }
-    const etaMatch = /(?:(\d+)m\s*)?(\d+)s/.exec(job.eta || "");
-    if (etaMatch) {
-      const secs = (parseInt(etaMatch[1] || "0", 10) * 60) + parseInt(etaMatch[2], 10);
-      if (secs > maxEta) maxEta = secs;
-    }
-  }
-
-  const speedMbps = totalKbps / 1024;
-  const speedStr = speedMbps >= 0.1 ? `${speedMbps.toFixed(1)}MB/s` : `${totalKbps.toFixed(0)}KB/s`;
-  const etaStr = maxEta >= 60 ? `${Math.floor(maxEta / 60)}m${maxEta % 60}s` : maxEta > 0 ? `${maxEta}s` : "--";
-
-  miniStats.textContent = `[${active.length}] \u26A1${speedStr} \u23F1\uFE0F${etaStr}`;
-  miniStats.classList.remove("hidden");
 }
 
 // Every submenu flyout in the app - Copy/File (job menu) and
@@ -1063,20 +1050,6 @@ document.addEventListener("click", (e) => {
   if (!clickedInsideAMenu) closeMenus();
 });
 
-el("logo").addEventListener("contextmenu", (e) => {
-  e.preventDefault();
-  openLogoMenu(e.clientX, e.clientY);
-});
-// Right-clicking anywhere else in the top bar / empty ledger area also
-// opens the logo/app menu, mirroring the desktop window's fallback
-// context menu behavior.
-app.addEventListener("contextmenu", (e) => {
-  if (e.target.closest(".job-card")) return; // handled by job card's own listener
-  if (e.target.closest(".ctx-menu")) return;
-  e.preventDefault();
-  openLogoMenu(e.clientX, e.clientY);
-});
-
 el("ctx-tag-toggle").addEventListener("click", () => {
   state.tagDomain = !state.tagDomain;
   el("ctx-tag-toggle").querySelector(".ctx-check").textContent = state.tagDomain ? "✓" : "";
@@ -1523,14 +1496,24 @@ dlModeBtn.addEventListener("click", () => {
 findModeBtn.addEventListener("click", setAppModeFindLink);
 encodeModeBtn.addEventListener("click", setAppModeEncode);
 
-// ── Mini mode toggle ───────────────────────────────────────────
-el("ui-mode-btn").addEventListener("click", toggleMiniMode);
-function toggleMiniMode() {
-  state.isMiniMode = !state.isMiniMode;
-  app.classList.toggle("mini", state.isMiniMode);
-  updateMiniStats();
-  inputField.focus();
-}
+// ── Gear button (opens the options/logo menu; this menu is no longer
+// reachable via right-click — the gear is now the only way in) ────
+gearBtn.addEventListener("click", (e) => {
+  e.stopPropagation();
+  const rect = gearBtn.getBoundingClientRect();
+  openLogoMenu(rect.left, rect.bottom + 4);
+});
+
+// ── Folder status row (click opens the folder manager directly) ──
+folderStatusRow.addEventListener("click", (e) => {
+  e.stopPropagation();
+  logoMenu.classList.add("hidden");
+  jobMenu.classList.add("hidden");
+  closeOtherFlyouts(foldersFlyout);
+  refreshSaveDir();
+  refreshTargetDir();
+  positionFlyoutNextTo(foldersFlyout, folderStatusRow);
+});
 
 // ── Control bar ────────────────────────────────────────────────
 async function refreshDownloadLedger() {
@@ -1729,7 +1712,6 @@ document.addEventListener("keydown", async (e) => {
     }
     if (e.key.toLowerCase() === "f") { setAppModeFindLink(); e.preventDefault(); return; }
     if (e.key.toLowerCase() === "d") { setAppModeDownload(); e.preventDefault(); return; }
-    if (e.key.toLowerCase() === "m") { toggleMiniMode(); e.preventDefault(); return; }
   }
 
   if (e.key === "Escape") {
@@ -1915,15 +1897,6 @@ function resolutionTargetLabel(job) {
 }
 
 function buildEncodeSettingsSummary(job) {
-  if (job.job_type === "audio_sync") {
-    const sign = job.delay_ms > 0 ? "+" : job.delay_ms < 0 ? "" : "±";
-    const parts = [`Audio delayed ${sign}${job.delay_ms}ms`];
-    if (job.status === "DONE") {
-      parts.push("saved to Converted/");
-      if (job.elapsed_seconds) parts.push(`took ${formatEta(job.elapsed_seconds)}`);
-    }
-    return parts.join(" · ");
-  }
   const parts = [job.resolution_cap && job.resolution_cap !== "source" ? job.resolution_cap : "Source res"];
   if (job.deinterlace) parts.push("deinterlace on");
   if (job.auto_crop) parts.push("auto-crop");
@@ -1968,25 +1941,17 @@ function buildEncodeJobCard(job) {
   titleRow.appendChild(title);
 
   if (job.status === "ENCODING" || job.status === "QUEUED") {
-    if (job.job_type === "audio_sync") {
-      const syncBadge = document.createElement("span");
-      syncBadge.className = "sync-badge";
-      const sign = job.delay_ms > 0 ? "+" : job.delay_ms < 0 ? "" : "±";
-      syncBadge.textContent = `SYNC ${sign}${job.delay_ms}ms`;
-      titleRow.appendChild(syncBadge);
-    } else {
-      const codecBadge = document.createElement("span");
-      codecBadge.className = "codec-badge";
-      const shortCodec = (job.codec_label || "").split(" ")[0];
-      codecBadge.textContent = job.mode === "size" ? shortCodec : `${shortCodec} · CRF${job.crf}`;
-      titleRow.appendChild(codecBadge);
+    const codecBadge = document.createElement("span");
+    codecBadge.className = "codec-badge";
+    const shortCodec = (job.codec_label || "").split(" ")[0];
+    codecBadge.textContent = job.mode === "size" ? shortCodec : `${shortCodec} · CRF${job.crf}`;
+    titleRow.appendChild(codecBadge);
 
-      if (job.encoder_backend && job.encoder_backend !== "software") {
-        const fastBadge = document.createElement("span");
-        fastBadge.className = "fast-badge";
-        fastBadge.textContent = job.encoder_backend.toUpperCase();
-        titleRow.appendChild(fastBadge);
-      }
+    if (job.encoder_backend && job.encoder_backend !== "software") {
+      const fastBadge = document.createElement("span");
+      fastBadge.className = "fast-badge";
+      fastBadge.textContent = job.encoder_backend.toUpperCase();
+      titleRow.appendChild(fastBadge);
     }
   }
 
@@ -2567,252 +2532,6 @@ addEncodeJobBtn.addEventListener("click", async () => {
     encodeJobError.classList.remove("hidden");
   } finally {
     addEncodeJobBtn.disabled = false;
-  }
-});
-
-// ── New Audio Sync Job modal ─────────────────────────────────────
-const newAudioSyncJobBtn = el("new-audio-sync-job-btn");
-const newAudioSyncModal = el("new-audio-sync-modal");
-const closeAudioSyncModalBtn = el("close-audio-sync-modal");
-const cancelAudioSyncModalBtn = el("cancel-audio-sync-modal");
-const addAudioSyncJobBtn = el("add-audio-sync-job-btn");
-const syncSourceSelect = el("sync-source-select");
-const syncSourceRefreshBtn = el("sync-source-refresh-btn");
-const syncSourceInfoEl = el("sync-source-info");
-const syncVideoPlayer = el("sync-video-player");
-const syncAudioPlayer = el("sync-audio-player");
-const syncFinalPreviewPlayer = el("sync-final-preview-player");
-const syncBackToLiveRow = el("sync-back-to-live-row");
-const syncBackToLiveBtn = el("sync-back-to-live-btn");
-const syncDelayInput = el("sync-delay-input");
-const syncPreviewFinalBtn = el("sync-preview-final-btn");
-const syncPreviewStatus = el("sync-preview-status");
-const syncJobError = el("sync-job-error");
-
-let syncDelayMs = 0;
-let syncDriftInterval = null;
-let syncCurrentSourceFilename = null;
-
-function syncOffsetSeconds() {
-  return syncDelayMs / 1000;
-}
-
-// Keeps the (muted) video element and the separate audio element - both
-// pointed at the same stream URL - offset from each other by the current
-// delay, so scrubbing/playing previews exactly what the eventual remux
-// will sound/look like without needing a server round-trip per tweak.
-function resyncAudioToVideo() {
-  if (!syncAudioPlayer.src) return;
-  const target = Math.max(0, syncVideoPlayer.currentTime - syncOffsetSeconds());
-  if (Math.abs(syncAudioPlayer.currentTime - target) > 0.15) {
-    syncAudioPlayer.currentTime = target;
-  }
-}
-
-function startSyncDriftCorrection() {
-  stopSyncDriftCorrection();
-  syncDriftInterval = setInterval(resyncAudioToVideo, 1000);
-}
-function stopSyncDriftCorrection() {
-  if (syncDriftInterval) {
-    clearInterval(syncDriftInterval);
-    syncDriftInterval = null;
-  }
-}
-
-syncVideoPlayer.addEventListener("play", async () => {
-  resyncAudioToVideo();
-  try { await syncAudioPlayer.play(); } catch (e) { /* autoplay restrictions, ignore */ }
-  startSyncDriftCorrection();
-});
-syncVideoPlayer.addEventListener("pause", () => {
-  syncAudioPlayer.pause();
-  stopSyncDriftCorrection();
-});
-syncVideoPlayer.addEventListener("seeked", resyncAudioToVideo);
-
-function setSyncDelay(ms) {
-  syncDelayMs = ms;
-  syncDelayInput.value = String(ms);
-  resyncAudioToVideo();
-}
-
-document.querySelectorAll(".sync-delay-btn").forEach((btn) => {
-  btn.addEventListener("click", () => {
-    setSyncDelay((parseInt(syncDelayInput.value, 10) || 0) + parseInt(btn.dataset.delta, 10));
-  });
-});
-syncDelayInput.addEventListener("change", () => setSyncDelay(parseInt(syncDelayInput.value, 10) || 0));
-
-function populateSyncSourceSelect() {
-  syncSourceSelect.innerHTML = "";
-  for (const src of state.encodeSources) {
-    const opt = document.createElement("option");
-    opt.value = src.filename;
-    opt.textContent = `${src.filename} — ${src.file_size}`;
-    syncSourceSelect.appendChild(opt);
-  }
-}
-
-function showLiveSyncPlayer() {
-  syncFinalPreviewPlayer.pause();
-  syncFinalPreviewPlayer.removeAttribute("src");
-  syncFinalPreviewPlayer.classList.add("hidden");
-  syncBackToLiveRow.classList.add("hidden");
-  syncVideoPlayer.classList.remove("hidden");
-}
-syncBackToLiveBtn.addEventListener("click", showLiveSyncPlayer);
-
-async function onSyncSourceChange() {
-  const filename = syncSourceSelect.value;
-  addAudioSyncJobBtn.disabled = true;
-  syncCurrentSourceFilename = null;
-  if (!filename) return;
-  syncSourceInfoEl.textContent = "Probing source file...";
-  try {
-    const res = await fetch("/api/encode/probe", {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ filename }),
-    });
-    const data = await res.json();
-    if (!res.ok) {
-      syncSourceInfoEl.textContent = data.error || "Couldn't read that file.";
-      return;
-    }
-    if (!data.has_audio) {
-      syncSourceInfoEl.textContent = "That file has no audio track - pick another source.";
-      return;
-    }
-    syncCurrentSourceFilename = filename;
-    syncSourceInfoEl.textContent = `${data.width}×${data.height} · ${formatDuration(data.duration)} · ${data.size_label}`;
-    addAudioSyncJobBtn.disabled = false;
-
-    const streamUrl = `/api/jobs/stream?filename=${encodeURIComponent(filename)}`;
-    syncVideoPlayer.pause();
-    syncVideoPlayer.src = streamUrl;
-    syncVideoPlayer.load();
-    syncAudioPlayer.pause();
-    syncAudioPlayer.src = streamUrl;
-    syncAudioPlayer.load();
-    showLiveSyncPlayer();
-  } catch (e) {
-    syncSourceInfoEl.textContent = "Couldn't reach the server to probe that file.";
-  }
-}
-syncSourceSelect.addEventListener("change", onSyncSourceChange);
-
-syncSourceRefreshBtn.addEventListener("click", async () => {
-  await refreshDownloadLedger();
-  await refreshEncodeSources();
-  const previous = syncSourceSelect.value;
-  populateSyncSourceSelect();
-  if (previous && [...syncSourceSelect.options].some((o) => o.value === previous)) {
-    syncSourceSelect.value = previous;
-  } else if (syncSourceSelect.options.length > 0) {
-    await onSyncSourceChange();
-  }
-});
-
-syncPreviewFinalBtn.addEventListener("click", async () => {
-  if (!syncCurrentSourceFilename) return;
-  syncPreviewStatus.textContent = "Rendering preview clip...";
-  syncPreviewFinalBtn.disabled = true;
-  syncVideoPlayer.pause();
-  syncAudioPlayer.pause();
-  stopSyncDriftCorrection();
-  try {
-    // Center the preview on wherever the user last scrubbed to, so it
-    // isn't judged against a cold-open/silent intro; fall back to the
-    // 25% mark if they haven't moved the scrub bar yet.
-    const startSeconds = syncVideoPlayer.currentTime > 0.5
-      ? syncVideoPlayer.currentTime
-      : (syncVideoPlayer.duration || 0) * 0.25;
-    const res = await fetch("/api/encode/audio-sync/preview", {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ filename: syncCurrentSourceFilename, delay_ms: syncDelayMs, start_seconds: startSeconds }),
-    });
-    const data = await res.json();
-    if (!res.ok) {
-      syncPreviewStatus.textContent = data.error || "Couldn't render the preview.";
-      return;
-    }
-    syncVideoPlayer.classList.add("hidden");
-    syncFinalPreviewPlayer.src = `/api/encode/audio-sync/preview-file?v=${encodeURIComponent(data.preview_token)}`;
-    syncFinalPreviewPlayer.classList.remove("hidden");
-    syncBackToLiveRow.classList.remove("hidden");
-    syncFinalPreviewPlayer.load();
-    syncFinalPreviewPlayer.play().catch(() => {});
-    syncPreviewStatus.textContent = "Previewing the exact final sync.";
-  } catch (e) {
-    syncPreviewStatus.textContent = "Couldn't reach the server.";
-  } finally {
-    syncPreviewFinalBtn.disabled = false;
-  }
-});
-
-async function openNewAudioSyncModal() {
-  syncJobError.classList.add("hidden");
-  syncPreviewStatus.textContent = "";
-  setSyncDelay(0);
-  syncCurrentSourceFilename = null;
-  addAudioSyncJobBtn.disabled = true;
-  showLiveSyncPlayer();
-
-  await refreshDownloadLedger();
-  await refreshEncodeSources();
-  populateSyncSourceSelect();
-
-  if (syncSourceSelect.options.length > 0) {
-    await onSyncSourceChange();
-  } else {
-    syncSourceInfoEl.textContent = "No completed downloads available - download something first.";
-  }
-
-  newAudioSyncModal.classList.remove("hidden");
-}
-
-function closeNewAudioSyncModal() {
-  syncVideoPlayer.pause();
-  syncAudioPlayer.pause();
-  stopSyncDriftCorrection();
-  syncFinalPreviewPlayer.pause();
-  newAudioSyncModal.classList.add("hidden");
-}
-
-newAudioSyncJobBtn.addEventListener("click", openNewAudioSyncModal);
-closeAudioSyncModalBtn.addEventListener("click", closeNewAudioSyncModal);
-cancelAudioSyncModalBtn.addEventListener("click", closeNewAudioSyncModal);
-newAudioSyncModal.addEventListener("click", (e) => {
-  if (e.target === newAudioSyncModal) closeNewAudioSyncModal();
-});
-
-addAudioSyncJobBtn.addEventListener("click", async () => {
-  syncJobError.classList.add("hidden");
-  if (!syncCurrentSourceFilename) {
-    syncJobError.textContent = "Choose a source file first.";
-    syncJobError.classList.remove("hidden");
-    return;
-  }
-  addAudioSyncJobBtn.disabled = true;
-  try {
-    const res = await fetch("/api/encode/audio-sync/jobs", {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ filename: syncCurrentSourceFilename, delay_ms: syncDelayMs }),
-    });
-    const data = await res.json();
-    if (!res.ok) {
-      syncJobError.textContent = data.error || "Couldn't queue that job.";
-      syncJobError.classList.remove("hidden");
-      return;
-    }
-    state.encodeJobs.set(data.job.id, data.job);
-    renderEncodeLedger();
-    closeNewAudioSyncModal();
-  } catch (e) {
-    syncJobError.textContent = "Couldn't reach the server.";
-    syncJobError.classList.remove("hidden");
-  } finally {
-    addAudioSyncJobBtn.disabled = false;
   }
 });
 
