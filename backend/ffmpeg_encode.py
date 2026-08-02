@@ -297,13 +297,6 @@ def build_video_filters(
 
     working_w, working_h = source_width, source_height
     if force_ar and force_ar_width and force_ar_height:
-        # Round to even - libx265 (and most other encoders, at yuv420p)
-        # require both dimensions to be a multiple of 2 for 4:2:0 chroma
-        # subsampling. The frontend's quick-ratio buttons already compute
-        # even values, but this is a safety net for the "Custom" ratio
-        # path where the person can type in any number by hand.
-        force_ar_width = force_ar_width - (force_ar_width % 2)
-        force_ar_height = force_ar_height - (force_ar_height % 2)
         filters.append(f"scale={force_ar_width}:{force_ar_height}:flags=lanczos,setsar=1")
         working_w, working_h = force_ar_width, force_ar_height
 
@@ -312,14 +305,7 @@ def build_video_filters(
         working_h = int(crop.split(":")[1])
 
     if resolution_cap and working_h > resolution_cap:
-        # force_divisible_by=2 is required here, not just cosmetic: with
-        # only "-2" for the free dimension, force_original_aspect_ratio's
-        # own fit-to-box math can still land on an odd width once the
-        # source's actual aspect ratio isn't a clean fraction (e.g. a
-        # 1280x720 source scaled to a 480p cap) - which libx265 then
-        # rejects outright ("Picture width must be an integer multiple
-        # of the specified chroma subsampling") instead of just warning.
-        filters.append(f"scale=-2:{resolution_cap}:force_original_aspect_ratio=decrease:force_divisible_by=2")
+        filters.append(f"scale=-2:{resolution_cap}:force_original_aspect_ratio=decrease")
 
     if denoise:
         filters.append("hqdn3d=2:1.5:3:2.5")
