@@ -21,12 +21,24 @@ from ytdlp_utils import (
     format_file_size,
     get_downloaded_file_size,
     find_media_file,
+    find_converted_file,
     is_audio_file,
 )
 
 PROGRESS_RE = re.compile(
     r"\[download\]\s+([\d.]+)%\s+of\s+~?\s*([\d.]+)\s*(\w+)\s+at\s+([\d.]+)\s*([\w/]+)\s+ETA\s+(\d+):(\d+)"
 )
+
+
+class NeedsDecisionError(Exception):
+    """Raised by move_to_target() when the file being moved has a
+    re-encoded twin sitting in Converted/ and the caller hasn't said
+    which version (original/reencoded) should actually go to the
+    target folder. Carries the info the frontend needs to render its
+    Transfer Original / Transfer Re-encoded / Cancel prompt."""
+    def __init__(self, info: dict):
+        super().__init__("A re-encoded version of this file exists - pick which one to transfer.")
+        self.info = info
 
 
 class ConnectionManager:
@@ -120,6 +132,25 @@ class JobManager:
                     # uncached so the next scan (e.g. pressing Refresh) tries
                     # probing again instead of getting stuck at 0x0 forever.
                     probed_ok = bool(new_duration or new_width or new_height or new_video_codec or new_audio_codec)
+
+                    if not probed_ok:
+                        # A brand-new file (e.g. manually pasted into the
+                        # download folder) can still be mid-copy the instant
+                        # it's first noticed - the OS already shows it in the
+                        # folder listing, but ffprobe can't read a complete
+                        # header yet. That used to require the user to press
+                        # Refresh a second time once the copy settled. Give
+                        # it one short retry before giving up, so a single
+                        # Refresh is enough in the common case.
+                        await asyncio.sleep(0.4)
+                        try:
+                            probed = await probe_basic_info(media_path)
+                        except Exception:
+                            probed = {"width": 0, "height": 0, "duration": 0.0, "video_codec": "", "audio_codec": ""}
+                        new_width, new_height, new_duration = probed["width"], probed["height"], probed["duration"]
+                        new_video_codec = probed.get("video_codec", "")
+                        new_audio_codec = probed.get("audio_codec", "")
+                        probed_ok = bool(new_duration or new_width or new_height or new_video_codec or new_audio_codec)
                     if probed_ok:
                         width, height, duration = new_width, new_height, new_duration
                         video_codec, audio_codec = new_video_codec, new_audio_codec
@@ -210,6 +241,39 @@ class JobManager:
         out_path = f"{get_save_dir()}/{filename}.%(ext)s"
         is_audio_only = job["res_cap"] == AUDIO_ONLY_KEY
 
+        status = await self._attempt_ytdlp(job, job["url"], out_path, is_audio_only, filename)
+
+        # Default method failed - rather than leaving a failed entry
+        # sitting in the ledger, pull the job out entirely and hand
+        # things back to the frontend so it can run the same M3U
+        # sniffing flow the user would trigger manually (message in the
+        # input box, sniff, then let the user confirm/edit the title
+        # before it's resubmitted as a fresh job).
+        if status == "ERROR" and filename not in self._cancelled:
+            await self._abandon_for_m3u_retry(job, log_url)
+            return
+
+        self._cancelled.discard(filename)
+        await self._finalize_job(job, status, log_url)
+
+    async def _abandon_for_m3u_retry(self, job: dict, log_url: str) -> None:
+        filename = job["filename"]
+        self.jobs.pop(filename, None)
+        self.saved_queue.pop(filename, None)
+        save_queue_to_disk(self.saved_queue)
+
+        await self.connections.broadcast({"type": "job_deleted", "filename": filename})
+        await self.connections.broadcast({
+            "type": "download_failed_retry_m3u",
+            "filename": filename,
+            "url": job["url"],
+            "res_cap": job["res_cap"],
+            "original_pasted_url": log_url,
+        })
+
+    async def _attempt_ytdlp(self, job: dict, url: str, out_path: str, is_audio_only: bool, filename: str) -> str:
+        """Runs a single yt-dlp attempt against `url` and returns
+        'DONE' / 'ERROR' / 'CANCELLED'."""
         try:
             if is_audio_only:
                 proc = await asyncio.create_subprocess_exec(
@@ -224,7 +288,7 @@ class JobManager:
                     "--write-thumbnail",
                     "--convert-thumbnails", "jpg",
                     "-o", out_path,
-                    job["url"],
+                    url,
                     stdout=asyncio.subprocess.PIPE,
                     stderr=asyncio.subprocess.STDOUT,
                     **NO_CONSOLE_KWARGS,
@@ -241,16 +305,14 @@ class JobManager:
                     "--write-thumbnail",
                     "--convert-thumbnails", "jpg",
                     "-o", out_path,
-                    job["url"],
+                    url,
                     stdout=asyncio.subprocess.PIPE,
                     stderr=asyncio.subprocess.STDOUT,
                     **NO_CONSOLE_KWARGS,
                 )
         except Exception:
-            # yt-dlp missing/unrunnable — finalize as ERROR instead of
-            # leaving the job stuck in DOWNLOADING forever.
-            await self._finalize_job(job, "ERROR", log_url)
-            return
+            # yt-dlp missing/unrunnable.
+            return "ERROR"
 
         self._processes[filename] = proc
 
@@ -269,14 +331,11 @@ class JobManager:
         self._processes.pop(filename, None)
 
         if filename in self._cancelled:
-            status = "CANCELLED"
-            self._cancelled.discard(filename)
+            return "CANCELLED"
         elif returncode == 0:
-            status = "DONE"
+            return "DONE"
         else:
-            status = "ERROR"
-
-        await self._finalize_job(job, status, log_url)
+            return "ERROR"
 
     async def _parse_line(self, job: dict, line: str):
         m = PROGRESS_RE.search(line)
@@ -588,11 +647,20 @@ class JobManager:
         return job
 
     # ── Moving completed files to the target folder ──────────────
-    def move_to_target(self, filename: str) -> None:
+    async def move_to_target(self, filename: str, variant: Optional[str] = None) -> None:
         """Moves a completed file from the current download folder to
         the configured target folder, cleaning up its (now-orphaned)
         thumbnail, and drops it from this folder's ledger/queue.json.
-        Raises ValueError on anything that stops the move."""
+
+        If a re-encoded twin of this file exists in Converted/ and
+        `variant` wasn't given, raises NeedsDecisionError instead of
+        moving anything, so the caller can ask the user which version
+        they want. Pass variant="original" or variant="reencoded" once
+        that decision is made - either way, BOTH the original and the
+        re-encoded copy are removed from the download folder afterward,
+        since only one of them is meant to survive.
+
+        Raises ValueError on anything else that stops the move."""
         target_dir = get_target_dir()
         if not target_dir:
             raise ValueError("No target folder configured yet.")
@@ -605,15 +673,49 @@ class JobManager:
         if not media_path:
             raise ValueError(f"Couldn't find the file for '{filename}'.")
 
-        ext = os.path.splitext(media_path)[1]
+        converted_path = find_converted_file(filename)
+
+        if converted_path and variant is None:
+            original_info = await probe_basic_info(media_path)
+            reencoded_info = await probe_basic_info(converted_path)
+            raise NeedsDecisionError({
+                "filename": filename,
+                "original": {
+                    "size_bytes": os.path.getsize(media_path),
+                    "size_label": format_file_size(os.path.getsize(media_path)),
+                    "width": original_info["width"],
+                    "height": original_info["height"],
+                },
+                "reencoded": {
+                    "size_bytes": os.path.getsize(converted_path),
+                    "size_label": format_file_size(os.path.getsize(converted_path)),
+                    "width": reencoded_info["width"],
+                    "height": reencoded_info["height"],
+                },
+            })
+
+        source_path = media_path
+        if converted_path and variant == "reencoded":
+            source_path = converted_path
+
+        ext = os.path.splitext(source_path)[1]
         dest_path = os.path.join(target_dir, filename + ext)
         if os.path.exists(dest_path):
             raise ValueError(f"'{filename}{ext}' already exists in the target folder.")
 
         try:
-            shutil.move(media_path, dest_path)
+            shutil.move(source_path, dest_path)
         except OSError as e:
             raise ValueError(f"Move failed: {e}")
+
+        # Whichever version didn't get transferred (or, if there was no
+        # twin at all, nothing) is cleaned up here.
+        leftover_path = converted_path if source_path == media_path else media_path
+        if converted_path and leftover_path and os.path.exists(leftover_path):
+            try:
+                os.remove(leftover_path)
+            except OSError:
+                pass
 
         thumb_path = thumbnail_path_for(filename)
         if os.path.exists(thumb_path):
@@ -627,21 +729,71 @@ class JobManager:
             del self.saved_queue[filename]
             save_queue_to_disk(self.saved_queue)
 
-    def move_all_to_target(self) -> dict:
+    async def move_all_to_target(self) -> dict:
         """Moves every completed (DONE) item to the target folder.
-        Returns {'moved': [filenames], 'failed': [{'filename','error'}]}.
-        Raises ValueError only if no target folder is configured at all -
-        per-file failures are collected instead of aborting the batch."""
+        Returns {'moved': [filenames], 'failed': [{'filename','error'}],
+        'pending_decisions': [{'filename','original','reencoded'}]}.
+        Items with a re-encoded twin are left untouched in the ledger
+        and reported under pending_decisions rather than moved, so the
+        caller can prompt for each one and re-call move_to_target with
+        an explicit variant. Raises ValueError only if no target folder
+        is configured at all - per-file failures are collected instead
+        of aborting the batch."""
         if not get_target_dir():
             raise ValueError("No target folder configured yet.")
 
         candidates = [f for f, j in self.jobs.items() if j.get("status") == "DONE"]
         moved = []
         failed = []
+        pending_decisions = []
         for filename in candidates:
             try:
-                self.move_to_target(filename)
+                await self.move_to_target(filename)
                 moved.append(filename)
+            except NeedsDecisionError as e:
+                pending_decisions.append(e.info)
             except ValueError as e:
                 failed.append({"filename": filename, "error": str(e)})
-        return {"moved": moved, "failed": failed}
+        return {"moved": moved, "failed": failed, "pending_decisions": pending_decisions}
+
+    async def move_selected_to_target(self, filenames: list) -> dict:
+        """Same as move_all_to_target, but restricted to a caller-supplied
+        list of filenames (multi-select in the ledger UI). Filenames that
+        aren't completed items, or that fail to move for any other
+        reason, land in 'failed'; anything with a re-encoded twin lands
+        in 'pending_decisions' just like move_all_to_target, since the
+        UI needs to prompt for those regardless of which button
+        triggered the move."""
+        if not get_target_dir():
+            raise ValueError("No target folder configured yet.")
+
+        moved = []
+        failed = []
+        pending_decisions = []
+        for filename in filenames:
+            try:
+                await self.move_to_target(filename)
+                moved.append(filename)
+            except NeedsDecisionError as e:
+                pending_decisions.append(e.info)
+            except ValueError as e:
+                failed.append({"filename": filename, "error": str(e)})
+        return {"moved": moved, "failed": failed, "pending_decisions": pending_decisions}
+
+    def delete_jobs(self, filenames: list) -> dict:
+        """Batch version of delete_job() for multi-select in the ledger
+        UI. Skips (rather than deletes) anything currently DOWNLOADING,
+        since deleting an in-progress download out from under its running
+        task would corrupt that job's state - same guard the single-item
+        options menu already applies by hiding Delete while downloading.
+        Returns {'deleted': [filenames], 'skipped': [filenames]}."""
+        deleted = []
+        skipped = []
+        for filename in filenames:
+            job = self.jobs.get(filename)
+            if job and job.get("status") == "DOWNLOADING":
+                skipped.append(filename)
+                continue
+            self.delete_job(filename)
+            deleted.append(filename)
+        return {"deleted": deleted, "skipped": skipped}

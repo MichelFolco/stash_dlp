@@ -1,14 +1,29 @@
 """The download folder is the one piece of config a user can change at
 runtime (via the "Download Folder..." option in the app's logo menu).
-Everything else in this module derives from it: queue.json and the
-history log live alongside whatever folder is currently active, matching
-the desktop app's single-folder model.
+
+Per-folder app data (queue.json, encode queue, history log, thumbnails)
+used to live inside each download folder itself. It now lives centrally
+under config.LIBRARY_DATA_DIR instead, one subfolder per download folder
+ever used - see get_data_dir() / _folder_data_dir(). This was originally
+kept identical to the old PyQt6 desktop app's layout so the two could
+share a folder without conflicting; that app is retired now, so there's
+no compatibility reason left to scatter data across every folder a user
+has ever pointed this app at.
 """
+import hashlib
 import json
 import os
+import shutil
 import uuid
 
-from config import SETTINGS_JSON_PATH, DEFAULT_SAVE_DIR, VIDEO_EXTENSIONS, AUDIO_EXTENSIONS, CONVERTED_DIR_NAME
+from config import (
+    SETTINGS_JSON_PATH,
+    DEFAULT_SAVE_DIR,
+    VIDEO_EXTENSIONS,
+    AUDIO_EXTENSIONS,
+    CONVERTED_DIR_NAME,
+    LIBRARY_DATA_DIR,
+)
 
 _cache = None
 
@@ -244,16 +259,42 @@ DATA_DIR_NAME = "stash_dlp_data"
 THUMBNAILS_DIR_NAME = ".thumbnails"
 
 
-def get_data_dir() -> str:
-    """Per-folder app data (queue.json, history log, thumbnails) lives in
-    a subfolder of the current download folder, not mixed in with the
-    actual media files."""
-    path = os.path.join(get_save_dir(), DATA_DIR_NAME)
+def _folder_data_key(folder: str) -> str:
+    """Stable, filesystem-safe identifier for a download folder, used as
+    its subfolder name under LIBRARY_DATA_DIR. Hashed rather than a
+    sanitized copy of the real path - Windows path-length limits and
+    special characters make raw/sanitized paths risky as folder names,
+    especially once nested under another root. Normalized so the same
+    folder always maps to the same key regardless of trailing slashes
+    or drive-letter case."""
+    normalized = os.path.normcase(os.path.normpath(os.path.abspath(folder)))
+    return hashlib.sha1(normalized.encode("utf-8", errors="replace")).hexdigest()[:12]
+
+
+def _folder_data_dir(folder: str) -> str:
+    """Creates (if needed) and returns the central data dir for a given
+    download folder. Also drops a small _folder.txt marker with the real
+    path inside it, purely so the otherwise-opaque hashed folder name is
+    still identifiable by hand later if you go looking."""
+    path = os.path.join(LIBRARY_DATA_DIR, _folder_data_key(folder))
     try:
         os.makedirs(path, exist_ok=True)
     except Exception:
         pass
+    marker = os.path.join(path, "_folder.txt")
+    if not os.path.exists(marker):
+        try:
+            with open(marker, "w", encoding="utf-8") as f:
+                f.write(os.path.abspath(folder))
+        except Exception:
+            pass
     return path
+
+
+def get_data_dir() -> str:
+    """Central per-folder app data location for the CURRENTLY active
+    download folder (queue.json, encode queue, history log, thumbnails)."""
+    return _folder_data_dir(get_save_dir())
 
 
 def get_thumbnails_dir() -> str:
@@ -273,6 +314,19 @@ def get_log_file_path() -> str:
     return os.path.join(get_data_dir(), "downloads_history.log")
 
 
+def get_log_file_path_for_folder(folder: str) -> str:
+    """Same layout as get_log_file_path(), but for an arbitrary folder
+    rather than the currently active save_dir. Used by external callers
+    (/api/history-lookup) that want a specific folder's history without
+    changing which folder the running server is pointed at. Deliberately
+    does NOT create anything - a passive lookup for a folder shouldn't
+    have the side effect of registering it in the central store. If that
+    folder was ever actually used via this app, its data dir (and this
+    path) already exists; if not, the caller's own os.path.exists check
+    just finds nothing, same as before."""
+    return os.path.join(LIBRARY_DATA_DIR, _folder_data_key(folder), "downloads_history.log")
+
+
 # ── Encode Manager ──────────────────────────────────────────────
 def get_converted_dir() -> str:
     """Where finished encodes land - a subfolder of the CURRENT download
@@ -290,6 +344,87 @@ def get_encode_queue_json_path() -> str:
     return os.path.join(get_data_dir(), "_encode_queue.json")
 
 
+# ── Download preferences (Max Res / Tag Domain / M3U Sniffer) ─────
+# Small, global UI toggles from the settings flyout that have nothing to
+# do with which download folder is active, so - like target_dir and the
+# external programs list - they're stored flat in _app_settings.json
+# rather than per-folder.
+DOWNLOAD_PREFS_KEY = "download_prefs"
+DEFAULT_DOWNLOAD_PREFS = {
+    "quality": "720p",
+    "tag_domain": True,
+    "m3u_sniffer": False,
+}
+VALID_QUALITIES = {"Best", "720p", "480p", "Audio Only"}
+
+
+def get_download_prefs() -> dict:
+    stored = _load().get(DOWNLOAD_PREFS_KEY, {})
+    return {**DEFAULT_DOWNLOAD_PREFS, **stored}
+
+
+def set_download_prefs(quality: str, tag_domain: bool, m3u_sniffer: bool) -> dict:
+    prefs = {
+        "quality": quality if quality in VALID_QUALITIES else DEFAULT_DOWNLOAD_PREFS["quality"],
+        "tag_domain": bool(tag_domain),
+        "m3u_sniffer": bool(m3u_sniffer),
+    }
+    data = _load()
+    data[DOWNLOAD_PREFS_KEY] = prefs
+    _persist(data)
+    return prefs
+
+
+def migrate_old_local_data_dir() -> None:
+    """One-time, idempotent, best-effort migration from the old layout
+    (<save_dir>/stash_dlp_data/...) to the central library_data store.
+    Safe to call every time the app boots or the folder changes - a
+    no-op once migrated. Runs before migrate_legacy_layout(), which
+    still handles the older (pre-stash_dlp_data) loose-file layout and
+    now lands its output in the new central location automatically,
+    since it goes through get_data_dir()/get_thumbnails_dir() too."""
+    save_dir = get_save_dir()
+    old_dir = os.path.join(save_dir, DATA_DIR_NAME)
+    if not os.path.isdir(old_dir):
+        return
+
+    new_dir = get_data_dir()
+
+    for name in ("_download_queue.json", "_encode_queue.json", "downloads_history.log"):
+        old_path = os.path.join(old_dir, name)
+        new_path = os.path.join(new_dir, name)
+        if os.path.isfile(old_path) and not os.path.exists(new_path):
+            try:
+                shutil.move(old_path, new_path)
+            except OSError:
+                pass
+
+    old_thumbs = os.path.join(old_dir, THUMBNAILS_DIR_NAME)
+    if os.path.isdir(old_thumbs):
+        new_thumbs = get_thumbnails_dir()
+        try:
+            thumb_names = os.listdir(old_thumbs)
+        except OSError:
+            thumb_names = []
+        for fname in thumb_names:
+            src = os.path.join(old_thumbs, fname)
+            dst = os.path.join(new_thumbs, fname)
+            if os.path.isfile(src) and not os.path.exists(dst):
+                try:
+                    shutil.move(src, dst)
+                except OSError:
+                    pass
+        try:
+            os.rmdir(old_thumbs)
+        except OSError:
+            pass  # not empty (a move above failed) - leave it, harmless
+
+    try:
+        os.rmdir(old_dir)
+    except OSError:
+        pass  # not empty - leave it rather than risk losing anything
+
+
 def migrate_legacy_layout() -> None:
     """One-time, idempotent, best-effort migration for folders that still
     have queue.json/history log/thumbnails sitting loose at the download
@@ -303,7 +438,7 @@ def migrate_legacy_layout() -> None:
     new_queue = os.path.join(data_dir, "_download_queue.json")
     if os.path.isfile(legacy_queue) and not os.path.exists(new_queue):
         try:
-            os.rename(legacy_queue, new_queue)
+            shutil.move(legacy_queue, new_queue)
         except OSError:
             pass
 
@@ -311,7 +446,7 @@ def migrate_legacy_layout() -> None:
     new_log = os.path.join(data_dir, "downloads_history.log")
     if os.path.isfile(legacy_log) and not os.path.exists(new_log):
         try:
-            os.rename(legacy_log, new_log)
+            shutil.move(legacy_log, new_log)
         except OSError:
             pass
 
@@ -343,6 +478,6 @@ def migrate_legacy_layout() -> None:
                     pass
             else:
                 try:
-                    os.rename(legacy_path, dest)
+                    shutil.move(legacy_path, dest)
                 except OSError:
                     pass

@@ -3,9 +3,10 @@ import mimetypes
 import os
 import subprocess
 import sys
-from typing import Optional
+from typing import Optional, List
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -17,7 +18,7 @@ from diskspace import get_free_space_label
 from encode_manager import EncodeManager
 from filesystem_scan import scan_filesystem
 from folder_dialog import ask_directory, ask_file_path
-from job_manager import JobManager, ConnectionManager
+from job_manager import JobManager, ConnectionManager, NeedsDecisionError
 from m3u8_finder import find_m3u8, M3u8NotFound
 from procflags import NO_CONSOLE_KWARGS
 from settings import (
@@ -25,9 +26,9 @@ from settings import (
     get_target_dir, set_target_dir, get_recent_target_dirs, remove_recent_target_dir,
     get_external_programs, get_external_program, add_external_program,
     update_external_program, delete_external_program,
-    get_converted_dir,
+    get_converted_dir, get_download_prefs, set_download_prefs,
 )
-from storage import search_history, get_history_entries, delete_history_entry
+from storage import search_history, get_history_entries, delete_history_entry, lookup_history_in_folder, HistoryLookupError
 from thumbnails import get_thumbnail_path
 from ytdlp_utils import (
     clean_filename, fetch_title, get_domain, check_and_update_ytdlp, find_media_file,
@@ -37,6 +38,17 @@ from ytdlp_utils import (
 STREAM_CHUNK_SIZE = 1024 * 1024  # 1 MB
 
 app = FastAPI(title="Stash DLP Web")
+
+# Allows browser-side callers on a different origin (e.g. the Stash web UI,
+# which runs on its own host/port) to call this API directly - needed for
+# the Stash "history lookup" plugin. Wide open since this is a LAN/Tailscale
+# tool with no auth of its own; tighten allow_origins if that ever changes.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["GET", "POST"],
+    allow_headers=["*"],
+)
 
 STATIC_DIR = os.path.join(str(BUNDLE_DIR), "static")
 
@@ -92,8 +104,22 @@ class HistoryDeleteRequest(BaseModel):
     url: str
 
 
+class HistoryLookupRequest(BaseModel):
+    folder: str
+    filename: str
+
+
 class CancelRequest(BaseModel):
     filename: str
+
+
+class BatchFilenamesRequest(BaseModel):
+    filenames: List[str]
+
+
+class MoveToTargetRequest(BaseModel):
+    filename: str
+    variant: Optional[str] = None  # "original" | "reencoded" | None
 
 
 class SaveDirRequest(BaseModel):
@@ -106,6 +132,12 @@ class TargetDirRequest(BaseModel):
 
 class RecentDirRemoveRequest(BaseModel):
     path: str
+
+
+class DownloadPrefsRequest(BaseModel):
+    quality: str
+    tag_domain: bool
+    m3u_sniffer: bool
 
 
 class RenameRequest(BaseModel):
@@ -238,6 +270,16 @@ async def api_set_settings(req: SaveDirRequest):
 @app.post("/api/settings/recent/remove")
 async def api_remove_recent_dir(req: RecentDirRemoveRequest):
     return {"recent_dirs": remove_recent_dir(req.path)}
+
+
+@app.get("/api/download-prefs")
+async def api_get_download_prefs():
+    return get_download_prefs()
+
+
+@app.post("/api/download-prefs")
+async def api_set_download_prefs(req: DownloadPrefsRequest):
+    return set_download_prefs(req.quality, req.tag_domain, req.m3u_sniffer)
 
 
 @app.post("/api/target-settings/recent/remove")
@@ -378,9 +420,11 @@ async def api_browse_target_folder(request: Request):
 
 
 @app.post("/api/jobs/move-to-target")
-async def api_move_to_target(req: CancelRequest):
+async def api_move_to_target(req: MoveToTargetRequest):
     try:
-        job_manager.move_to_target(req.filename)
+        await job_manager.move_to_target(req.filename, variant=req.variant)
+    except NeedsDecisionError as e:
+        return JSONResponse(status_code=409, content={"needs_decision": True, **e.info})
     except ValueError as e:
         return JSONResponse(status_code=400, content={"error": str(e)})
     await job_manager.connections.broadcast({"type": "job_deleted", "filename": req.filename})
@@ -390,12 +434,36 @@ async def api_move_to_target(req: CancelRequest):
 @app.post("/api/jobs/move-all-to-target")
 async def api_move_all_to_target():
     try:
-        result = job_manager.move_all_to_target()
+        result = await job_manager.move_all_to_target()
     except ValueError as e:
         return JSONResponse(status_code=400, content={"error": str(e)})
     snapshot = job_manager.snapshot()
     await job_manager.connections.broadcast({"type": "refresh", "jobs": snapshot})
-    return {"moved": result["moved"], "failed": result["failed"], "jobs": snapshot}
+    return {
+        "moved": result["moved"],
+        "failed": result["failed"],
+        "pending_decisions": result["pending_decisions"],
+        "jobs": snapshot,
+    }
+
+
+@app.post("/api/jobs/move-selected-to-target")
+async def api_move_selected_to_target(req: BatchFilenamesRequest):
+    """Multi-select version of move-to-target: moves only the given
+    filenames rather than every completed item. Same pending_decisions
+    contract as move-all-to-target for files with a re-encoded twin."""
+    try:
+        result = await job_manager.move_selected_to_target(req.filenames)
+    except ValueError as e:
+        return JSONResponse(status_code=400, content={"error": str(e)})
+    snapshot = job_manager.snapshot()
+    await job_manager.connections.broadcast({"type": "refresh", "jobs": snapshot})
+    return {
+        "moved": result["moved"],
+        "failed": result["failed"],
+        "pending_decisions": result["pending_decisions"],
+        "jobs": snapshot,
+    }
 
 
 @app.get("/api/jobs")
@@ -466,6 +534,16 @@ async def api_delete_job(req: CancelRequest):
     if ok:
         await job_manager.connections.broadcast({"type": "job_deleted", "filename": req.filename})
     return {"ok": ok}
+
+
+@app.post("/api/jobs/delete-batch")
+async def api_delete_jobs_batch(req: BatchFilenamesRequest):
+    """Multi-select version of delete: deletes each given filename,
+    skipping (not deleting) anything currently DOWNLOADING."""
+    result = job_manager.delete_jobs(req.filenames)
+    for filename in result["deleted"]:
+        await job_manager.connections.broadcast({"type": "job_deleted", "filename": filename})
+    return result
 
 
 @app.post("/api/jobs/open-folder")
@@ -650,6 +728,22 @@ async def _iter_file_range(media_path: str, start: int, length: int):
 @app.post("/api/history-search")
 async def api_history_search(req: HistorySearchRequest):
     return {"url": search_history(req.query)}
+
+
+@app.post("/api/history-lookup")
+async def api_history_lookup(req: HistoryLookupRequest):
+    """For external programs: given a download folder and a filename,
+    return the exact matching URL from that folder's history log - not
+    necessarily the server's currently active save_dir. Unlike
+    /api/history-search (fuzzy, current folder only), this is an exact,
+    extension-insensitive match against a caller-specified folder. No
+    localhost gating - it's a read-only log lookup, same trust level as
+    the rest of the ledger API."""
+    try:
+        url = lookup_history_in_folder(req.folder, req.filename)
+    except HistoryLookupError as e:
+        return JSONResponse(status_code=404, content={"error": str(e)})
+    return {"url": url}
 
 
 @app.get("/api/history")

@@ -9,7 +9,7 @@ import os
 import re
 
 from config import VIDEO_EXTENSIONS, AUDIO_EXTENSIONS
-from settings import get_save_dir, migrate_legacy_layout
+from settings import get_save_dir, migrate_old_local_data_dir, migrate_legacy_layout
 from storage import load_saved_queue, save_queue_to_disk
 from ytdlp_utils import format_file_size, get_downloaded_file_size
 
@@ -24,6 +24,7 @@ def scan_filesystem():
     if not os.path.exists(save_dir):
         return []
 
+    migrate_old_local_data_dir()
     migrate_legacy_layout()
 
     completed_files = {}  # stem -> is_audio

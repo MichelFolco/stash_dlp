@@ -10,7 +10,7 @@ from urllib.parse import urlparse
 
 from config import AUDIO_EXTENSIONS
 from procflags import NO_CONSOLE_KWARGS
-from settings import get_save_dir
+from settings import get_save_dir, get_converted_dir
 
 
 def is_audio_file(path: str) -> bool:
@@ -95,6 +95,41 @@ def find_media_file(filename: str):
                 return full_path
     except OSError:
         pass
+    return None
+
+
+def find_converted_file(filename: str):
+    """Returns the full path to a re-encoded twin of this job's file in
+    the Converted/ subfolder, or None if there isn't one. Matches on the
+    exact filename stem first (the common case, since the encode
+    manager reuses the source stem); if that's not there, falls back to
+    the newest file in Converted/ whose stem starts with the source
+    stem followed by ' (' - covering the ' (2)', ' (3)', ... suffixes
+    _unique_output_path() appends when a name collision occurs."""
+    converted_dir = get_converted_dir()
+    try:
+        entries = os.listdir(converted_dir)
+    except OSError:
+        return None
+
+    for fname in entries:
+        full_path = os.path.join(converted_dir, fname)
+        if os.path.isfile(full_path) and os.path.splitext(fname)[0] == filename:
+            return full_path
+
+    candidates = []
+    suffix_prefix = filename + " ("
+    for fname in entries:
+        full_path = os.path.join(converted_dir, fname)
+        if not os.path.isfile(full_path):
+            continue
+        stem = os.path.splitext(fname)[0]
+        if stem.startswith(suffix_prefix):
+            candidates.append(full_path)
+    if candidates:
+        candidates.sort(key=lambda p: os.path.getmtime(p), reverse=True)
+        return candidates[0]
+
     return None
 
 

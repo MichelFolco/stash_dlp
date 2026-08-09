@@ -31,6 +31,13 @@ else:
 # regardless of which folder downloads currently go to.
 SETTINGS_JSON_PATH = os.path.join(str(PROJECT_ROOT), "_app_settings.json")
 
+# Per-download-folder data (queue, encode queue, history log, thumbnails)
+# used to live inside each download folder itself (stash_dlp_data/). It
+# now lives centrally here instead, one subfolder per download folder
+# ever used, keyed by a hash of that folder's path - see
+# settings._folder_data_key(). Fixed location, like SETTINGS_JSON_PATH.
+LIBRARY_DATA_DIR = os.path.join(str(PROJECT_ROOT), "library_data")
+
 DEFAULT_SAVE_DIR = os.environ.get("STASH_DLP_SAVE_DIR", str(PROJECT_ROOT))
 
 # Defaults to loopback-only. Set STASH_DLP_HOST=0.0.0.0 to also accept

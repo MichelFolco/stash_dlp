@@ -8,7 +8,7 @@ import os
 import re
 from datetime import datetime
 
-from settings import get_queue_json_path, get_log_file_path
+from settings import get_queue_json_path, get_log_file_path, get_log_file_path_for_folder
 
 
 def load_saved_queue() -> dict:
@@ -77,6 +77,70 @@ def search_history(query: str) -> str:
             if query.lower() in filename_part.lower():
                 return url_part
     return ""
+
+
+class HistoryLookupError(Exception):
+    """Raised by lookup_history_in_folder() when the folder or a matching
+    entry can't be found, so the API layer can turn it into a 404 with
+    a specific reason."""
+
+
+def lookup_history_in_folder(folder: str, filename: str) -> str:
+    """For external callers: given a download folder and a filename,
+    return the exact matching URL from that folder's history log.
+    Unlike search_history()/get_log_file_path(), this does NOT depend on
+    - or change - the server's currently active save_dir; it resolves
+    that folder's entry in the central library_data store directly (see
+    settings.get_log_file_path_for_folder()), so it works for any folder
+    the caller names, not just the one currently open in the app.
+
+    Matching is exact (case-insensitive, extension-insensitive) rather
+    than substring, since this is meant for programmatic callers passing
+    a known filename rather than a messy pasted query.
+
+    Raises HistoryLookupError if the folder doesn't exist, has no
+    stash_dlp history log, or has no entry matching that filename.
+    """
+    from urllib.parse import unquote
+
+    folder = (folder or "").strip()
+    filename = (filename or "").strip()
+    if not folder or not filename:
+        raise HistoryLookupError("folder and filename are required")
+
+    if not os.path.isdir(folder):
+        raise HistoryLookupError(f"folder does not exist: {folder}")
+
+    log_path = get_log_file_path_for_folder(folder)
+    if not os.path.exists(log_path):
+        raise HistoryLookupError(f"no stash_dlp history found for folder: {folder}")
+
+    query = unquote(filename)
+    if query.lower().startswith("file:///"):
+        query = query.split("/")[-1]
+    if "." in query:
+        query = query.rsplit(".", 1)[0]
+    query = query.strip().lower()
+
+    try:
+        with open(log_path, "r", encoding="utf-8") as f:
+            lines = f.readlines()
+    except Exception as e:
+        raise HistoryLookupError(f"could not read history log: {e}")
+
+    for line in lines:
+        match = _LOG_PATTERN.match(line.strip())
+        if not match:
+            continue
+        filename_part = match.group(1).strip()
+        url_part = match.group(2).strip()
+        candidate = filename_part
+        if "." in candidate:
+            candidate = candidate.rsplit(".", 1)[0]
+        if candidate.strip().lower() == query:
+            return url_part
+
+    raise HistoryLookupError(f"no history entry matching filename: {filename}")
 
 
 def get_history_entries() -> list:

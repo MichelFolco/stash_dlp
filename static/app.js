@@ -45,8 +45,11 @@ const state = {
   externalPrograms: [],
   filterText: "",
   audioOnlyFilter: false,
+  hideCompletedFilter: false,
   sortField: "added",         // added | size | name
   sortDir: "desc",            // desc | asc
+  selectionMode: false,       // multi-select mode in the download ledger
+  selectedFilenames: new Set(),
 
   // Encode Manager
   encodeJobs: new Map(),          // id -> job dict
@@ -57,6 +60,7 @@ const state = {
   encodeSortDir: "desc",
   encodeSourceInfo: null,         // last probe result for the selected source
   encodeEstimateSeq: 0,           // guards against out-of-order estimate responses
+  encodeProbeSeq: 0,              // guards against out-of-order source-probe responses
 };
 
 const inputField = el("input-field");
@@ -88,6 +92,15 @@ const dlFolderQuickMenu = el("dl-folder-quickmenu");
 const dlFolderQuickList = el("dl-folder-quickmenu-list");
 const targetFolderQuickMenu = el("target-folder-quickmenu");
 const targetFolderQuickList = el("target-folder-quickmenu-list");
+const reencodeChoiceModal = el("reencode-choice-modal");
+const reencodeChoiceFilename = el("reencode-choice-filename");
+const reencodeChoiceOriginalSize = el("reencode-choice-original-size");
+const reencodeChoiceOriginalRes = el("reencode-choice-original-res");
+const reencodeChoiceReencodedSize = el("reencode-choice-reencoded-size");
+const reencodeChoiceReencodedRes = el("reencode-choice-reencoded-res");
+const reencodeChoiceCancelBtn = el("reencode-choice-cancel-btn");
+const reencodeChoiceOriginalBtn = el("reencode-choice-original-btn");
+const reencodeChoiceReencodedBtn = el("reencode-choice-reencoded-btn");
 const videoModal = el("video-modal");
 const videoPlayer = el("video-player");
 const videoModalTitle = el("video-modal-title");
@@ -115,6 +128,7 @@ async function boot() {
   await refreshSaveDir();
   await refreshTargetDir();
   await refreshExternalPrograms();
+  await refreshDownloadPrefs();
   await loadJobsSnapshot();
   await loadEncodeJobsSnapshot();
   connectWebSocket();
@@ -148,6 +162,32 @@ async function refreshExternalPrograms() {
   } catch (e) {
     state.externalPrograms = [];
   }
+}
+
+async function refreshDownloadPrefs() {
+  try {
+    const res = await fetch("/api/download-prefs");
+    const data = await res.json();
+    resDropdown.value = data.quality || "720p";
+    state.tagDomain = data.tag_domain !== false;
+    state.m3uSniffer = !!data.m3u_sniffer;
+  } catch (e) {
+    // Backend unreachable at boot - just keep the hard-coded defaults
+    // already baked into the HTML/state.
+  }
+  el("ctx-tag-toggle").querySelector(".ctx-check").textContent = state.tagDomain ? "✓" : "";
+  el("ctx-m3u-toggle").querySelector(".ctx-check").textContent = state.m3uSniffer ? "✓" : "";
+}
+
+function saveDownloadPrefs() {
+  fetch("/api/download-prefs", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      quality: resDropdown.value,
+      tag_domain: state.tagDomain,
+      m3u_sniffer: state.m3uSniffer,
+    }),
+  }).catch((e) => { /* best-effort - not worth surfacing a UI error over */ });
 }
 
 async function refreshSaveDir() {
@@ -297,6 +337,8 @@ function connectWebSocket() {
     } else if (msg.type === "job_deleted") {
       state.jobs.delete(msg.filename);
       renderLedger();
+    } else if (msg.type === "download_failed_retry_m3u") {
+      beginM3uRetryPipeline(msg.url, msg.res_cap, msg.original_pasted_url);
     } else if (msg.type === "refresh") {
       loadJobsIntoMap(msg.jobs);
       renderLedger();
@@ -340,6 +382,17 @@ function parseSizeToBytes(sizeStr) {
   return value * Math.pow(1024, Math.max(exp, 0));
 }
 
+function formatBytes(bytes) {
+  if (!isFinite(bytes) || bytes <= 0) return "0 B";
+  const units = ["B", "KB", "MB", "GB", "TB", "PB"];
+  let i = 0;
+  while (bytes >= 1024 && i < units.length - 1) {
+    bytes /= 1024;
+    i++;
+  }
+  return `${bytes.toFixed(i === 0 ? 0 : 1)} ${units[i]}`;
+}
+
 function getFilteredSortedJobs() {
   // "added" order = Map insertion order, oldest first; reverse for
   // newest-first, matching the ledger's existing default look.
@@ -352,6 +405,10 @@ function getFilteredSortedJobs() {
 
   if (state.audioOnlyFilter) {
     filtered = filtered.filter(({ job }) => job.is_audio);
+  }
+
+  if (state.hideCompletedFilter) {
+    filtered = filtered.filter(({ job }) => job.status !== "DONE");
   }
 
   const dirMul = state.sortDir === "asc" ? 1 : -1;
@@ -399,12 +456,33 @@ function renderLedger() {
     return;
   }
   queueList.innerHTML = "";
-  for (const job of getFilteredSortedJobs()) {
+  const jobs = getFilteredSortedJobs();
+  for (const job of jobs) {
     queueList.appendChild(buildJobCard(job));
   }
+  renderLedgerStatsBar(jobs);
+}
+
+// Thin summary row under the toolbar: count + total size of whatever's
+// currently visible in the ledger, so it stays honest against the
+// active filter/audio-only/hide-completed state instead of always
+// reflecting the full queue.
+function renderLedgerStatsBar(jobs) {
+  if (jobs.length === 0) {
+    ledgerStatsBar.textContent = "";
+    return;
+  }
+  let totalBytes = 0;
+  for (const job of jobs) {
+    const bytes = parseSizeToBytes(job.file_size);
+    if (bytes > 0) totalBytes += bytes;
+  }
+  const fileLabel = jobs.length === 1 ? "1 file" : `${jobs.length} files`;
+  ledgerStatsBar.textContent = totalBytes > 0 ? `${fileLabel} \u00b7 ${formatBytes(totalBytes)}` : fileLabel;
 }
 
 function renderHistoryLedger() {
+  ledgerStatsBar.textContent = "";
   queueList.innerHTML = "";
   const entries = getFilteredSortedHistory();
   if (entries.length === 0) {
@@ -504,8 +582,10 @@ function playCompletionPing() {
 
 const ledgerFilterInput = el("ledger-filter");
 const ledgerAudioFilterBtn = el("ledger-audio-filter-btn");
+const ledgerHideCompletedBtn = el("ledger-hide-completed-btn");
 const ledgerSortSelect = el("ledger-sort");
 const ledgerSortDirBtn = el("ledger-sort-dir");
+const ledgerStatsBar = el("ledger-stats-bar");
 
 ledgerFilterInput.addEventListener("input", () => {
   state.filterText = ledgerFilterInput.value;
@@ -515,6 +595,12 @@ ledgerFilterInput.addEventListener("input", () => {
 ledgerAudioFilterBtn.addEventListener("click", () => {
   state.audioOnlyFilter = !state.audioOnlyFilter;
   ledgerAudioFilterBtn.classList.toggle("active", state.audioOnlyFilter);
+  renderLedger();
+});
+
+ledgerHideCompletedBtn.addEventListener("click", () => {
+  state.hideCompletedFilter = !state.hideCompletedFilter;
+  ledgerHideCompletedBtn.classList.toggle("active", state.hideCompletedFilter);
   renderLedger();
 });
 
@@ -529,11 +615,194 @@ ledgerSortDirBtn.addEventListener("click", () => {
   renderLedger();
 });
 
+// ── Multi-select ──────────────────────────────────────────────
+// Selection lives as a Set of filenames on state, independent of any
+// particular card's DOM node - buildJobCard just reflects it (checked
+// state + .selected class) each time a card is (re)built, and the
+// checkbox itself is always present in the DOM, shown/hidden purely via
+// the .selection-mode class on queueList. That keeps toggling selection
+// mode itself cheap (no re-render needed) while still surviving a full
+// renderLedger() (e.g. from a websocket update) without losing state.
+const selectModeBtn = el("select-mode-btn");
+const selectionActionBar = el("selection-action-bar");
+const selectionCountLabel = el("selection-count");
+const selectionSelectAllBtn = el("selection-select-all-btn");
+const selectionClearBtn = el("selection-clear-btn");
+const selectionMoveBtn = el("selection-move-btn");
+const selectionDeleteBtn = el("selection-delete-btn");
+
+function isSelectable(job) {
+  // Mirrors the single-item options menu's own gating: deleting or
+  // moving a file that's still being written to would corrupt that
+  // job's in-flight state, so downloading items simply aren't
+  // selectable in the first place.
+  return job.status !== "DOWNLOADING";
+}
+
+function updateSelectionBar() {
+  const count = state.selectedFilenames.size;
+  selectionCountLabel.textContent = count === 1 ? "1 selected" : `${count} selected`;
+  selectionMoveBtn.disabled = count === 0;
+  selectionDeleteBtn.disabled = count === 0;
+}
+
+function setCardSelectedVisual(filename, selected) {
+  const card = queueList.querySelector(`.job-card[data-filename="${cssEscape(filename)}"]`);
+  if (!card) return;
+  card.classList.toggle("selected", selected);
+  const checkbox = card.querySelector(".job-card-checkbox");
+  if (checkbox) checkbox.checked = selected;
+}
+
+function toggleSelection(filename) {
+  if (state.selectedFilenames.has(filename)) {
+    state.selectedFilenames.delete(filename);
+    setCardSelectedVisual(filename, false);
+  } else {
+    state.selectedFilenames.add(filename);
+    setCardSelectedVisual(filename, true);
+  }
+  updateSelectionBar();
+}
+
+function enterSelectionMode() {
+  state.selectionMode = true;
+  selectModeBtn.classList.add("active");
+  selectModeBtn.textContent = "Cancel Select";
+  queueList.classList.add("selection-mode");
+  selectionActionBar.classList.remove("hidden");
+  updateSelectionBar();
+}
+
+function exitSelectionMode() {
+  if (!state.selectionMode && state.selectedFilenames.size === 0) return;
+  state.selectionMode = false;
+  state.selectedFilenames.clear();
+  selectModeBtn.classList.remove("active");
+  selectModeBtn.textContent = "Select";
+  queueList.classList.remove("selection-mode");
+  selectionActionBar.classList.add("hidden");
+  for (const card of queueList.querySelectorAll(".job-card.selected")) {
+    card.classList.remove("selected");
+  }
+}
+
+selectModeBtn.addEventListener("click", () => {
+  if (state.selectionMode) exitSelectionMode();
+  else enterSelectionMode();
+});
+
+selectionSelectAllBtn.addEventListener("click", () => {
+  for (const job of getFilteredSortedJobs()) {
+    if (isSelectable(job) && !state.selectedFilenames.has(job.filename)) {
+      state.selectedFilenames.add(job.filename);
+      setCardSelectedVisual(job.filename, true);
+    }
+  }
+  updateSelectionBar();
+});
+
+selectionClearBtn.addEventListener("click", () => {
+  for (const filename of state.selectedFilenames) setCardSelectedVisual(filename, false);
+  state.selectedFilenames.clear();
+  updateSelectionBar();
+});
+
+selectionDeleteBtn.addEventListener("click", async () => {
+  const filenames = Array.from(state.selectedFilenames);
+  if (filenames.length === 0) return;
+  if (!window.confirm(
+    `Delete ${filenames.length} file(s)?\n\nThis removes them from disk and can't be undone.`
+  )) return;
+
+  try {
+    const res = await fetch("/api/jobs/delete-batch", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ filenames }),
+    });
+    const data = await res.json();
+    for (const filename of data.deleted || []) state.jobs.delete(filename);
+    state.selectedFilenames.clear();
+    renderLedger();
+    updateSelectionBar();
+    if (data.skipped && data.skipped.length > 0) {
+      window.alert(
+        `Deleted ${data.deleted.length} file(s).\n\n` +
+        `${data.skipped.length} skipped (still downloading):\n` +
+        data.skipped.join("\n")
+      );
+    } else {
+      flashStatus(`Deleted ${data.deleted.length} file(s).`);
+    }
+  } catch (e) {
+    window.alert("Couldn't reach the server to delete those files.");
+  }
+});
+
+selectionMoveBtn.addEventListener("click", async () => {
+  const filenames = Array.from(state.selectedFilenames);
+  if (filenames.length === 0) return;
+  const targetPath = ctxTargetDir.title || "";
+  if (!targetPath) {
+    window.alert("Set a target folder first (right-click the logo \u2192 Change Target Folder...).");
+    return;
+  }
+  if (!window.confirm(`Move ${filenames.length} file(s) to:\n${targetPath}\n\nThis can't be undone.`)) {
+    return;
+  }
+
+  try {
+    const res = await fetch("/api/jobs/move-selected-to-target", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ filenames }),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      window.alert(`Couldn't move files:\n${data.error || "Unknown error"}`);
+      return;
+    }
+    loadJobsIntoMap(data.jobs);
+    renderLedger();
+
+    const movedNames = [...data.moved];
+    const failed = [...data.failed];
+
+    // Same as move-all-btn: files with a re-encoded twin weren't
+    // touched yet - walk them one at a time so each gets its own
+    // Original/Re-encoded/Cancel prompt.
+    for (const info of data.pending_decisions || []) {
+      const choice = await promptReencodeChoice(info);
+      if (!choice) continue; // cancelled - leave it in the ledger
+      const result = await requestMoveToTarget(info.filename, choice);
+      if (result === "moved") {
+        state.jobs.delete(info.filename);
+        movedNames.push(info.filename);
+      } else if (result === "error") {
+        failed.push({ filename: info.filename, error: "Move failed - see alert." });
+      }
+    }
+
+    state.selectedFilenames.clear();
+    renderLedger();
+    updateSelectionBar();
+
+    let message = `Moved ${movedNames.length} item(s) to target.`;
+    if (failed.length > 0) {
+      message += `\n\n${failed.length} failed:\n` +
+        failed.map((f) => `- ${f.filename}: ${f.error}`).join("\n");
+    }
+    window.alert(message);
+  } catch (e) {
+    window.alert("Couldn't reach the server to move those files.");
+  }
+});
+
 function buildJobCard(job) {
   const card = document.createElement("div");
-  card.className = "job-card";
+  card.className = "job-card job-card-row";
   card.dataset.filename = job.filename;
   if (job.is_audio) card.classList.add("audio");
+  if (state.selectedFilenames.has(job.filename)) card.classList.add("selected");
 
   const thumb = document.createElement("div");
   thumb.className = "job-thumb";
@@ -558,10 +827,30 @@ function buildJobCard(job) {
     }, { once: true });
     thumb.appendChild(thumbImg);
   }
-  card.appendChild(thumb);
+  const thumbWrap = document.createElement("div");
+  thumbWrap.className = "job-thumb-wrap";
+  thumbWrap.appendChild(thumb);
+
+  if (isSelectable(job)) {
+    const checkbox = document.createElement("input");
+    checkbox.type = "checkbox";
+    checkbox.className = "job-card-checkbox";
+    checkbox.checked = state.selectedFilenames.has(job.filename);
+    checkbox.setAttribute("aria-label", `Select ${job.filename}`);
+    checkbox.addEventListener("click", (e) => {
+      e.stopPropagation();
+      toggleSelection(job.filename);
+    });
+    thumbWrap.appendChild(checkbox);
+  }
+
+  card.appendChild(thumbWrap);
 
   const body = document.createElement("div");
-  body.className = "job-card-body";
+  body.className = "job-card-body job-card-body-wide";
+
+  const titlePathCol = document.createElement("div");
+  titlePathCol.className = "job-title-path-col";
 
   const titleRow = document.createElement("div");
   titleRow.className = "job-title-row";
@@ -582,29 +871,85 @@ function buildJobCard(job) {
     pill.textContent = "RE-ENCODED";
     titleRow.appendChild(pill);
   }
-  body.appendChild(titleRow);
+  titlePathCol.appendChild(titleRow);
 
-  const filePath = joinDisplayPath(state.saveDirPath, job.filename, job.ext);
+  const folderPath = state.saveDirPath || "";
+  const fullFilePath = joinDisplayPath(state.saveDirPath, job.filename, job.ext);
   const pathEl = document.createElement("div");
   pathEl.className = "job-path";
-  pathEl.textContent = filePath;
-  pathEl.title = filePath;
-  body.appendChild(pathEl);
+  pathEl.textContent = folderPath || "(unknown folder)";
+  pathEl.title = fullFilePath;
+  titlePathCol.appendChild(pathEl);
+
+  body.appendChild(titlePathCol);
 
   const status = job.status;
-  if (status === "DOWNLOADING") {
+  const isDownloadingCard = status === "DOWNLOADING";
+  const isDoneCard = status === "DONE";
+
+  // Quick-action icons - the same four operations available from the
+  // card's options menu (copy link, copy filename, rename, move to
+  // target), surfaced directly on the card so they're one tap away.
+  // Gating mirrors openJobMenu: copy actions work at any status, rename
+  // needs the download to be finished writing, and move-to-target needs
+  // a completed file to actually move. On wide desktop layouts they sit
+  // as a visible column at the end of the row (there's width to spare);
+  // the mobile media query hides this column entirely since the tap
+  // options menu already covers the same four actions there.
+  function makeCardIconBtn(iconClass, title, onClick) {
+    const btn = document.createElement("button");
+    btn.className = "job-mini-btn";
+    btn.title = title;
+    btn.setAttribute("aria-label", title);
+    const icon = document.createElement("i");
+    icon.className = `ti ti-${iconClass}`;
+    icon.setAttribute("aria-hidden", "true");
+    btn.appendChild(icon);
+    btn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      onClick();
+    });
+    return btn;
+  }
+
+  const cardIconBtns = [
+    makeCardIconBtn("external-link", "Copy URL", () => copyJobLink(job.filename, job.url)),
+    makeCardIconBtn("file-text", "Copy file name", () => copyJobFilename(job.filename)),
+  ];
+  if (!isDownloadingCard) {
+    cardIconBtns.push(makeCardIconBtn("forms", "Rename", () => renameJobPrompt(job.filename)));
+  }
+  if (isDoneCard) {
+    cardIconBtns.push(makeCardIconBtn("arrow-right", "Move to target folder", () => moveJobToTarget(job.filename)));
+  }
+  if (status === "ERROR" || status === "CANCELLED") {
+    cardIconBtns.push(makeCardIconBtn("refresh", "Retry", () => retryJob(job.filename)));
+  }
+  const cardIcons = document.createElement("div");
+  cardIcons.className = "job-card-icons";
+  cardIconBtns.forEach((btn) => cardIcons.appendChild(btn));
+
+  // Footer row - meta/size text (when present) plus the icon group,
+  // on their own line below the title/path so the icons no longer
+  // share the title's line and eat into its available width.
+  const footer = document.createElement("div");
+  footer.className = "job-card-footer";
+
+  if (isDownloadingCard) {
     const stats = document.createElement("div");
     stats.className = "job-stats";
     stats.textContent = "Initializing metrics...";
-    body.appendChild(stats);
+    titlePathCol.appendChild(stats);
 
     const track = document.createElement("div");
     track.className = "job-progress-track";
     const fill = document.createElement("div");
     fill.className = "job-progress-fill";
     track.appendChild(fill);
-    body.appendChild(track);
+    titlePathCol.appendChild(track);
 
+    footer.appendChild(cardIcons);
+    body.appendChild(footer);
     card.appendChild(body);
     updateProgressDOM(card, job);
   } else {
@@ -627,22 +972,12 @@ function buildJobCard(job) {
         const meta = document.createElement("div");
         meta.className = "job-size";
         meta.textContent = metaParts.join("  •  ");
-        body.appendChild(meta);
+        footer.appendChild(meta);
       }
     }
+    footer.appendChild(cardIcons);
+    body.appendChild(footer);
     card.appendChild(body);
-
-    if (status === "ERROR" || status === "CANCELLED") {
-      const actions = document.createElement("div");
-      actions.className = "job-card-actions";
-      const retryBtn = document.createElement("button");
-      retryBtn.className = "job-mini-btn";
-      retryBtn.title = "Retry";
-      retryBtn.textContent = "↻";
-      retryBtn.addEventListener("click", (e) => { e.stopPropagation(); retryJob(job.filename); });
-      actions.appendChild(retryBtn);
-      card.appendChild(actions);
-    }
   }
 
   // Clicking the thumbnail itself starts playback directly (for
@@ -651,6 +986,12 @@ function buildJobCard(job) {
   // so a thumbnail click there just falls through to the same menu
   // behavior as the rest of the card.
   thumb.addEventListener("click", (e) => {
+    if (state.selectionMode) {
+      if (!isSelectable(job)) return;
+      e.stopPropagation();
+      toggleSelection(job.filename);
+      return;
+    }
     if (job.status === "DONE") {
       e.stopPropagation();
       openMediaModal(job.filename, job.is_audio);
@@ -659,6 +1000,11 @@ function buildJobCard(job) {
 
   card.addEventListener("click", (e) => {
     e.stopPropagation();
+    if (state.selectionMode) {
+      if (!isSelectable(job)) return;
+      toggleSelection(job.filename);
+      return;
+    }
     openJobMenu(e.clientX, e.clientY, job);
   });
 
@@ -804,6 +1150,11 @@ function openJobMenu(x, y, job) {
   el("ctx-play-video").classList.toggle("hidden", !isVideo);
   el("ctx-play-audio").classList.toggle("hidden", !isAudioDone);
   el("ctx-extract-audio").classList.toggle("hidden", !isVideo);
+  // Jumps straight into the encode setup modal with this file
+  // preselected as the source - only makes sense for a completed,
+  // non-audio download since that's all the encoder can take as input
+  // (mirrors the /api/encode/sources gating).
+  el("ctx-reencode-file").classList.toggle("hidden", !isVideo);
   // Shown for any completed item (video or audio) once at least one
   // external program is configured; enabled/disabled state (local vs
   // remote) is applied once at boot via applyLocalOnlyUI.
@@ -888,6 +1239,13 @@ el("ctx-extract-audio").addEventListener("click", async () => {
   } catch (e) {
     window.alert("Couldn't reach the server to extract audio.");
   }
+});
+
+el("ctx-reencode-file").addEventListener("click", () => {
+  const filename = jobMenu.dataset.filename;
+  closeMenus();
+  setAppModeEncode();
+  openNewEncodeJobModal(filename);
 });
 
 el("ctx-open-with").addEventListener("click", () => {
@@ -1144,9 +1502,9 @@ el("ctx-delete-file").addEventListener("click", async () => {
   }
 });
 
-el("ctx-rename-file").addEventListener("click", async () => {
-  const filename = jobMenu.dataset.filename;
-  closeMenus();
+// The four functions below back both the card's options-menu items and
+// its quick-action icon row, so the two entry points can't drift apart.
+async function renameJobPrompt(filename) {
   const proposed = window.prompt("Rename to:", filename);
   if (proposed === null) return;
   const trimmed = proposed.trim();
@@ -1167,14 +1525,49 @@ el("ctx-rename-file").addEventListener("click", async () => {
   } catch (e) {
     window.alert("Couldn't reach the server to rename that file.");
   }
-});
+}
 
-el("ctx-copy-link").addEventListener("click", async () => {
-  const filename = jobMenu.dataset.filename;
-  const directUrl = jobMenu.dataset.url || "";
-  closeMenus();
+// navigator.clipboard.writeText() only works on https:// or localhost -
+// browsers gate it purely by URL scheme, so a plain-http Tailscale address
+// (even though Tailscale itself encrypts the connection) gets refused,
+// especially on mobile Safari/Chrome. Fall back to the older execCommand
+// copy trick, and as a last resort a prompt() the user can manually
+// select-and-copy from. Returns true if a real clipboard write succeeded
+// (only then do we claim "copied" - the other paths tell the user what
+// happened instead of overpromising).
+async function copyTextToClipboard(text) {
+  if (navigator.clipboard && window.isSecureContext) {
+    try {
+      await navigator.clipboard.writeText(text);
+      return true;
+    } catch (e) {
+      // fall through to the legacy path below
+    }
+  }
+
   try {
-    let urlToCopy = directUrl;
+    const textarea = document.createElement("textarea");
+    textarea.value = text;
+    textarea.style.position = "fixed";
+    textarea.style.top = "-1000px";
+    textarea.style.opacity = "0";
+    document.body.appendChild(textarea);
+    textarea.focus();
+    textarea.select();
+    const ok = document.execCommand("copy");
+    textarea.remove();
+    if (ok) return true;
+  } catch (e) {
+    // fall through to the manual prompt below
+  }
+
+  window.prompt("Couldn't copy automatically - select and copy manually:", text);
+  return false;
+}
+
+async function copyJobLink(filename, directUrl) {
+  try {
+    let urlToCopy = directUrl || "";
     if (!urlToCopy) {
       // Fallback for ledger entries with no recorded url (e.g. a file
       // picked up straight off disk with no queue record) - only the
@@ -1188,46 +1581,112 @@ el("ctx-copy-link").addEventListener("click", async () => {
       urlToCopy = data.url || "";
     }
     if (urlToCopy) {
-      await navigator.clipboard.writeText(urlToCopy);
-      flashStatus("Link copied to clipboard.");
+      const copied = await copyTextToClipboard(urlToCopy);
+      if (copied) flashStatus("Link copied to clipboard.");
     } else {
       flashStatus("No link found for this file.");
     }
   } catch (e) {
     flashStatus("Couldn't copy the link.");
   }
-});
+}
 
-el("ctx-copy-filename").addEventListener("click", async () => {
-  const filename = jobMenu.dataset.filename;
-  closeMenus();
+async function copyJobFilename(filename) {
   try {
-    await navigator.clipboard.writeText(filename);
-    flashStatus(`Copied name: ${filename}`);
+    const copied = await copyTextToClipboard(filename);
+    if (copied) flashStatus(`Copied name: ${filename}`);
   } catch (e) {
     flashStatus("Couldn't copy the file name.");
   }
-});
+}
 
-el("ctx-move-to-target").addEventListener("click", async () => {
-  const filename = jobMenu.dataset.filename;
-  closeMenus();
+// Shows the Transfer Original / Transfer Re-encoded / Cancel prompt and
+// resolves with "original", "reencoded", or null (cancelled).
+function promptReencodeChoice(info) {
+  return new Promise((resolve) => {
+    reencodeChoiceFilename.textContent = info.filename;
+    reencodeChoiceOriginalSize.textContent = info.original.size_label || "Unknown size";
+    reencodeChoiceOriginalRes.textContent = info.original.width && info.original.height
+      ? `${info.original.width}\u00d7${info.original.height}` : "";
+    reencodeChoiceReencodedSize.textContent = info.reencoded.size_label || "Unknown size";
+    reencodeChoiceReencodedRes.textContent = info.reencoded.width && info.reencoded.height
+      ? `${info.reencoded.width}\u00d7${info.reencoded.height}` : "";
+
+    const cleanup = (result) => {
+      reencodeChoiceModal.classList.add("hidden");
+      reencodeChoiceCancelBtn.removeEventListener("click", onCancel);
+      reencodeChoiceOriginalBtn.removeEventListener("click", onOriginal);
+      reencodeChoiceReencodedBtn.removeEventListener("click", onReencoded);
+      resolve(result);
+    };
+    const onCancel = () => cleanup(null);
+    const onOriginal = () => cleanup("original");
+    const onReencoded = () => cleanup("reencoded");
+
+    reencodeChoiceCancelBtn.addEventListener("click", onCancel);
+    reencodeChoiceOriginalBtn.addEventListener("click", onOriginal);
+    reencodeChoiceReencodedBtn.addEventListener("click", onReencoded);
+    reencodeChoiceModal.classList.remove("hidden");
+  });
+}
+
+// Posts the actual move request. Returns "moved", "cancelled", or
+// "error" (in which case an alert has already been shown).
+async function requestMoveToTarget(filename, variant) {
   try {
     const res = await fetch("/api/jobs/move-to-target", {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ filename }),
+      body: JSON.stringify(variant ? { filename, variant } : { filename }),
     });
     const data = await res.json();
+    if (res.status === 409 && data.needs_decision) {
+      const choice = await promptReencodeChoice(data);
+      if (!choice) return "cancelled";
+      return requestMoveToTarget(filename, choice);
+    }
     if (!res.ok) {
       window.alert(`Couldn't move "${filename}":\n${data.error || "Unknown error"}`);
-      return;
+      return "error";
     }
+    return "moved";
+  } catch (e) {
+    window.alert("Couldn't reach the server to move that file.");
+    return "error";
+  }
+}
+
+async function moveJobToTarget(filename) {
+  const result = await requestMoveToTarget(filename, null);
+  if (result === "moved") {
     state.jobs.delete(filename);
     renderLedger();
     flashStatus(`Moved to target: ${filename}`);
-  } catch (e) {
-    window.alert("Couldn't reach the server to move that file.");
   }
+}
+
+el("ctx-rename-file").addEventListener("click", () => {
+  const filename = jobMenu.dataset.filename;
+  closeMenus();
+  renameJobPrompt(filename);
+});
+
+el("ctx-copy-link").addEventListener("click", () => {
+  const filename = jobMenu.dataset.filename;
+  const directUrl = jobMenu.dataset.url || "";
+  closeMenus();
+  copyJobLink(filename, directUrl);
+});
+
+el("ctx-copy-filename").addEventListener("click", () => {
+  const filename = jobMenu.dataset.filename;
+  closeMenus();
+  copyJobFilename(filename);
+});
+
+el("ctx-move-to-target").addEventListener("click", () => {
+  const filename = jobMenu.dataset.filename;
+  closeMenus();
+  moveJobToTarget(filename);
 });
 
 el("ctx-open-folder").addEventListener("click", async () => {
@@ -1253,8 +1712,8 @@ el("ctx-history-copy-link").addEventListener("click", async () => {
   closeMenus();
   if (!url) { flashStatus("No link recorded for this entry."); return; }
   try {
-    await navigator.clipboard.writeText(url);
-    flashStatus("Link copied to clipboard.");
+    const copied = await copyTextToClipboard(url);
+    if (copied) flashStatus("Link copied to clipboard.");
   } catch (e) {
     flashStatus("Couldn't copy the link.");
   }
@@ -1264,8 +1723,8 @@ el("ctx-history-copy-name").addEventListener("click", async () => {
   const filename = historyMenu.dataset.filename || "";
   closeMenus();
   try {
-    await navigator.clipboard.writeText(filename);
-    flashStatus(`Copied name: ${filename}`);
+    const copied = await copyTextToClipboard(filename);
+    if (copied) flashStatus(`Copied name: ${filename}`);
   } catch (e) {
     flashStatus("Couldn't copy the file name.");
   }
@@ -1360,6 +1819,7 @@ document.addEventListener("click", (e) => {
 el("ctx-tag-toggle").addEventListener("click", () => {
   state.tagDomain = !state.tagDomain;
   el("ctx-tag-toggle").querySelector(".ctx-check").textContent = state.tagDomain ? "✓" : "";
+  saveDownloadPrefs();
 });
 
 el("ctx-m3u-toggle").addEventListener("click", () => {
@@ -1368,6 +1828,7 @@ el("ctx-m3u-toggle").addEventListener("click", () => {
   if (state.m3uSniffer) {
     inputField.placeholder = "Paste a link, then press ENTER...";
   }
+  saveDownloadPrefs();
 });
 
 el("ctx-restart-app").addEventListener("click", async () => {
@@ -1748,6 +2209,7 @@ const targetFolderModal = createFolderModalController({
 });
 
 resDropdown.addEventListener("click", (e) => e.stopPropagation());
+resDropdown.addEventListener("change", saveDownloadPrefs);
 
 // ── Mode buttons (Download / Search History / Encode) ───────────
 function setAppModeDownload() {
@@ -1758,6 +2220,7 @@ function setAppModeDownload() {
 
 function setAppModeSearchHistory() {
   setView("downloads");
+  exitSelectionMode();
   state.appMode = "SEARCH_HISTORY";
   inputField.disabled = false;
   inputField.value = "";
@@ -1772,13 +2235,19 @@ function setView(view) {
   if (state.currentView === view) return;
   state.currentView = view;
   const isEncode = view === "encode";
+  if (isEncode) exitSelectionMode();
   el("download-view").classList.toggle("hidden", isEncode);
   el("encode-view").classList.toggle("hidden", !isEncode);
   if (isEncode) {
     inputField.disabled = true;
     inputField.value = "";
     inputField.placeholder = "Switch to Download or Search History mode to paste a URL";
-    if (state.encodeSources.length === 0) refreshEncodeSources();
+    // Always rescan the download folder when showing the Encode Manager,
+    // not just when the source list happens to be empty - otherwise a
+    // file pasted in manually while looking at another view stays
+    // invisible (and un-probed) until "New Encode Job" is opened, which
+    // separately does this same refresh.
+    refreshDownloadLedger().then(refreshEncodeSources);
   } else {
     inputField.disabled = false;
   }
@@ -1807,6 +2276,7 @@ function updateModeButtons() {
 function enterHistoryModeUI() {
   el("control-bar").classList.add("hidden");
   ledgerAudioFilterBtn.classList.add("hidden");
+  ledgerHideCompletedBtn.classList.add("hidden");
   const sizeOption = ledgerSortSelect.querySelector('option[value="size"]');
   if (sizeOption) sizeOption.disabled = true;
   if (state.sortField === "size") {
@@ -1818,6 +2288,7 @@ function enterHistoryModeUI() {
 function exitHistoryModeUI() {
   el("control-bar").classList.remove("hidden");
   ledgerAudioFilterBtn.classList.remove("hidden");
+  ledgerHideCompletedBtn.classList.remove("hidden");
   const sizeOption = ledgerSortSelect.querySelector('option[value="size"]');
   if (sizeOption) sizeOption.disabled = false;
 }
@@ -1972,10 +2443,29 @@ el("move-all-btn").addEventListener("click", async () => {
     }
     loadJobsIntoMap(data.jobs);
     renderLedger();
-    let message = `Moved ${data.moved.length} item(s) to target.`;
-    if (data.failed && data.failed.length > 0) {
-      message += `\n\n${data.failed.length} failed:\n` +
-        data.failed.map((f) => `- ${f.filename}: ${f.error}`).join("\n");
+
+    const movedNames = [...data.moved];
+    const failed = [...data.failed];
+
+    // Files with a re-encoded twin weren't touched yet - walk them one
+    // at a time so each gets its own Original/Re-encoded/Cancel prompt.
+    for (const info of data.pending_decisions || []) {
+      const choice = await promptReencodeChoice(info);
+      if (!choice) continue; // cancelled - leave it in the ledger
+      const result = await requestMoveToTarget(info.filename, choice);
+      if (result === "moved") {
+        state.jobs.delete(info.filename);
+        movedNames.push(info.filename);
+      } else if (result === "error") {
+        failed.push({ filename: info.filename, error: "Move failed - see alert." });
+      }
+    }
+    renderLedger();
+
+    let message = `Moved ${movedNames.length} item(s) to target.`;
+    if (failed.length > 0) {
+      message += `\n\n${failed.length} failed:\n` +
+        failed.map((f) => `- ${f.filename}: ${f.error}`).join("\n");
     }
     window.alert(message);
   } catch (e) {
@@ -2025,6 +2515,36 @@ async function handleEnterPipeline() {
       } catch (e) { /* job_added will simply never arrive */ }
       resetToReady();
     }
+  }
+}
+
+// Triggered when a normal download fails server-side: the failed job is
+// pulled from the ledger before the user ever sees an ERROR card, and
+// the input box is hijacked to run the same M3U sniffing flow a manual
+// "Find Link Mode" submission would - message, sniff, then the fetched
+// stream's suggested name is staged in the input box for the user to
+// review/edit before pressing Enter to start the download.
+async function beginM3uRetryPipeline(url, resCap, originalPastedUrl) {
+  state.targetUrl = originalPastedUrl || url;
+  state.current = "INTERCEPTING";
+  inputField.disabled = true;
+  modeContainer.style.pointerEvents = "none";
+  inputField.value = "yt-dlp failed to download, trying M3U sniffing method...";
+  try {
+    const res = await fetch("/api/find-link", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ url, tag_domain: state.tagDomain }),
+    });
+    if (!res.ok) {
+      const err = await res.json();
+      handleInterceptionFailure(err.error || "Unknown error");
+      return;
+    }
+    const data = await res.json();
+    if (resCap) resDropdown.value = resCap;
+    handleIntercepted(data.stream_url, data.suggested_title);
+  } catch (e) {
+    handleInterceptionFailure(String(e));
   }
 }
 
@@ -2603,7 +3123,7 @@ async function openEncodeJobFolder(id) {
   }
 }
 
-newEncodeJobBtn.addEventListener("click", openNewEncodeJobModal);
+newEncodeJobBtn.addEventListener("click", () => openNewEncodeJobModal());
 openConvertedBtn.addEventListener("click", async () => {
   try {
     const res = await fetch("/api/encode/open-converted-folder", { method: "POST" });
@@ -2801,6 +3321,11 @@ encodeSourceBrowsePath.addEventListener("change", probeSelectedSource);
 async function probeSelectedSource() {
   const body = currentSourceRequestBody();
   if (!body) return;
+  // Guard against out-of-order responses: if the user switches from a
+  // slow-to-probe file (e.g. a large newly-pasted one) to another file
+  // before the first probe returns, an older response arriving after a
+  // newer one must not overwrite the display with the wrong file's info.
+  const mySeq = ++state.encodeProbeSeq;
   encodeSourceInfo.textContent = "Probing source file...";
   try {
     const res = await fetch("/api/encode/probe", {
@@ -2808,6 +3333,7 @@ async function probeSelectedSource() {
       body: JSON.stringify(body),
     });
     const data = await res.json();
+    if (mySeq !== state.encodeProbeSeq) return; // superseded by a newer selection
     if (!res.ok) {
       state.encodeSourceInfo = null;
       encodeSourceInfo.textContent = data.error || "Couldn't read that file.";
@@ -2821,6 +3347,7 @@ async function probeSelectedSource() {
     applyActiveAspectRatio();
     requestEncodeEstimate();
   } catch (e) {
+    if (mySeq !== state.encodeProbeSeq) return; // superseded by a newer selection
     state.encodeSourceInfo = null;
     encodeSourceInfo.textContent = "Couldn't reach the server to probe that file.";
   }
@@ -2857,11 +3384,19 @@ function requestEncodeEstimate() {
   encodeEstimateTimer = setTimeout(doRequestEncodeEstimate, 250);
 }
 
-encodeEstimateRefreshBtn.addEventListener("click", () => {
+encodeEstimateRefreshBtn.addEventListener("click", async () => {
   clearTimeout(encodeEstimateTimer);
   encodeEstimateRefreshBtn.classList.remove("spinning");
   void encodeEstimateRefreshBtn.offsetWidth; // restart animation if clicked repeatedly
   encodeEstimateRefreshBtn.classList.add("spinning");
+  // If a previous probe failed or never landed (e.g. a manually-pasted
+  // file that was still being copied when it was first selected),
+  // state.encodeSourceInfo is null and doRequestEncodeEstimate() would
+  // silently no-op below - leaving the estimate stuck with no visible
+  // feedback even though the user just pressed Refresh. Re-probe the
+  // source first so a since-completed copy (or any other transient
+  // failure) gets picked up instead of refusing to update forever.
+  if (!state.encodeSourceInfo) await probeSelectedSource();
   doRequestEncodeEstimate();
 });
 
@@ -2886,7 +3421,7 @@ async function doRequestEncodeEstimate() {
   }
 }
 
-async function openNewEncodeJobModal() {
+async function openNewEncodeJobModal(preselectFilename) {
   encodeJobError.classList.add("hidden");
   if (!state.encodeCapabilities) await loadEncodeCapabilities();
   // Check the download folder for anything new (manually dropped files,
@@ -2895,6 +3430,13 @@ async function openNewEncodeJobModal() {
   await refreshEncodeSources();
 
   populateEncodeSourceSelect();
+  // Re-encode... from a ledger card's menu arrives here with that
+  // file's name - select it if it's actually a valid candidate (it
+  // will be, since the gating that shows that menu item matches
+  // /api/encode/sources' own filter).
+  if (preselectFilename && Array.from(encodeSourceSelect.options).some((o) => o.value === preselectFilename)) {
+    encodeSourceSelect.value = preselectFilename;
+  }
   populateEncodeCodecSelect();
   populateEncodeResolutionSelect();
   populateAspectQuickRow();

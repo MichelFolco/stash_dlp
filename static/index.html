@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Stash DLP Manager</title>
 <link rel="icon" type="image/png" href="/static/favicon.png">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/tabler-icons/3.44.0/tabler-icons.min.css">
 <link rel="stylesheet" href="/static/styles.css">
 </head>
 <body>
@@ -36,12 +37,22 @@
     <div id="control-bar" class="control-bar">
       <button id="refresh-btn" class="btn">Refresh</button>
       <button id="move-all-btn" class="btn">Move All to Target</button>
+      <button id="select-mode-btn" class="btn">Select</button>
+    </div>
+
+    <div id="selection-action-bar" class="selection-action-bar hidden">
+      <span id="selection-count" class="selection-count">0 selected</span>
+      <button id="selection-select-all-btn" class="btn">Select All</button>
+      <button id="selection-clear-btn" class="btn">Clear</button>
+      <button id="selection-move-btn" class="btn" disabled>Move to Target</button>
+      <button id="selection-delete-btn" class="btn btn-danger" disabled>Delete</button>
     </div>
 
     <div id="ledger-toolbar" class="ledger-toolbar">
       <input id="ledger-filter" class="ledger-filter-input" type="text"
              placeholder="Filter by name..." autocomplete="off" spellcheck="false">
       <button id="ledger-audio-filter-btn" class="icon-btn" title="Show audio-only downloads">🎵</button>
+      <button id="ledger-hide-completed-btn" class="icon-btn" title="Hide completed downloads">✅</button>
       <select id="ledger-sort" class="ledger-sort-select">
         <option value="added">Date Added</option>
         <option value="size">File Size</option>
@@ -49,6 +60,7 @@
       </select>
       <button id="ledger-sort-dir" class="icon-btn" title="Toggle sort direction">↓</button>
     </div>
+    <div id="ledger-stats-bar" class="ledger-stats-bar"></div>
 
     <div id="queue-list" class="queue-list"></div>
   </div>
@@ -141,6 +153,7 @@
   <div id="ctx-play-video" class="ctx-item hidden">Play Video</div>
   <div id="ctx-play-audio" class="ctx-item hidden">Play Audio</div>
   <div id="ctx-extract-audio" class="ctx-item hidden">Extract Audio</div>
+  <div id="ctx-reencode-file" class="ctx-item hidden">Re-encode...</div>
   <div id="ctx-open-with" class="ctx-item hidden">Open With...</div>
   <div class="ctx-separator"></div>
   <div id="ctx-copy-submenu" class="ctx-item ctx-item-submenu hidden">
@@ -267,6 +280,30 @@
     <div class="modal-actions">
       <button id="target-folder-cancel-btn" class="btn">Cancel</button>
       <button id="target-folder-set-btn" class="btn btn-primary">Set Folder</button>
+    </div>
+  </div>
+</div>
+
+<div id="reencode-choice-modal" class="modal-overlay hidden">
+  <div class="modal-box">
+    <div class="modal-title">Re-encoded version found</div>
+    <div id="reencode-choice-filename" class="reencode-choice-filename"></div>
+    <div class="reencode-choice-cards">
+      <div class="reencode-choice-card">
+        <div class="reencode-choice-card-label">Original</div>
+        <div id="reencode-choice-original-size" class="reencode-choice-card-value"></div>
+        <div id="reencode-choice-original-res" class="reencode-choice-card-value reencode-choice-card-res"></div>
+      </div>
+      <div class="reencode-choice-card">
+        <div class="reencode-choice-card-label">Re-encoded</div>
+        <div id="reencode-choice-reencoded-size" class="reencode-choice-card-value"></div>
+        <div id="reencode-choice-reencoded-res" class="reencode-choice-card-value reencode-choice-card-res"></div>
+      </div>
+    </div>
+    <div class="modal-actions reencode-choice-actions">
+      <button id="reencode-choice-cancel-btn" class="btn">Cancel Transfer</button>
+      <button id="reencode-choice-original-btn" class="btn btn-primary">Transfer Original</button>
+      <button id="reencode-choice-reencoded-btn" class="btn btn-primary">Transfer Re-encoded</button>
     </div>
   </div>
 </div>

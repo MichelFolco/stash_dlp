@@ -1,8 +1,10 @@
 """Thumbnail resolution for ledger cards.
 
-All thumbnails live in stash_dlp_data/.thumbnails/<filename>.jpg -
-isolated from the actual media files, and named plainly (no ".thumb"
-suffix) since there's no longer a naming collision to worry about.
+All thumbnails live in the current download folder's subfolder under
+the central library_data store (config.LIBRARY_DATA_DIR), under
+.thumbnails/<filename>.jpg - isolated from the actual media files, and
+named plainly (no ".thumb" suffix) since there's no longer a naming
+collision to worry about.
 
 Preference order:
   1. Already present in the thumbnails folder - either yt-dlp's own

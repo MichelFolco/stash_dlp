@@ -39,6 +39,18 @@ html, body {
   gap: 6px;
 }
 
+/* ── Wide desktop layout ───────────────────────────────────────
+   On a roomy desktop viewport the fixed 480px column leaves most
+   of the screen empty and forces the filename/path text into a
+   tight ellipsis. Above 900px we let the app claim about 3/4 of
+   the viewport width instead, and bump the filename font size to
+   match - the touch/mobile media query further down is untouched
+   and still wins on narrow or touch screens regardless of this. */
+@media (min-width: 900px) {
+  .app { max-width: 50vw; }
+  .job-title { font-size: calc(var(--base-font) + 4px); }
+}
+
 /* ── Top input row ─────────────────────────────────────────── */
 .top-row {
   display: flex;
@@ -167,6 +179,41 @@ html, body {
   cursor: pointer;
 }
 .btn:active, .icon-btn:active, .mode-btn:active { background: var(--bg); }
+.btn.active {
+  border-color: var(--accent);
+  background: var(--border);
+  color: var(--accent);
+}
+.btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+.btn:disabled:hover {
+  background: var(--panel);
+  border-color: var(--border);
+}
+
+/* ── Multi-select action bar ───────────────────────────────── */
+.selection-action-bar {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  margin-top: 6px;
+}
+.selection-action-bar.hidden { display: none; }
+.selection-count {
+  font-size: 11px;
+  color: var(--text-dim);
+  flex: 0 0 auto;
+  white-space: nowrap;
+  margin-right: 2px;
+}
+.selection-action-bar .btn {
+  flex: 0 1 auto;
+}
+#selection-delete-btn {
+  margin-right: 0;
+}
 
 /* ── Ledger filter/sort toolbar ────────────────────────────── */
 .ledger-toolbar {
@@ -199,6 +246,17 @@ html, body {
 
 #ledger-sort-dir {
   flex: 0 0 auto;
+}
+
+.ledger-stats-bar {
+  font-size: 11px;
+  color: var(--text-dim);
+  border-top: 1px solid var(--border);
+  padding: 5px 2px 0;
+  margin-top: 6px;
+}
+.ledger-stats-bar:empty {
+  display: none;
 }
 
 /* ── Ledger / queue list ───────────────────────────────────── */
@@ -313,6 +371,23 @@ html, body {
 .job-card-body {
   flex: 1;
   min-width: 0;
+}
+
+.job-card-row { align-items: center; }
+
+.job-card-body-wide {
+  display: flex;
+  flex-direction: column;
+  gap: 2px 0;
+}
+.job-title-path-col {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+.job-card-body-wide .job-size {
+  white-space: nowrap;
+  margin-top: 0;
 }
 
 .job-title {
@@ -827,11 +902,121 @@ html, body {
   color: var(--text-dim);
   cursor: pointer;
   font-size: 11px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
 }
+.job-mini-btn i { font-size: 13px; line-height: 1; }
 .job-mini-btn:hover { border-color: var(--accent); color: var(--accent); }
+
+.job-thumb-wrap {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+  position: relative;
+}
+
+/* Multi-select checkbox - always in the DOM (so toggling selection mode
+   doesn't require rebuilding cards), just hidden until the ledger's
+   parent list carries .selection-mode. Positioned as a small overlay in
+   the corner of the thumbnail rather than taking up its own column, so
+   the rest of the card layout doesn't shift when selection mode toggles. */
+.job-card-checkbox {
+  display: none;
+  position: absolute;
+  top: -6px;
+  left: -6px;
+  width: 20px;
+  height: 20px;
+  z-index: 2;
+  cursor: pointer;
+  accent-color: var(--accent);
+}
+.queue-list.selection-mode .job-card-checkbox {
+  display: block;
+}
+.queue-list.selection-mode .job-card:not(.selection-disabled) {
+  cursor: pointer;
+}
+.job-card.selected {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.job-card-icons {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 6px;
+  align-items: center;
+}
+
+/* ── Ledger card footer row ────────────────────────────────────
+   Houses the size/meta text and the quick-action icons together
+   on their own line below the title/path, instead of the icons
+   sitting up on the title line and stealing its width. */
+.job-card-footer {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 4px;
+}
+.job-card-footer .job-size { margin-top: 0; }
+.job-card-footer .job-card-icons { margin-left: auto; }
 
 /* ── New Encode Job modal ─────────────────────────────────────── */
 .modal-box.wide { max-width: 480px; max-height: 88vh; overflow-y: auto; }
+
+/* ── Re-encode choice modal ────────────────────────────────── */
+.reencode-choice-filename {
+  color: var(--text-dim);
+  font-size: calc(var(--base-font) - 1px);
+  margin-bottom: 12px;
+  word-break: break-word;
+}
+
+.reencode-choice-cards {
+  display: flex;
+  gap: 8px;
+}
+
+.reencode-choice-card {
+  flex: 1;
+  min-width: 0;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 10px;
+  text-align: center;
+}
+
+.reencode-choice-card-label {
+  color: var(--text-dim);
+  font-size: calc(var(--base-font) - 1px);
+  font-weight: bold;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  margin-bottom: 6px;
+}
+
+.reencode-choice-card-value {
+  color: var(--text);
+  font-size: calc(var(--base-font) + 2px);
+  font-weight: bold;
+}
+
+.reencode-choice-card-res {
+  color: var(--text-dim);
+  font-size: var(--base-font);
+  font-weight: normal;
+  margin-top: 2px;
+}
+
+.reencode-choice-actions {
+  flex-wrap: wrap;
+}
 
 .form-field { margin-bottom: 12px; }
 .form-field label {
@@ -967,4 +1152,18 @@ html, body {
 @keyframes est-refresh-spin {
   from { transform: rotate(0deg); }
   to { transform: rotate(360deg); }
+}
+
+/* ── Mobile / touch ledger cards ──────────────────────────────────
+   On a phone there's no hover, so the truncated .job-path (only
+   readable via its title tooltip) and the row of action icons are
+   both effectively unusable/redundant. Everything they offer is
+   already one tap away via the card's own options menu, so on
+   small/touch screens we drop both, enlarge the thumbnail, and bump
+   the title up so the card reads at a glance. */
+@media (max-width: 640px), (pointer: coarse) {
+  .job-thumb { width: 96px; height: 54px; }
+  .job-path { display: none; }
+  .job-card-icons { display: none; }
+  .job-title { font-size: calc(var(--base-font) + 4px); }
 }
