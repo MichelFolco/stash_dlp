@@ -45,4 +45,5 @@
 -Audio plays too early (leads video): Enter a positive number (e.g., 500 delays audio by 500 ms).
 -Audio plays too late (lags video): Enter a negative number (e.g., -500 advances audio by 500 ms).
 Apply Delay button -> ffmpeg reencodes with delay, creates the syched file in converted subfolder, new video is loaded in synch ui player. feedback to user that new vid was loaded.
--user retweaks, Apply again ->  ovewrite previous render.  When user is satisfied, user confirms synch with another button.  The Synchronized pill is applied to the card.  Same logic as re-encodes applies to the transfer to target or rep[lace stash source if applicable.   
+-user retweaks, Apply again ->  ovewrite previous render.  When user is satisfied, user confirms synch with another button.  The Synchronized pill is applied to the card.  Same logic as re-encodes applies to the transfer to target or replace stash source if applicable.   
+[ ]Add Stash section to settings:  API key.
