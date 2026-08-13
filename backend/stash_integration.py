@@ -161,6 +161,7 @@ async def replace_source(manager, filename: str, variant: Optional[str] = None) 
         reencoded_info = await probe_basic_info(converted_path)
         raise NeedsDecisionError({
             "filename": filename,
+            "kind": "synchronized" if job.get("synchronized") else "reencoded",
             "original": {
                 "size_bytes": os.path.getsize(media_path),
                 "size_label": format_file_size(os.path.getsize(media_path)),

@@ -11,13 +11,7 @@
 [x] Found a bug.  The first item i play and stop after booting the program gets stuck in memory and I cannot delete it.  Windows tells me it is used by python.  I gets stuck in that state unless I close stash DLP.
 [x] redo the refresh button routine.  When pressed it should scan the folder and remove missing files from the ledger and add new files present in the folder that are not in the ledger.
 [x] add ffmpeg re encoding support.  choose resolution, bit rate technique, force aspect ratio, de interlace, 
-[ ] add drag and drop support to the download cards where i can drop the cards directly in an editing program
-[ ] Add pill to cards for videos that were copied from stash.
-[ ] Add Synchronize Audio option to card click menu:  loads the video in a Synch UI.  The UI has a Video player.  Controls to enter audio delay (0.000s), typed or dials. These tips are displayed on synch ui:
--Audio plays too early (leads video): Enter a positive number (e.g., 500 delays audio by 500 ms).
--Audio plays too late (lags video): Enter a negative number (e.g., -500 advances audio by 500 ms).
-Apply Delay button -> ffmpeg reencodes with delay, creates the syched file in converted subfolder, new video is loaded in synch ui player. feedback to user that new vid was loaded.
--user retweaks, Apply again ->  ovewrite previous render.  When user is satisfied, user confirms synch with another button.  The Synchronized pill is applied to the card.  Same logic as re-encodes applies to the transfer to target or rep[lace stash source if applicable.   
+ 
 
 [x] filter downloads by audio only
 [x] encode setup screen should be scrolled to the top when opened.
@@ -44,9 +38,9 @@ Apply Delay button -> ffmpeg reencodes with delay, creates the syched file in co
 [x] Make Auto M3U sniffing after a failed download optional (toggle in settings)
 [x] Add a way for the user to pass arguments to yt-DLP
 [ ] When I rename a file, is the history file updated?
-[ ] move the custom yt-dlp argument button to the left of the settings button.
-[ ] add drag and drop support to the download cards where i can drop the cards directly in an editing program
-[ ] Add pill to cards for videos that were copied from stash.
+[x] move the custom yt-dlp argument button to the left of the settings button.
+[ ] add drag and drop support to the download cards where i can drop the cards directly in an editing program DONT WORK with losslesscut.
+[x] Add Stash Import pill to cards for videos that were copied from stash.
 [ ] Add Synchronize Audio option to card click menu:  loads the video in a Synch UI.  The UI has a Video player.  Controls to enter audio delay (0.000s), typed or dials. These tips are displayed on synch ui:
 -Audio plays too early (leads video): Enter a positive number (e.g., 500 delays audio by 500 ms).
 -Audio plays too late (lags video): Enter a negative number (e.g., -500 advances audio by 500 ms).

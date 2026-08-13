@@ -35,12 +35,14 @@ PROGRESS_RE = re.compile(
 
 class NeedsDecisionError(Exception):
     """Raised by move_to_target() when the file being moved has a
-    re-encoded twin sitting in Converted/ and the caller hasn't said
-    which version (original/reencoded) should actually go to the
-    target folder. Carries the info the frontend needs to render its
-    Transfer Original / Transfer Re-encoded / Cancel prompt."""
+    re-encoded OR synchronized twin sitting in Converted/ and the caller
+    hasn't said which version (original/reencoded) should actually go to
+    the target folder. Carries the info the frontend needs to render its
+    Transfer Original / Transfer Converted / Cancel prompt - info["kind"]
+    ("reencoded" or "synchronized") tells the frontend which label to use
+    for the second card, since the prompt itself is shared."""
     def __init__(self, info: dict):
-        super().__init__("A re-encoded version of this file exists - pick which one to transfer.")
+        super().__init__("A converted version of this file exists - pick which one to transfer.")
         self.info = info
 
 
@@ -193,6 +195,8 @@ class JobManager:
                 "source_path": disk_queue.get(filename, {}).get("source_path", ""),
                 "stash_scene_id": disk_queue.get(filename, {}).get("stash_scene_id", ""),
                 "stash_scene_url": disk_queue.get(filename, {}).get("stash_scene_url", ""),
+                "synchronized": disk_queue.get(filename, {}).get("synchronized", False),
+                "audio_delay_ms": disk_queue.get(filename, {}).get("audio_delay_ms", 0),
             }
 
         if queue_dirty:
@@ -228,6 +232,8 @@ class JobManager:
             "total": "",
             "speed": "",
             "eta": "",
+            "synchronized": False,
+            "audio_delay_ms": 0,
         }
         self.jobs[filename] = job
 
@@ -508,6 +514,27 @@ class JobManager:
             save_queue_to_disk(self.saved_queue)
         return True
 
+    def mark_synchronized(self, filename: str, delay_ms) -> "Optional[dict]":
+        """Marks a completed download as having a confirmed Synchronize
+        Audio twin in Converted/, persisting the delay used - survives
+        restarts the same way playback_position does. Returns the
+        updated job, or None if there's no such tracked job."""
+        job = self.jobs.get(filename)
+        if not job:
+            return None
+        try:
+            delay_ms = float(delay_ms)
+        except (TypeError, ValueError):
+            delay_ms = 0.0
+
+        job["synchronized"] = True
+        job["audio_delay_ms"] = delay_ms
+        if filename in self.saved_queue:
+            self.saved_queue[filename]["synchronized"] = True
+            self.saved_queue[filename]["audio_delay_ms"] = delay_ms
+            save_queue_to_disk(self.saved_queue)
+        return job
+
     # ── Retrying a failed/cancelled download ───────────────────────
     async def retry_job(self, filename: str) -> Optional[dict]:
         """Re-runs a failed or cancelled download using the same URL and
@@ -714,6 +741,7 @@ class JobManager:
             reencoded_info = await probe_basic_info(converted_path)
             raise NeedsDecisionError({
                 "filename": filename,
+                "kind": "synchronized" if job.get("synchronized") else "reencoded",
                 "original": {
                     "size_bytes": os.path.getsize(media_path),
                     "size_label": format_file_size(os.path.getsize(media_path)),

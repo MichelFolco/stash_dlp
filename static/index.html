@@ -173,6 +173,7 @@
   <div id="ctx-play-audio" class="ctx-item hidden">Play Audio</div>
   <div id="ctx-extract-audio" class="ctx-item hidden">Extract Audio</div>
   <div id="ctx-reencode-file" class="ctx-item hidden">Re-encode...</div>
+  <div id="ctx-sync-audio" class="ctx-item hidden">Synchronize Audio...</div>
   <div id="ctx-open-with" class="ctx-item hidden">Open With...</div>
   <div class="ctx-separator"></div>
   <div id="ctx-copy-submenu" class="ctx-item ctx-item-submenu hidden">
@@ -319,6 +320,41 @@
   </div>
 </div>
 
+<div id="sync-audio-modal" class="modal-overlay hidden">
+  <div class="video-modal-box sync-audio-box">
+    <div class="video-modal-header">
+      <span id="sync-audio-title" class="video-modal-title">Synchronize Audio</span>
+      <button id="sync-audio-close" class="icon-btn">✕</button>
+    </div>
+
+    <video id="sync-audio-player" class="video-player" controls playsinline preload="metadata"></video>
+
+    <div class="sync-audio-tips">
+      <div><strong>Audio plays too early (leads video):</strong> enter a positive number (e.g. 500 delays audio by 500 ms).</div>
+      <div><strong>Audio plays too late (lags video):</strong> enter a negative number (e.g. -500 advances audio by 500 ms).</div>
+    </div>
+
+    <div class="sync-audio-controls">
+      <button id="sync-audio-dial-down-big" class="btn sync-audio-dial">-100</button>
+      <button id="sync-audio-dial-down-small" class="btn sync-audio-dial">-10</button>
+      <div class="sync-audio-input-wrap">
+        <input id="sync-audio-delay-input" class="input-field sync-audio-delay-input" type="number" step="1" value="0">
+        <span class="sync-audio-unit">ms</span>
+      </div>
+      <button id="sync-audio-dial-up-small" class="btn sync-audio-dial">+10</button>
+      <button id="sync-audio-dial-up-big" class="btn sync-audio-dial">+100</button>
+    </div>
+
+    <div id="sync-audio-status" class="hint sync-audio-status"></div>
+
+    <div class="modal-actions">
+      <button id="sync-audio-cancel-btn" class="btn">Cancel</button>
+      <button id="sync-audio-apply-btn" class="btn">Apply Delay</button>
+      <button id="sync-audio-confirm-btn" class="btn btn-primary">Confirm Sync</button>
+    </div>
+  </div>
+</div>
+
 <div id="folder-modal" class="modal-overlay hidden">
   <div class="modal-box">
     <div class="modal-title">Change Download Folder</div>
@@ -359,7 +395,7 @@
 
 <div id="reencode-choice-modal" class="modal-overlay hidden">
   <div class="modal-box">
-    <div class="modal-title">Re-encoded version found</div>
+    <div id="reencode-choice-title" class="modal-title">Re-encoded version found</div>
     <div id="reencode-choice-filename" class="reencode-choice-filename"></div>
     <div class="reencode-choice-cards">
       <div class="reencode-choice-card">
@@ -368,7 +404,7 @@
         <div id="reencode-choice-original-res" class="reencode-choice-card-value reencode-choice-card-res"></div>
       </div>
       <div class="reencode-choice-card">
-        <div class="reencode-choice-card-label">Re-encoded</div>
+        <div id="reencode-choice-reencoded-label" class="reencode-choice-card-label">Re-encoded</div>
         <div id="reencode-choice-reencoded-size" class="reencode-choice-card-value"></div>
         <div id="reencode-choice-reencoded-res" class="reencode-choice-card-value reencode-choice-card-res"></div>
       </div>

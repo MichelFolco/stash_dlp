@@ -1,5 +1,9 @@
 # Changelog
-0.82 moved custom yt-dlp arguments button to the left of Settings, fixed thumbnail bug.
+0.86 added Synchronize Audio: card menu action opens a sync UI (video player, delay input, +/-10/100 dial buttons) to re-render a file with its audio shifted, iterate via Apply, and Confirm to lock in a SYNCHRONIZED twin - mutually exclusive with Re-encode (shared Converted/ twin slot); Transfer Original/Converted prompt now generalized to cover both
+0.85 added automatic server restart when project source files change; updated start_tray_lan.bat with hidden file watcher
+0.84 added drag-and-drop support for completed download cards to external editing programs
+0.83 added a "Stash file" pill to video cards imported from Stash
+0.82 moved custom yt-dlp arguments button to the left of Settings
 0.81 yt-dlp nightly update pip fallback
 0.80 yt-dlp update to nightly channel
 0.77 migrated modular

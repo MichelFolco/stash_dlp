@@ -32,9 +32,10 @@ from settings import (
 from storage import search_history, get_history_entries, delete_history_entry, lookup_history_in_folder, HistoryLookupError
 from thumbnails import get_thumbnail_path
 import stash_integration
+import audio_sync
 from ytdlp_utils import (
     clean_filename, fetch_title, get_domain, check_and_update_ytdlp, find_media_file,
-    build_open_with_command, format_file_size,
+    find_converted_file, build_open_with_command, format_file_size,
 )
 
 STREAM_CHUNK_SIZE = 1024 * 1024  # 1 MB
@@ -60,6 +61,20 @@ STATIC_DIR = os.path.join(str(BUNDLE_DIR), "static")
 connections = ConnectionManager()
 job_manager = JobManager(connections=connections)
 encode_manager = EncodeManager(connections=connections)
+
+
+def _has_reencode_twin(filename: str) -> bool:
+    """True if a completed Encode Manager job's source traces back to
+    this download - mirrors the frontend's isReencoded(). Used to keep
+    re-encode and audio-sync mutually exclusive, since both would want
+    the same Converted/<stem> slot."""
+    for encode_job in encode_manager.jobs.values():
+        if encode_job.get("status") != "DONE":
+            continue
+        source_stem = os.path.splitext(encode_job.get("source_filename") or "")[0]
+        if source_stem == filename:
+            return True
+    return False
 
 # yt-dlp version state, populated on startup (mirrors ytdlp_version /
 # ytdlp_just_updated on the desktop app's main window)
@@ -242,6 +257,16 @@ class StashImportRequest(BaseModel):
 class ReplaceSourceRequest(BaseModel):
     filename: str
     variant: Optional[str] = None  # "original" | "reencoded" | None
+
+
+class SyncAudioApplyRequest(BaseModel):
+    filename: str
+    delay_ms: float
+
+
+class SyncAudioConfirmRequest(BaseModel):
+    filename: str
+    delay_ms: float
 
 
 # ── REST endpoints ──────────────────────────────────────────────
@@ -736,6 +761,37 @@ async def api_extract_audio(req: CancelRequest):
     return {"ok": True, "job": new_job}
 
 
+@app.post("/api/jobs/sync-audio/apply")
+async def api_sync_audio_apply(req: SyncAudioApplyRequest):
+    if _has_reencode_twin(req.filename):
+        return JSONResponse(status_code=400, content={
+            "error": "This file already has a re-encoded version - remove it before synchronizing audio.",
+        })
+    try:
+        info = await audio_sync.apply_delay(job_manager, req.filename, req.delay_ms)
+    except ValueError as e:
+        return JSONResponse(status_code=400, content={"error": str(e)})
+    except RuntimeError as e:
+        return JSONResponse(status_code=500, content={"error": str(e)})
+    return {"ok": True, "render": info}
+
+
+@app.post("/api/jobs/sync-audio/confirm")
+async def api_sync_audio_confirm(req: SyncAudioConfirmRequest):
+    try:
+        job = await audio_sync.confirm(job_manager, req.filename, req.delay_ms)
+    except ValueError as e:
+        return JSONResponse(status_code=400, content={"error": str(e)})
+    await job_manager.connections.broadcast({"type": "refresh", "jobs": job_manager.snapshot()})
+    return {"ok": True, "job": job}
+
+
+@app.post("/api/jobs/sync-audio/cancel")
+async def api_sync_audio_cancel(req: CancelRequest):
+    await audio_sync.cancel(job_manager, req.filename)
+    return {"ok": True}
+
+
 @app.get("/api/jobs/thumbnail")
 async def api_job_thumbnail(filename: str):
     path = await get_thumbnail_path(filename)
@@ -745,7 +801,7 @@ async def api_job_thumbnail(filename: str):
 
 
 @app.get("/api/jobs/stream")
-async def api_stream_video(filename: str, request: Request):
+async def api_stream_video(filename: str, request: Request, source: str = "original"):
     """Serves the video with HTTP Range support. This isn't optional
     polish - mobile Safari in particular refuses to play video at all
     unless the server responds correctly to Range requests, and desktop
@@ -761,7 +817,10 @@ async def api_stream_video(filename: str, request: Request):
     Windows means the file stays locked (can't be deleted/moved) until
     something else forces it closed.
     """
-    media_path = find_media_file(filename)
+    if source == "converted":
+        media_path = find_converted_file(filename)
+    else:
+        media_path = find_media_file(filename)
     if not media_path or not os.path.isfile(media_path):
         return JSONResponse(status_code=404, content={"error": "File not found."})
 
@@ -971,6 +1030,10 @@ async def api_encode_estimate(req: EncodeEstimateRequest):
 
 @app.post("/api/encode/jobs")
 async def api_enqueue_encode_job(req: EnqueueEncodeRequest):
+    if req.filename and job_manager.jobs.get(req.filename, {}).get("synchronized"):
+        return JSONResponse(status_code=400, content={
+            "error": "This file already has a synchronized-audio version - remove it before re-encoding.",
+        })
     try:
         source_path = _resolve_source_path(req.filename, req.path)
         job = await encode_manager.enqueue(source_path, req.options.dict())

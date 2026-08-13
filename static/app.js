@@ -107,11 +107,21 @@ const reencodeChoiceReencodedRes = el("reencode-choice-reencoded-res");
 const reencodeChoiceCancelBtn = el("reencode-choice-cancel-btn");
 const reencodeChoiceOriginalBtn = el("reencode-choice-original-btn");
 const reencodeChoiceReencodedBtn = el("reencode-choice-reencoded-btn");
+const reencodeChoiceTitle = el("reencode-choice-title");
+const reencodeChoiceReencodedLabel = el("reencode-choice-reencoded-label");
 const videoModal = el("video-modal");
 const videoPlayer = el("video-player");
 const videoModalTitle = el("video-modal-title");
 const audioPlayerWrap = el("audio-player-wrap");
 const audioPlayer = el("audio-player");
+const syncAudioModal = el("sync-audio-modal");
+const syncAudioPlayer = el("sync-audio-player");
+const syncAudioTitle = el("sync-audio-title");
+const syncAudioDelayInput = el("sync-audio-delay-input");
+const syncAudioStatus = el("sync-audio-status");
+const syncAudioApplyBtn = el("sync-audio-apply-btn");
+const syncAudioConfirmBtn = el("sync-audio-confirm-btn");
+const syncAudioCancelBtn = el("sync-audio-cancel-btn");
 const openWithFlyout = el("open-with-flyout");
 const openWithProgramsList = el("open-with-programs-list");
 const copyFlyout = el("copy-flyout");
@@ -884,6 +894,15 @@ function isReencoded(filename) {
   return false;
 }
 
+// A download is synchronized once its Synchronize Audio twin in
+// Converted/ has been confirmed - tracked directly on the job (see
+// mark_synchronized on the backend), not derived like isReencoded()
+// since sync renders aren't Encode Manager jobs.
+function isSynchronized(filename) {
+  const job = state.jobs.get(filename);
+  return !!(job && job.synchronized);
+}
+
 // Short synthesized two-tone chime, so completion has an audible cue
 // without needing to ship/load an actual sound file.
 function playCompletionPing() {
@@ -1125,6 +1144,76 @@ selectionMoveBtn.addEventListener("click", async () => {
   }
 });
 
+// Convert a local Windows path to a file:// URI suitable for an
+// OS-level drag operation. The browser cannot hand an arbitrary local
+// file object to another application, but Windows/Firefox can consume
+// file URIs supplied through the drag data transfer.
+function localPathToFileUri(filePath) {
+  if (!filePath) return "";
+  const normalized = String(filePath).replace(/\\/g, "/");
+
+  if (/^[A-Za-z]:\//.test(normalized)) {
+    const drive = normalized.slice(0, 2);
+    const rest = normalized.slice(2).split("/").filter(Boolean)
+      .map(part => encodeURIComponent(part)).join("/");
+    return `file:///${drive}${rest ? "/" + rest : ""}`;
+  }
+
+  if (normalized.startsWith("//")) {
+    const parts = normalized.slice(2).split("/").filter(Boolean)
+      .map(part => encodeURIComponent(part));
+    return `file://${parts.join("/")}`;
+  }
+
+  const parts = normalized.split("/").filter(Boolean)
+    .map(part => encodeURIComponent(part));
+  return `file:///${parts.join("/")}`;
+}
+
+function addFileDragSupport(card, job) {
+  // Only completed files can be dragged to an external editor. A
+  // DOWNLOADING/ERROR card must never advertise a path that may not
+  // exist or may still be changing.
+  if (job.status !== "DONE" || !state.saveDirPath) return;
+
+  const fullPath = joinDisplayPath(state.saveDirPath, job.filename, job.ext);
+  const fileUri = localPathToFileUri(fullPath);
+  if (!fileUri) return;
+
+  card.draggable = true;
+  card.title = "Drag this card to an editing program to open the file";
+
+  card.addEventListener("dragstart", (e) => {
+    if (state.selectionMode) {
+      e.preventDefault();
+      return;
+    }
+
+    const dt = e.dataTransfer;
+    if (!dt) return;
+
+    dt.effectAllowed = "copy";
+    // text/uri-list is understood by browsers and many desktop
+    // applications when a local file is dragged out of a webpage.
+    dt.setData("text/uri-list", fileUri);
+    dt.setData("text/plain", fileUri);
+
+    // Chromium's DownloadURL format gives applications that support it
+    // the filename, MIME type and local file URI in one payload.
+    const mime = job.is_audio ? "audio/*" : "video/*";
+    dt.setData("DownloadURL", `${mime}:${job.filename}:${fileUri}`);
+
+    // Firefox exposes this custom flavor to some native drag targets.
+    dt.setData("application/x-moz-file", fullPath);
+
+    card.classList.add("dragging");
+  });
+
+  card.addEventListener("dragend", () => {
+    card.classList.remove("dragging");
+  });
+}
+
 function buildJobCard(job) {
   const card = document.createElement("div");
   card.className = "job-card job-card-row";
@@ -1197,6 +1286,18 @@ function buildJobCard(job) {
     const pill = document.createElement("span");
     pill.className = "reencoded-badge";
     pill.textContent = "RE-ENCODED";
+    titleRow.appendChild(pill);
+  }
+  if (job.status === "DONE" && job.synchronized) {
+    const pill = document.createElement("span");
+    pill.className = "synchronized-badge";
+    pill.textContent = "SYNCHRONIZED";
+    titleRow.appendChild(pill);
+  }
+  if (job.source_type === "stash" && !job.is_audio) {
+    const pill = document.createElement("span");
+    pill.className = "stash-badge";
+    pill.textContent = "Stash file";
     titleRow.appendChild(pill);
   }
   titlePathCol.appendChild(titleRow);
@@ -1313,6 +1414,8 @@ function buildJobCard(job) {
   // options menu. For non-completed items there's nothing to play yet,
   // so a thumbnail click there just falls through to the same menu
   // behavior as the rest of the card.
+  addFileDragSupport(card, job);
+
   thumb.addEventListener("click", (e) => {
     if (state.selectionMode) {
       if (!isSelectable(job)) return;
@@ -1481,8 +1584,17 @@ function openJobMenu(x, y, job) {
   // Jumps straight into the encode setup modal with this file
   // preselected as the source - only makes sense for a completed,
   // non-audio download since that's all the encoder can take as input
-  // (mirrors the /api/encode/sources gating).
-  el("ctx-reencode-file").classList.toggle("hidden", !isVideo);
+  // (mirrors the /api/encode/sources gating). Hidden if the file is
+  // already synchronized, since a re-encode twin and a sync twin would
+  // both want the same Converted/<stem> slot (see isSynchronized).
+  el("ctx-reencode-file").classList.toggle("hidden", !isVideo || isSynchronized(job.filename));
+  // Same twin-slot logic in reverse: only offered for a completed video
+  // with an audio track, and only if there isn't already a re-encode
+  // twin sitting in Converted/ for this file.
+  el("ctx-sync-audio").classList.toggle(
+    "hidden",
+    !isVideo || !job.audio_codec || isReencoded(job.filename),
+  );
   // Shown for any completed item (video or audio) once at least one
   // external program is configured; enabled/disabled state (local vs
   // remote) is applied once at boot via applyLocalOnlyUI.
@@ -1575,6 +1687,12 @@ el("ctx-reencode-file").addEventListener("click", () => {
   closeMenus();
   setAppModeEncode();
   openNewEncodeJobModal(filename);
+});
+
+el("ctx-sync-audio").addEventListener("click", () => {
+  const filename = jobMenu.dataset.filename;
+  closeMenus();
+  openSyncAudioModal(filename);
 });
 
 el("ctx-open-with").addEventListener("click", () => {
@@ -1814,6 +1932,134 @@ videoModal.addEventListener("click", (e) => {
   if (e.target === videoModal) closeMediaModal();
 });
 
+// ── Synchronize Audio ────────────────────────────────────────
+// syncAudioState tracks the currently-open session: whether anything
+// has actually been Applied yet (so Close can skip the cancel call
+// entirely when nothing changed) and the delay that's currently live in
+// the player, so Confirm always persists exactly what was last Applied.
+let syncAudioState = null; // { filename, hasAppliedThisSession, lastAppliedDelayMs }
+
+function openSyncAudioModal(filename) {
+  const job = state.jobs.get(filename);
+  if (!job) return;
+
+  syncAudioState = { filename, hasAppliedThisSession: false, lastAppliedDelayMs: null };
+  syncAudioTitle.textContent = `Synchronize Audio - ${filename}`;
+  syncAudioDelayInput.value = job.audio_delay_ms || 0;
+  setSyncAudioStatus("");
+  syncAudioConfirmBtn.disabled = !job.synchronized;
+
+  // Already-synchronized files play their confirmed twin; anything else
+  // starts from the original download until the first Apply.
+  const source = job.synchronized ? "converted" : "original";
+  syncAudioPlayer.src = `/api/jobs/stream?filename=${encodeURIComponent(filename)}&source=${source}&t=${Date.now()}`;
+  syncAudioModal.classList.remove("hidden");
+}
+
+function setSyncAudioStatus(text, kind) {
+  syncAudioStatus.textContent = text;
+  syncAudioStatus.classList.toggle("error", kind === "error");
+  syncAudioStatus.classList.toggle("success", kind === "success");
+}
+
+function nudgeSyncAudioDelay(deltaMs) {
+  const current = parseFloat(syncAudioDelayInput.value) || 0;
+  syncAudioDelayInput.value = current + deltaMs;
+}
+
+el("sync-audio-dial-down-big").addEventListener("click", () => nudgeSyncAudioDelay(-100));
+el("sync-audio-dial-down-small").addEventListener("click", () => nudgeSyncAudioDelay(-10));
+el("sync-audio-dial-up-small").addEventListener("click", () => nudgeSyncAudioDelay(10));
+el("sync-audio-dial-up-big").addEventListener("click", () => nudgeSyncAudioDelay(100));
+
+syncAudioApplyBtn.addEventListener("click", async () => {
+  if (!syncAudioState) return;
+  const { filename } = syncAudioState;
+  const delayMs = parseFloat(syncAudioDelayInput.value) || 0;
+
+  syncAudioApplyBtn.disabled = true;
+  syncAudioConfirmBtn.disabled = true;
+  setSyncAudioStatus(`Rendering with a ${delayMs} ms delay...`);
+
+  try {
+    const res = await fetch("/api/jobs/sync-audio/apply", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ filename, delay_ms: delayMs }),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      setSyncAudioStatus(data.error || "Couldn't render the synced audio.", "error");
+      return;
+    }
+    syncAudioState.hasAppliedThisSession = true;
+    syncAudioState.lastAppliedDelayMs = delayMs;
+    syncAudioPlayer.src = `/api/jobs/stream?filename=${encodeURIComponent(filename)}&source=converted&t=${Date.now()}`;
+    setSyncAudioStatus(`New synced render loaded (${delayMs} ms).`, "success");
+  } catch (e) {
+    setSyncAudioStatus("Couldn't reach the server to render the synced audio.", "error");
+  } finally {
+    syncAudioApplyBtn.disabled = false;
+    syncAudioConfirmBtn.disabled = false;
+  }
+});
+
+syncAudioConfirmBtn.addEventListener("click", async () => {
+  if (!syncAudioState) return;
+  const { filename } = syncAudioState;
+  const delayMs = syncAudioState.lastAppliedDelayMs !== null
+    ? syncAudioState.lastAppliedDelayMs
+    : (parseFloat(syncAudioDelayInput.value) || 0);
+
+  syncAudioConfirmBtn.disabled = true;
+  try {
+    const res = await fetch("/api/jobs/sync-audio/confirm", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ filename, delay_ms: delayMs }),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      setSyncAudioStatus(data.error || "Couldn't confirm the sync.", "error");
+      syncAudioConfirmBtn.disabled = false;
+      return;
+    }
+    state.jobs.set(filename, data.job);
+    syncAudioState.hasAppliedThisSession = false; // confirmed - nothing left to roll back
+    renderLedger();
+    flashStatus(`Synchronized: ${filename}`);
+    closeSyncAudioModal(false);
+  } catch (e) {
+    setSyncAudioStatus("Couldn't reach the server to confirm the sync.", "error");
+    syncAudioConfirmBtn.disabled = false;
+  }
+});
+
+async function closeSyncAudioModal(runCancel = true) {
+  const session = syncAudioState;
+  syncAudioModal.classList.add("hidden");
+  syncAudioPlayer.pause();
+  syncAudioPlayer.removeAttribute("src");
+  syncAudioPlayer.load();
+  syncAudioState = null;
+
+  if (runCancel && session && session.hasAppliedThisSession) {
+    try {
+      await fetch("/api/jobs/sync-audio/cancel", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ filename: session.filename }),
+      });
+    } catch (e) {
+      // Best-effort - an unconfirmed render being left behind isn't
+      // harmful, just untidy; the next sync session will overwrite it.
+    }
+  }
+}
+
+el("sync-audio-close").addEventListener("click", () => closeSyncAudioModal(true));
+el("sync-audio-cancel-btn").addEventListener("click", () => closeSyncAudioModal(true));
+syncAudioModal.addEventListener("click", (e) => {
+  if (e.target === syncAudioModal) closeSyncAudioModal(true);
+});
+
 el("ctx-delete-file").addEventListener("click", async () => {
   const filename = jobMenu.dataset.filename;
   closeMenus();
@@ -1929,10 +2175,17 @@ async function copyJobFilename(filename) {
   }
 }
 
-// Shows the Transfer Original / Transfer Re-encoded / Cancel prompt and
-// resolves with "original", "reencoded", or null (cancelled).
+// Shows the Transfer Original / Transfer Converted / Cancel prompt and
+// resolves with "original", "reencoded", or null (cancelled). Same modal
+// for both twin kinds - info.kind ("reencoded" or "synchronized") just
+// swaps the second card's label and button text.
 function promptReencodeChoice(info) {
   return new Promise((resolve) => {
+    const isSync = info.kind === "synchronized";
+    reencodeChoiceTitle.textContent = isSync ? "Synchronized version found" : "Re-encoded version found";
+    reencodeChoiceReencodedLabel.textContent = isSync ? "Synchronized" : "Re-encoded";
+    reencodeChoiceReencodedBtn.textContent = isSync ? "Transfer Synchronized" : "Transfer Re-encoded";
+
     reencodeChoiceFilename.textContent = info.filename;
     reencodeChoiceOriginalSize.textContent = info.original.size_label || "Unknown size";
     reencodeChoiceOriginalRes.textContent = info.original.width && info.original.height
@@ -3020,6 +3273,11 @@ document.addEventListener("keydown", async (e) => {
 
   if (!videoModal.classList.contains("hidden")) {
     if (e.key === "Escape") closeMediaModal();
+    return;
+  }
+
+  if (!syncAudioModal.classList.contains("hidden")) {
+    if (e.key === "Escape") closeSyncAudioModal(true);
     return;
   }
 
