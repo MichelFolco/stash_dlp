@@ -10,12 +10,13 @@ are responsible for checking with the Encode Manager before calling in
 here; this module only concerns itself with the sync render/confirm/cancel
 lifecycle once that gate has already passed.
 
-Each render is a real ffmpeg encode (not a fast remux) - libx264 + aac,
-sane fixed quality settings. Re-opening a previously-synchronized file and
-re-tweaking backs up the confirmed twin before the first render of that
-session, so a Cancel without re-confirming restores exactly what was
-there before; if the file was never synchronized, Cancel just deletes
-whatever unconfirmed render was made.
+Each render keeps video as a pure stream copy (untouched, fast) and only
+re-encodes the audio track, with the delay baked into real timestamps via
+an ffmpeg audio filter (adelay/atrim) rather than a container-level
+edit-list offset - the dual-input -itsoffset+copy trick technically works
+but relies on players/tools honoring that edit-list metadata, which isn't
+universal. Audio re-encoding is cheap enough that this still applies in
+well under a second for typical files.
 """
 import asyncio
 import os
@@ -25,7 +26,7 @@ from procflags import NO_CONSOLE_KWARGS
 from settings import get_converted_dir
 from ytdlp_utils import clean_filename, find_media_file, format_file_size
 
-RENDER_TIMEOUT = 1800  # 30 min ceiling for a single sync render
+RENDER_TIMEOUT = 120  # generous ceiling for what's normally a near-instant remux
 
 # Per-filename asyncio locks, so a double-click or a second browser tab
 # can't kick off two ffmpeg renders for the same file at once.
@@ -84,20 +85,43 @@ async def apply_delay(job_manager, filename: str, delay_ms: float) -> dict:
         tmp_path = out_path + ".tmp"
         delay_s = delay_ms / 1000.0
 
+        # Video is always a pure stream copy - it's never touched, which
+        # is what keeps this fast. Audio timing is baked directly into
+        # real timestamps via a filter (not a container-level edit-list
+        # offset from dual-input -itsoffset, which some players/tools
+        # don't honor), so it needs a light re-encode - cheap even for
+        # long files since audio codecs are trivial next to video.
+        #
+        # Positive delay_ms (audio leads, needs delaying): pad silence
+        # onto the front of the audio track with adelay. -shortest then
+        # trims the resulting excess audio tail back down to video's
+        # length, since video should stay full-length.
+        #
+        # Negative delay_ms (audio lags, needs advancing): trim that much
+        # off the front of the audio track and reset its timestamps to
+        # start at 0. No -shortest here - video should still play in
+        # full even though audio now runs out slightly early at the end.
         cmd = [
             "ffmpeg", "-y",
             "-i", media_path,
-            "-itsoffset", f"{delay_s:.3f}",
-            "-i", media_path,
             "-map", "0:v:0",
-            "-map", "1:a:0",
-            "-c:v", "libx264", "-crf", "20", "-preset", "medium",
-            "-c:a", "aac", "-b:a", "192k",
-            "-movflags", "+faststart",
-            "-shortest",
-            "-f", "mp4",
-            tmp_path,
+            "-map", "0:a:0",
+            "-c:v", "copy",
         ]
+        if delay_ms > 0:
+            cmd += [
+                "-af", f"adelay=delays={delay_ms:.0f}:all=1",
+                "-c:a", "aac", "-b:a", "192k",
+                "-shortest",
+            ]
+        elif delay_ms < 0:
+            cmd += [
+                "-af", f"atrim=start={abs(delay_s):.3f},asetpts=PTS-STARTPTS",
+                "-c:a", "aac", "-b:a", "192k",
+            ]
+        else:
+            cmd += ["-c:a", "copy"]
+        cmd += ["-avoid_negative_ts", "make_zero", "-f", "mp4", tmp_path]
 
         try:
             proc = await asyncio.create_subprocess_exec(
