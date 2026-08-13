@@ -45,6 +45,7 @@ DEFAULT_SAVE_DIR = os.environ.get("STASH_DLP_SAVE_DIR", str(PROJECT_ROOT))
 HOST = os.environ.get("STASH_DLP_HOST", "127.0.0.1")
 PORT = int(os.environ.get("STASH_DLP_PORT", "8722"))
 
+
 # yt-dlp output format caps, identical to the desktop app
 RES_FORMATS = {
     "480p": "bestvideo[height<=480][ext=mp4]+bestaudio[ext=m4a]/best[height<=480][ext=mp4]/best",

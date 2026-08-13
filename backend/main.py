@@ -30,6 +30,7 @@ from settings import (
 )
 from storage import search_history, get_history_entries, delete_history_entry, lookup_history_in_folder, HistoryLookupError
 from thumbnails import get_thumbnail_path
+import stash_integration
 from ytdlp_utils import (
     clean_filename, fetch_title, get_domain, check_and_update_ytdlp, find_media_file,
     build_open_with_command, format_file_size,
@@ -217,6 +218,15 @@ class EncodeJobIdRequest(BaseModel):
 class EncodeDeleteRequest(BaseModel):
     job_id: str
     delete_output: bool = False
+
+
+class StashImportRequest(BaseModel):
+    scene: str
+
+
+class ReplaceSourceRequest(BaseModel):
+    filename: str
+    variant: Optional[str] = None  # "original" | "reencoded" | None
 
 
 # ── REST endpoints ──────────────────────────────────────────────
@@ -417,6 +427,33 @@ async def api_browse_target_folder(request: Request):
     except Exception as e:
         return JSONResponse(status_code=500, content={"error": str(e)})
     return {"path": path}
+
+
+@app.post("/api/import/stash")
+async def api_import_stash(req: StashImportRequest):
+    """Import the media file belonging to a Stash scene into the current
+    Stash DLP download folder. Only the scene's file path is requested;
+    tags and other Stash metadata are deliberately not imported."""
+    try:
+        result = await stash_integration.import_stash_scene(job_manager, req.scene)
+    except ValueError as e:
+        return JSONResponse(status_code=400, content={"error": str(e)})
+    except RuntimeError as e:
+        return JSONResponse(status_code=502, content={"error": str(e)})
+
+    return {"ok": True, "job": result}
+
+
+@app.post("/api/jobs/replace-source")
+async def api_replace_source(req: ReplaceSourceRequest):
+    try:
+        await stash_integration.replace_source(job_manager, req.filename, variant=req.variant)
+    except NeedsDecisionError as e:
+        return JSONResponse(status_code=409, content={"needs_decision": True, **e.info})
+    except ValueError as e:
+        return JSONResponse(status_code=400, content={"error": str(e)})
+    await job_manager.connections.broadcast({"type": "job_deleted", "filename": req.filename})
+    return {"ok": True}
 
 
 @app.post("/api/jobs/move-to-target")

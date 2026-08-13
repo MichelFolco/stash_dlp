@@ -79,6 +79,9 @@ const logoMenu = el("logo-menu");
 const jobMenu = el("job-menu");
 const historyMenu = el("history-menu");
 const folderModal = el("folder-modal");
+const stashImportModal = el("stash-import-modal");
+const stashImportInput = el("stash-import-input");
+const stashImportError = el("stash-import-error");
 const folderInput = el("folder-input");
 const folderError = el("folder-error");
 const folderRecentWrap = el("folder-recent-wrap");
@@ -121,6 +124,61 @@ const programPathInput = el("program-path-input");
 const programArgsInput = el("program-args-input");
 const programFormError = el("program-form-error");
 const programDeleteBtn = el("program-delete-btn");
+
+function openStashImportModal() {
+  stashImportError.classList.add("hidden");
+  stashImportError.textContent = "";
+  stashImportInput.value = "";
+  stashImportModal.classList.remove("hidden");
+  setTimeout(() => stashImportInput.focus(), 0);
+}
+
+function closeStashImportModal() {
+  stashImportModal.classList.add("hidden");
+}
+
+async function importFromStash() {
+  const scene = stashImportInput.value.trim();
+  if (!scene) {
+    stashImportError.textContent = "Enter a Stash scene URL or scene ID.";
+    stashImportError.classList.remove("hidden");
+    return;
+  }
+  const btn = el("stash-import-btn-confirm");
+  btn.disabled = true;
+  btn.textContent = "Importing...";
+  stashImportError.classList.add("hidden");
+  try {
+    const res = await fetch("/api/import/stash", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ scene }),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      stashImportError.textContent = data.error || "Import failed.";
+      stashImportError.classList.remove("hidden");
+      return;
+    }
+    if (data.job) state.jobs.set(data.job.filename, data.job);
+    renderLedger();
+    closeStashImportModal();
+    flashStatus(`Imported from Stash: ${data.job.filename}`);
+  } catch (e) {
+    stashImportError.textContent = "Couldn't reach the server.";
+    stashImportError.classList.remove("hidden");
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "Import";
+  }
+}
+
+el("import-stash-btn").addEventListener("click", openStashImportModal);
+el("stash-import-cancel-btn").addEventListener("click", closeStashImportModal);
+el("stash-import-btn-confirm").addEventListener("click", importFromStash);
+stashImportInput.addEventListener("keydown", (e) => {
+  if (e.key === "Enter") importFromStash();
+  else if (e.key === "Escape") closeStashImportModal();
+});
 
 // ── Boot ──────────────────────────────────────────────────────
 async function boot() {
@@ -1174,6 +1232,7 @@ function openJobMenu(x, y, job) {
 
   el("ctx-rename-file").classList.toggle("hidden", isDownloading);
   el("ctx-move-to-target").classList.toggle("hidden", !isDone);
+  el("ctx-replace-source").classList.toggle("hidden", !isDone || job.source_type !== "stash" || !job.source_path);
   el("ctx-open-folder").classList.toggle("hidden", !isDone);
   el("ctx-file-submenu").classList.toggle("hidden", isDownloading);
 
@@ -1687,6 +1746,43 @@ el("ctx-move-to-target").addEventListener("click", () => {
   const filename = jobMenu.dataset.filename;
   closeMenus();
   moveJobToTarget(filename);
+});
+
+async function requestReplaceSource(filename, variant) {
+  try {
+    const res = await fetch("/api/jobs/replace-source", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(variant ? { filename, variant } : { filename }),
+    });
+    const data = await res.json();
+    if (res.status === 409 && data.needs_decision) {
+      const choice = await promptReencodeChoice(data);
+      if (!choice) return "cancelled";
+      return requestReplaceSource(filename, choice);
+    }
+    if (!res.ok) {
+      window.alert(`Couldn't replace the Stash source:\n${data.error || "Unknown error"}`);
+      return "error";
+    }
+    return "replaced";
+  } catch (e) {
+    window.alert("Couldn't reach the server to replace the Stash source.");
+    return "error";
+  }
+}
+
+el("ctx-replace-source").addEventListener("click", async () => {
+  const filename = jobMenu.dataset.filename;
+  closeMenus();
+  const job = state.jobs.get(filename);
+  if (!job || job.source_type !== "stash") return;
+  if (!window.confirm(`Replace the original Stash source with "${filename}"?\n\nThis will overwrite the original source file and remove the working copy from Stash DLP.`)) return;
+  const result = await requestReplaceSource(filename, null);
+  if (result === "replaced") {
+    state.jobs.delete(filename);
+    renderLedger();
+    flashStatus(`Replaced Stash source: ${filename}`);
+  }
 });
 
 el("ctx-open-folder").addEventListener("click", async () => {
@@ -2631,6 +2727,12 @@ async function executeHistorySearch() {
 let baseFontSize = 12;
 
 document.addEventListener("keydown", async (e) => {
+  if (!stashImportModal.classList.contains("hidden")) return;
+  if (e.ctrlKey && e.key.toLowerCase() === "s" && state.appMode === "DOWNLOAD") {
+    e.preventDefault();
+    openStashImportModal();
+    return;
+  }
   if (!folderModal.classList.contains("hidden")) return; // modal has its own handler
   if (!targetFolderModalEl.classList.contains("hidden")) return; // ditto
   if (!externalProgramsModal.classList.contains("hidden")) {

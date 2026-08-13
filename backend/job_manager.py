@@ -8,6 +8,7 @@ import json
 import os
 import re
 import shutil
+from urllib.parse import urlparse
 from typing import Dict, Optional
 
 from config import RES_FORMATS, AUDIO_ONLY_KEY
@@ -186,6 +187,10 @@ class JobManager:
                 "total": "",
                 "speed": "",
                 "eta": "",
+                "source_type": disk_queue.get(filename, {}).get("source_type", ""),
+                "source_path": disk_queue.get(filename, {}).get("source_path", ""),
+                "stash_scene_id": disk_queue.get(filename, {}).get("stash_scene_id", ""),
+                "stash_scene_url": disk_queue.get(filename, {}).get("stash_scene_url", ""),
             }
 
         if queue_dirty:

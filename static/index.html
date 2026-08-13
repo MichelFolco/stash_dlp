@@ -36,6 +36,7 @@
   <div id="download-view">
     <div id="control-bar" class="control-bar">
       <button id="refresh-btn" class="btn">Refresh</button>
+      <button id="import-stash-btn" class="btn">Import from Stash</button>
       <button id="move-all-btn" class="btn">Move All to Target</button>
       <button id="select-mode-btn" class="btn">Select</button>
     </div>
@@ -188,6 +189,7 @@
 <div id="file-flyout" class="ctx-menu hidden">
   <div id="ctx-rename-file" class="ctx-item hidden">Rename File</div>
   <div id="ctx-move-to-target" class="ctx-item hidden">Move to Target</div>
+  <div id="ctx-replace-source" class="ctx-item hidden">Replace Stash Source</div>
   <div id="ctx-open-folder" class="ctx-item hidden">Open in Explorer</div>
 </div>
 
@@ -197,6 +199,22 @@
   <div id="open-with-programs-list"></div>
   <div class="ctx-separator"></div>
   <div id="flyout-manage-programs" class="ctx-item">Manage External Programs...</div>
+</div>
+
+
+<div id="stash-import-modal" class="modal-overlay hidden">
+  <div class="modal-box">
+    <div class="modal-title">Import from Stash</div>
+    <div class="hint">Paste a Stash scene URL or numeric scene ID. The scene's first media file will be copied into the current download folder. Tags are not imported.</div>
+    <div class="modal-row" style="margin-top:10px;">
+      <input id="stash-import-input" class="input-field" type="text" placeholder="http://localhost:9999/scenes/2952" autocomplete="off" spellcheck="false">
+    </div>
+    <div id="stash-import-error" class="modal-error hidden"></div>
+    <div class="modal-actions">
+      <button id="stash-import-cancel-btn" class="btn">Cancel</button>
+      <button id="stash-import-btn-confirm" class="btn btn-primary">Import</button>
+    </div>
+  </div>
 </div>
 
 <div id="external-programs-modal" class="modal-overlay hidden">
