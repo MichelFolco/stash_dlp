@@ -354,6 +354,12 @@ DEFAULT_DOWNLOAD_PREFS = {
     "quality": "720p",
     "tag_domain": True,
     "m3u_sniffer": False,
+    # Whether a failed normal download automatically falls back to the
+    # M3U sniffing flow. On by default to match pre-existing behavior;
+    # users who find the auto-retry more annoying than useful (e.g. it
+    # firing on genuinely-dead links) can turn it off and just get a
+    # normal ERROR card instead.
+    "auto_m3u_retry": True,
 }
 VALID_QUALITIES = {"Best", "720p", "480p", "Audio Only"}
 
@@ -363,16 +369,90 @@ def get_download_prefs() -> dict:
     return {**DEFAULT_DOWNLOAD_PREFS, **stored}
 
 
-def set_download_prefs(quality: str, tag_domain: bool, m3u_sniffer: bool) -> dict:
+def set_download_prefs(quality: str, tag_domain: bool, m3u_sniffer: bool, auto_m3u_retry: bool = True) -> dict:
     prefs = {
         "quality": quality if quality in VALID_QUALITIES else DEFAULT_DOWNLOAD_PREFS["quality"],
         "tag_domain": bool(tag_domain),
         "m3u_sniffer": bool(m3u_sniffer),
+        "auto_m3u_retry": bool(auto_m3u_retry),
     }
     data = _load()
     data[DOWNLOAD_PREFS_KEY] = prefs
     _persist(data)
     return prefs
+
+
+# ── yt-dlp extra arguments (global default + per-domain overrides) ──
+# Two tiers, both stored flat like download_prefs: `default_args` is a
+# single string appended to every yt-dlp invocation (throttling knobs,
+# --cookies-from-browser, etc. - things you want everywhere), and
+# `domain_args` is a {domain: args_string} map for site-specific fixes
+# (e.g. a TikTok --extractor-args workaround) keyed by the same
+# normalized domain get_domain() already produces for file tagging.
+# Both are appended AFTER the built-in flags in job_manager, so a
+# single-value flag like -f in domain_args wins over the res-cap
+# default without erroring; boolean flags simply appearing twice is
+# harmless.
+YTDLP_ARGS_KEY = "ytdlp_args"
+DEFAULT_YTDLP_ARGS = {
+    "default_args": "",
+    "domain_args": {},
+}
+
+
+def get_ytdlp_args() -> dict:
+    stored = _load().get(YTDLP_ARGS_KEY, {})
+    return {
+        "default_args": stored.get("default_args", ""),
+        "domain_args": dict(stored.get("domain_args", {})),
+    }
+
+
+def set_ytdlp_default_args(args: str) -> dict:
+    data = _load()
+    current = data.get(YTDLP_ARGS_KEY, {})
+    current["default_args"] = args or ""
+    current.setdefault("domain_args", {})
+    data[YTDLP_ARGS_KEY] = current
+    _persist(data)
+    return get_ytdlp_args()
+
+
+def set_ytdlp_domain_args(domain: str, args: str) -> dict:
+    """Adds/updates the args rule for `domain`. An empty/whitespace-only
+    `args` removes the rule entirely rather than storing a blank
+    entry - same "empty means delete" convention as the rest of the
+    settings surface, so callers don't need a separate delete path for
+    the common "clear this field and save" interaction."""
+    domain = (domain or "").strip().lower()
+    if not domain:
+        raise ValueError("Domain can't be empty.")
+
+    data = _load()
+    current = data.get(YTDLP_ARGS_KEY, {})
+    current.setdefault("default_args", "")
+    domain_args = current.setdefault("domain_args", {})
+
+    if args and args.strip():
+        domain_args[domain] = args.strip()
+    else:
+        domain_args.pop(domain, None)
+
+    data[YTDLP_ARGS_KEY] = current
+    _persist(data)
+    return get_ytdlp_args()
+
+
+def delete_ytdlp_domain_args(domain: str) -> dict:
+    domain = (domain or "").strip().lower()
+    data = _load()
+    current = data.get(YTDLP_ARGS_KEY, {})
+    current.setdefault("default_args", "")
+    domain_args = current.setdefault("domain_args", {})
+    domain_args.pop(domain, None)
+    data[YTDLP_ARGS_KEY] = current
+    _persist(data)
+    return get_ytdlp_args()
 
 
 def migrate_old_local_data_dir() -> None:

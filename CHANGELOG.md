@@ -1,4 +1,7 @@
 # Changelog
+0.82 moved custom yt-dlp arguments button to the left of Settings, fixed thumbnail bug.
+0.81 yt-dlp nightly update pip fallback
+0.80 yt-dlp update to nightly channel
 0.77 migrated modular
 0.76 Stash file import export modular
 0.75 central library data

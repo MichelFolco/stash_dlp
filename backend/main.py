@@ -27,6 +27,7 @@ from settings import (
     get_external_programs, get_external_program, add_external_program,
     update_external_program, delete_external_program,
     get_converted_dir, get_download_prefs, set_download_prefs,
+    get_ytdlp_args, set_ytdlp_default_args, set_ytdlp_domain_args, delete_ytdlp_domain_args,
 )
 from storage import search_history, get_history_entries, delete_history_entry, lookup_history_in_folder, HistoryLookupError
 from thumbnails import get_thumbnail_path
@@ -139,6 +140,20 @@ class DownloadPrefsRequest(BaseModel):
     quality: str
     tag_domain: bool
     m3u_sniffer: bool
+    auto_m3u_retry: bool = True
+
+
+class YtdlpDefaultArgsRequest(BaseModel):
+    args: str
+
+
+class YtdlpDomainArgsRequest(BaseModel):
+    domain: str
+    args: str = ""
+
+
+class YtdlpDomainArgsDeleteRequest(BaseModel):
+    domain: str
 
 
 class RenameRequest(BaseModel):
@@ -237,10 +252,11 @@ async def get_version():
 
 @app.post("/api/version/check")
 async def api_check_ytdlp_update():
-    """Manually re-runs the same yt-dlp -U check done at startup, so the
-    user doesn't have to restart the whole app just to pick up a newer
-    yt-dlp release (sites break yt-dlp often enough that this is worth
-    a one-click action rather than only checking once per boot)."""
+    """Manually re-runs the same yt-dlp --update-to nightly check done at
+    startup, so the user doesn't have to restart the whole app just to
+    pick up a newer yt-dlp build (sites break yt-dlp often enough that
+    this is worth a one-click action rather than only checking once per
+    boot)."""
     version, just_updated = await check_and_update_ytdlp()
     version_state["version"] = version
     version_state["just_updated"] = just_updated
@@ -289,7 +305,46 @@ async def api_get_download_prefs():
 
 @app.post("/api/download-prefs")
 async def api_set_download_prefs(req: DownloadPrefsRequest):
-    return set_download_prefs(req.quality, req.tag_domain, req.m3u_sniffer)
+    return set_download_prefs(req.quality, req.tag_domain, req.m3u_sniffer, req.auto_m3u_retry)
+
+
+@app.get("/api/ytdlp-args")
+async def api_get_ytdlp_args():
+    return get_ytdlp_args()
+
+
+@app.get("/api/ytdlp-args/for-url")
+async def api_get_ytdlp_args_for_url(url: str):
+    """Resolves the domain for a pasted URL server-side (reusing the
+    same get_domain() the file-tagging feature already uses, so the
+    frontend never has to duplicate that hostname-parsing logic) and
+    reports back whether a saved rule exists for it - lets the input
+    field's args indicator light up without the frontend needing its
+    own copy of the domain/args data."""
+    domain = get_domain(url)
+    args = get_ytdlp_args()
+    return {
+        "domain": domain,
+        "args": args["domain_args"].get(domain, ""),
+    }
+
+
+@app.post("/api/ytdlp-args/default")
+async def api_set_ytdlp_default_args(req: YtdlpDefaultArgsRequest):
+    return set_ytdlp_default_args(req.args)
+
+
+@app.post("/api/ytdlp-args/domain")
+async def api_set_ytdlp_domain_args(req: YtdlpDomainArgsRequest):
+    try:
+        return set_ytdlp_domain_args(req.domain, req.args)
+    except ValueError as e:
+        return JSONResponse(status_code=400, content={"error": str(e)})
+
+
+@app.post("/api/ytdlp-args/domain/delete")
+async def api_delete_ytdlp_domain_args(req: YtdlpDomainArgsDeleteRequest):
+    return delete_ytdlp_domain_args(req.domain)
 
 
 @app.post("/api/target-settings/recent/remove")

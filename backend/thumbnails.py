@@ -8,7 +8,7 @@ collision to worry about.
 
 Preference order:
   1. Already present in the thumbnails folder - either yt-dlp's own
-     thumbnail (relocated there after download by job_manager) or a
+     thumbnail (written there directly during download) or a
      previously-cached ffmpeg frame grab
   2. A fresh ffmpeg frame grab (a few seconds in), cached there for next time
   3. None - the frontend shows its own placeholder icon

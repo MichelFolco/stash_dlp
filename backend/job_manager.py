@@ -14,7 +14,7 @@ from typing import Dict, Optional
 from config import RES_FORMATS, AUDIO_ONLY_KEY
 from ffmpeg_encode import probe_basic_info
 from procflags import NO_CONSOLE_KWARGS
-from settings import get_save_dir, get_target_dir
+from settings import get_download_prefs, get_save_dir, get_target_dir, get_ytdlp_args, get_thumbnails_dir
 from storage import load_saved_queue, save_queue_to_disk, write_to_history_log
 from thumbnails import thumbnail_path_for
 from ytdlp_utils import (
@@ -24,6 +24,8 @@ from ytdlp_utils import (
     find_media_file,
     find_converted_file,
     is_audio_file,
+    get_domain,
+    split_args_string,
 )
 
 PROGRESS_RE = re.compile(
@@ -253,8 +255,10 @@ class JobManager:
         # things back to the frontend so it can run the same M3U
         # sniffing flow the user would trigger manually (message in the
         # input box, sniff, then let the user confirm/edit the title
-        # before it's resubmitted as a fresh job).
-        if status == "ERROR" and filename not in self._cancelled:
+        # before it's resubmitted as a fresh job). Gated behind a
+        # settings toggle - some users would rather just see the plain
+        # ERROR card than have every failure kick off a sniff attempt.
+        if status == "ERROR" and filename not in self._cancelled and get_download_prefs()["auto_m3u_retry"]:
             await self._abandon_for_m3u_retry(job, log_url)
             return
 
@@ -279,6 +283,16 @@ class JobManager:
     async def _attempt_ytdlp(self, job: dict, url: str, out_path: str, is_audio_only: bool, filename: str) -> str:
         """Runs a single yt-dlp attempt against `url` and returns
         'DONE' / 'ERROR' / 'CANCELLED'."""
+        # Global default args (throttling knobs, --cookies-from-browser,
+        # etc.) plus any rule saved for this URL's domain (site-specific
+        # fixes like a TikTok --extractor-args workaround), appended
+        # AFTER the built-in flags below so a single-value override
+        # (e.g. -f) in the user's args wins without yt-dlp erroring on
+        # a repeated flag; harmless boolean flags simply appear twice.
+        ytdlp_args = get_ytdlp_args()
+        extra_args = split_args_string(ytdlp_args["default_args"])
+        extra_args += split_args_string(ytdlp_args["domain_args"].get(get_domain(url), ""))
+
         try:
             if is_audio_only:
                 proc = await asyncio.create_subprocess_exec(
@@ -290,8 +304,13 @@ class JobManager:
                     "--no-playlist",
                     "--newline",
                     "--progress",
+                    # Send yt-dlp thumbnails directly to the central library_data
+                    # thumbnail cache. This prevents a second thumbnail from being
+                    # left beside the downloaded media file.
+                    "--paths", f"thumbnail:{get_thumbnails_dir()}",
                     "--write-thumbnail",
                     "--convert-thumbnails", "jpg",
+                    *extra_args,
                     "-o", out_path,
                     url,
                     stdout=asyncio.subprocess.PIPE,
@@ -307,8 +326,13 @@ class JobManager:
                     "--no-playlist",
                     "--newline",
                     "--progress",
+                    # Send yt-dlp thumbnails directly to the central library_data
+                    # thumbnail cache. This prevents a second thumbnail from being
+                    # left beside the downloaded media file.
+                    "--paths", f"thumbnail:{get_thumbnails_dir()}",
                     "--write-thumbnail",
                     "--convert-thumbnails", "jpg",
+                    *extra_args,
                     "-o", out_path,
                     url,
                     stdout=asyncio.subprocess.PIPE,
@@ -446,9 +470,14 @@ class JobManager:
         })
 
     def _relocate_downloaded_thumbnail(self, filename: str) -> None:
-        """yt-dlp writes its thumbnail next to the video by default; move
-        it into the isolated stash_dlp_data/.thumbnails folder instead,
-        named plainly as <filename>.jpg."""
+        """Compatibility fallback for thumbnails written by older yt-dlp
+        configurations.
+
+        New downloads are directed straight into the central library_data
+        thumbnail cache via --paths thumbnail:..., so this normally has
+        nothing to do. It only moves a legacy <filename>.jpg left beside
+        the media file by an older yt-dlp invocation.
+        """
         source = os.path.join(get_save_dir(), filename + ".jpg")
         if not os.path.exists(source):
             return
@@ -456,7 +485,7 @@ class JobManager:
         try:
             if os.path.exists(dest):
                 os.remove(dest)
-            os.rename(source, dest)
+            os.replace(source, dest)
         except OSError:
             pass
 

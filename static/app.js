@@ -36,6 +36,9 @@ const state = {
   stagedUrl: "",
   tagDomain: true,
   m3uSniffer: false,
+  autoM3uRetry: true,
+  ytdlpDefaultArgs: "",
+  ytdlpDomainArgs: {},   // domain -> args string, mirrors backend's ytdlp_args.domain_args
   jobs: new Map(),            // filename -> job dict
   saveDirPath: "",            // current download folder, kept in sync by setSaveDirDisplay
   historyEntries: [],         // Search History Mode's flat list of log entries
@@ -124,6 +127,20 @@ const programPathInput = el("program-path-input");
 const programArgsInput = el("program-args-input");
 const programFormError = el("program-form-error");
 const programDeleteBtn = el("program-delete-btn");
+const urlArgsBtn = el("url-args-btn");
+const urlArgsFlyout = el("url-args-flyout");
+const urlArgsDomainLabel = el("url-args-domain-label");
+const urlArgsQuickInput = el("url-args-quick-input");
+const ytdlpArgsModal = el("ytdlp-args-modal");
+const ytdlpDefaultArgsInput = el("ytdlp-default-args-input");
+const ytdlpDefaultArgsError = el("ytdlp-default-args-error");
+const ytdlpDomainArgsList = el("ytdlp-domain-args-list");
+const ytdlpDomainArgsFormModal = el("ytdlp-domain-args-form-modal");
+const ytdlpDomainArgsFormTitle = el("ytdlp-domain-args-form-title");
+const ytdlpDomainInput = el("ytdlp-domain-input");
+const ytdlpDomainArgsInput = el("ytdlp-domain-args-input");
+const ytdlpDomainArgsFormError = el("ytdlp-domain-args-form-error");
+const ytdlpDomainArgsDeleteBtn = el("ytdlp-domain-args-delete-btn");
 
 function openStashImportModal() {
   stashImportError.classList.add("hidden");
@@ -187,6 +204,8 @@ async function boot() {
   await refreshTargetDir();
   await refreshExternalPrograms();
   await refreshDownloadPrefs();
+  await refreshYtdlpArgs();
+  updateUrlArgsChip();
   await loadJobsSnapshot();
   await loadEncodeJobsSnapshot();
   connectWebSocket();
@@ -229,13 +248,263 @@ async function refreshDownloadPrefs() {
     resDropdown.value = data.quality || "720p";
     state.tagDomain = data.tag_domain !== false;
     state.m3uSniffer = !!data.m3u_sniffer;
+    state.autoM3uRetry = data.auto_m3u_retry !== false;
   } catch (e) {
     // Backend unreachable at boot - just keep the hard-coded defaults
     // already baked into the HTML/state.
   }
   el("ctx-tag-toggle").querySelector(".ctx-check").textContent = state.tagDomain ? "✓" : "";
   el("ctx-m3u-toggle").querySelector(".ctx-check").textContent = state.m3uSniffer ? "✓" : "";
+  el("ctx-auto-m3u-retry-toggle").querySelector(".ctx-check").textContent = state.autoM3uRetry ? "✓" : "";
 }
+
+async function refreshYtdlpArgs() {
+  try {
+    const res = await fetch("/api/ytdlp-args");
+    const data = await res.json();
+    state.ytdlpDefaultArgs = data.default_args || "";
+    state.ytdlpDomainArgs = data.domain_args || {};
+  } catch (e) {
+    // Backend unreachable at boot - keep empty defaults, not worth
+    // surfacing an error over what's a purely optional feature.
+  }
+}
+
+// Mirrors backend get_domain() (ytdlp_utils.py) closely enough for a
+// pure client-side lookup key: strip a www/www2/m subdomain, take the
+// first label. Doesn't need to be byte-identical to the Python version
+// since it's only ever used to look up state.ytdlpDomainArgs (already
+// fetched from the server) for the chip's lit/unlit state - the
+// authoritative save/apply path always goes back through the backend.
+function getDomainClientSide(url) {
+  try {
+    const host = new URL(url.trim()).hostname || "";
+    return host.replace(/^(www\d?|m)\./, "").split(".")[0];
+  } catch (e) {
+    return "";
+  }
+}
+
+function updateUrlArgsChip() {
+  const domain = getDomainClientSide(inputField.value);
+  if (!domain) {
+    urlArgsBtn.classList.remove("active");
+    urlArgsBtn.title = "Paste a URL to set yt-dlp args for that site";
+    return;
+  }
+  const args = state.ytdlpDomainArgs[domain] || "";
+  urlArgsBtn.classList.toggle("active", !!args);
+  urlArgsBtn.title = args
+    ? `Custom yt-dlp args for "${domain}": ${args}`
+    : `No custom yt-dlp args for "${domain}" yet - click to add`;
+}
+
+inputField.addEventListener("input", updateUrlArgsChip);
+
+urlArgsBtn.addEventListener("click", () => {
+  if (!urlArgsFlyout.classList.contains("hidden")) {
+    urlArgsFlyout.classList.add("hidden");
+    return;
+  }
+  const domain = getDomainClientSide(inputField.value);
+  urlArgsFlyout.dataset.domain = domain;
+  if (!domain) {
+    urlArgsDomainLabel.textContent = "Paste a URL first";
+    urlArgsQuickInput.value = "";
+    urlArgsQuickInput.disabled = true;
+  } else {
+    urlArgsDomainLabel.textContent = `Args for "${domain}"`;
+    urlArgsQuickInput.value = state.ytdlpDomainArgs[domain] || "";
+    urlArgsQuickInput.disabled = false;
+  }
+  closeOtherFlyouts(urlArgsFlyout);
+  positionFlyoutNextTo(urlArgsFlyout, urlArgsBtn);
+});
+
+async function saveUrlArgsQuick() {
+  const domain = urlArgsFlyout.dataset.domain;
+  if (!domain) return;
+  try {
+    const res = await fetch("/api/ytdlp-args/domain", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ domain, args: urlArgsQuickInput.value }),
+    });
+    const data = await res.json();
+    if (!res.ok) { flashStatus(data.error || "Couldn't save args."); return; }
+    state.ytdlpDefaultArgs = data.default_args || "";
+    state.ytdlpDomainArgs = data.domain_args || {};
+    updateUrlArgsChip();
+    urlArgsFlyout.classList.add("hidden");
+    flashStatus(`Saved yt-dlp args for "${domain}"`);
+  } catch (e) {
+    flashStatus("Couldn't reach the server to save args.");
+  }
+}
+el("url-args-quick-save").addEventListener("click", saveUrlArgsQuick);
+urlArgsQuickInput.addEventListener("keydown", (e) => {
+  if (e.key === "Enter") saveUrlArgsQuick();
+});
+
+el("url-args-manage-all").addEventListener("click", () => {
+  urlArgsFlyout.classList.add("hidden");
+  openYtdlpArgsModal();
+});
+
+el("ctx-manage-ytdlp-args").addEventListener("click", () => {
+  closeMenus();
+  openYtdlpArgsModal();
+});
+
+// ── yt-dlp args management modal (default args + per-domain list) ──
+function openYtdlpArgsModal() {
+  ytdlpDefaultArgsInput.value = state.ytdlpDefaultArgs;
+  ytdlpDefaultArgsError.classList.add("hidden");
+  renderYtdlpDomainArgsList();
+  ytdlpArgsModal.classList.remove("hidden");
+}
+
+function closeYtdlpArgsModal() {
+  ytdlpArgsModal.classList.add("hidden");
+}
+
+function renderYtdlpDomainArgsList() {
+  ytdlpDomainArgsList.innerHTML = "";
+  const domains = Object.keys(state.ytdlpDomainArgs).sort();
+  if (domains.length === 0) {
+    const empty = document.createElement("div");
+    empty.className = "program-empty-note";
+    empty.textContent = "No site-specific rules added yet.";
+    ytdlpDomainArgsList.appendChild(empty);
+    return;
+  }
+  for (const domain of domains) {
+    const row = document.createElement("div");
+    row.className = "program-row";
+
+    const info = document.createElement("div");
+    info.className = "program-row-info";
+    const nameEl = document.createElement("div");
+    nameEl.className = "program-row-name";
+    nameEl.textContent = domain;
+    const argsEl = document.createElement("div");
+    argsEl.className = "program-row-path";
+    argsEl.textContent = state.ytdlpDomainArgs[domain];
+    argsEl.title = state.ytdlpDomainArgs[domain];
+    info.appendChild(nameEl);
+    info.appendChild(argsEl);
+
+    const editBtn = document.createElement("button");
+    editBtn.className = "program-edit-btn";
+    editBtn.textContent = "Edit";
+    editBtn.addEventListener("click", () => openYtdlpDomainArgsForm(domain));
+
+    row.appendChild(info);
+    row.appendChild(editBtn);
+    ytdlpDomainArgsList.appendChild(row);
+  }
+}
+
+el("add-ytdlp-domain-args-btn").addEventListener("click", () => openYtdlpDomainArgsForm(null));
+el("ytdlp-args-close-btn").addEventListener("click", closeYtdlpArgsModal);
+ytdlpArgsModal.addEventListener("click", (e) => {
+  if (e.target === ytdlpArgsModal) closeYtdlpArgsModal();
+});
+
+async function saveYtdlpDefaultArgs() {
+  try {
+    const res = await fetch("/api/ytdlp-args/default", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ args: ytdlpDefaultArgsInput.value }),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      ytdlpDefaultArgsError.textContent = data.error || "Unknown error";
+      ytdlpDefaultArgsError.classList.remove("hidden");
+      return;
+    }
+    state.ytdlpDefaultArgs = data.default_args || "";
+    state.ytdlpDomainArgs = data.domain_args || {};
+    ytdlpDefaultArgsError.classList.add("hidden");
+  } catch (e) {
+    ytdlpDefaultArgsError.textContent = "Couldn't reach the server.";
+    ytdlpDefaultArgsError.classList.remove("hidden");
+  }
+}
+ytdlpDefaultArgsInput.addEventListener("change", saveYtdlpDefaultArgs);
+
+let editingYtdlpDomain = null;
+
+function openYtdlpDomainArgsForm(domain) {
+  editingYtdlpDomain = domain;
+  ytdlpDomainArgsFormTitle.textContent = domain ? "Edit Site Rule" : "Add Site Rule";
+  ytdlpDomainInput.value = domain || "";
+  // Domain is the storage key - don't let an edit rename it out from
+  // under state.ytdlpDomainArgs; delete + re-add covers that instead.
+  ytdlpDomainInput.disabled = !!domain;
+  ytdlpDomainArgsInput.value = domain ? (state.ytdlpDomainArgs[domain] || "") : "";
+  ytdlpDomainArgsFormError.classList.add("hidden");
+  ytdlpDomainArgsDeleteBtn.classList.toggle("hidden", !domain);
+  ytdlpDomainArgsFormModal.classList.remove("hidden");
+  (domain ? ytdlpDomainArgsInput : ytdlpDomainInput).focus();
+}
+
+function closeYtdlpDomainArgsForm() {
+  ytdlpDomainArgsFormModal.classList.add("hidden");
+  editingYtdlpDomain = null;
+  ytdlpDomainInput.disabled = false;
+}
+
+function showYtdlpDomainArgsFormError(message) {
+  ytdlpDomainArgsFormError.textContent = message;
+  ytdlpDomainArgsFormError.classList.remove("hidden");
+}
+
+el("ytdlp-domain-args-form-cancel-btn").addEventListener("click", closeYtdlpDomainArgsForm);
+ytdlpDomainArgsFormModal.addEventListener("click", (e) => {
+  if (e.target === ytdlpDomainArgsFormModal) closeYtdlpDomainArgsForm();
+});
+
+async function saveYtdlpDomainArgsForm() {
+  const domain = ytdlpDomainInput.value.trim();
+  const args = ytdlpDomainArgsInput.value;
+  if (!domain) { showYtdlpDomainArgsFormError("Domain can't be empty."); return; }
+  try {
+    const res = await fetch("/api/ytdlp-args/domain", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ domain, args }),
+    });
+    const data = await res.json();
+    if (!res.ok) { showYtdlpDomainArgsFormError(data.error || "Unknown error"); return; }
+    state.ytdlpDefaultArgs = data.default_args || "";
+    state.ytdlpDomainArgs = data.domain_args || {};
+    renderYtdlpDomainArgsList();
+    updateUrlArgsChip();
+    closeYtdlpDomainArgsForm();
+  } catch (e) {
+    showYtdlpDomainArgsFormError("Couldn't reach the server to save that rule.");
+  }
+}
+el("ytdlp-domain-args-form-save-btn").addEventListener("click", saveYtdlpDomainArgsForm);
+
+el("ytdlp-domain-args-delete-btn").addEventListener("click", async () => {
+  if (!editingYtdlpDomain) return;
+  if (!window.confirm(`Remove the yt-dlp args rule for "${editingYtdlpDomain}"?`)) return;
+  try {
+    const res = await fetch("/api/ytdlp-args/domain/delete", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ domain: editingYtdlpDomain }),
+    });
+    const data = await res.json();
+    if (!res.ok) { showYtdlpDomainArgsFormError(data.error || "Unknown error"); return; }
+    state.ytdlpDefaultArgs = data.default_args || "";
+    state.ytdlpDomainArgs = data.domain_args || {};
+    renderYtdlpDomainArgsList();
+    updateUrlArgsChip();
+    closeYtdlpDomainArgsForm();
+  } catch (e) {
+    showYtdlpDomainArgsFormError("Couldn't reach the server to delete that rule.");
+  }
+});
 
 function saveDownloadPrefs() {
   fetch("/api/download-prefs", {
@@ -244,6 +513,7 @@ function saveDownloadPrefs() {
       quality: resDropdown.value,
       tag_domain: state.tagDomain,
       m3u_sniffer: state.m3uSniffer,
+      auto_m3u_retry: state.autoM3uRetry,
     }),
   }).catch((e) => { /* best-effort - not worth surfacing a UI error over */ });
 }
@@ -1179,7 +1449,7 @@ function cssEscape(s) {
 // Every submenu flyout in the app - Copy/File (job menu) and
 // Folders/Settings (logo menu) all share this one open/close/position
 // mechanism, so anything that resets menu state just walks this list.
-const ALL_FLYOUTS = [openWithFlyout, copyFlyout, fileFlyout, foldersFlyout, settingsFlyout, dlFolderQuickMenu, targetFolderQuickMenu];
+const ALL_FLYOUTS = [openWithFlyout, copyFlyout, fileFlyout, foldersFlyout, settingsFlyout, dlFolderQuickMenu, targetFolderQuickMenu, urlArgsFlyout];
 
 function hideAllFlyouts() {
   for (const flyout of ALL_FLYOUTS) flyout.classList.add("hidden");
@@ -1927,6 +2197,12 @@ el("ctx-m3u-toggle").addEventListener("click", () => {
   saveDownloadPrefs();
 });
 
+el("ctx-auto-m3u-retry-toggle").addEventListener("click", () => {
+  state.autoM3uRetry = !state.autoM3uRetry;
+  el("ctx-auto-m3u-retry-toggle").querySelector(".ctx-check").textContent = state.autoM3uRetry ? "✓" : "";
+  saveDownloadPrefs();
+});
+
 el("ctx-restart-app").addEventListener("click", async () => {
   closeMenus();
   const activeDownloads = Array.from(state.jobs.values()).filter((j) => j.status === "DOWNLOADING").length;
@@ -2580,6 +2856,7 @@ function resetToReady() {
   modeContainer.style.pointerEvents = "";
   inputField.value = "";
   inputField.placeholder = "Paste a link, then press ENTER...";
+  updateUrlArgsChip();
   updateModeButtons();
   if (wasHistoryMode) {
     exitHistoryModeUI();

@@ -24,6 +24,8 @@
       <button id="encode-mode-btn" class="mode-btn mode-btn-right" title="Encode Manager">🎞️</button>
     </div>
 
+    <button id="url-args-btn" class="icon-btn" title="No custom yt-dlp args for this site">🧩</button>
+
     <button id="gear-btn" class="icon-btn" title="Options">⚙️</button>
   </div>
 
@@ -129,6 +131,17 @@
   <div id="target-folder-quickmenu-list"></div>
 </div>
 
+<!-- Quick per-site args popover, opened from the 🧩 chip next to the input field -->
+<div id="url-args-flyout" class="ctx-menu hidden">
+  <div class="ctx-item ctx-row" style="flex-direction:column; align-items:stretch; gap:6px;">
+    <span id="url-args-domain-label" class="ctx-label">No URL yet</span>
+    <input id="url-args-quick-input" class="input-field" type="text" placeholder="Args for this site" autocomplete="off" spellcheck="false" style="width:260px;">
+  </div>
+  <div class="ctx-separator"></div>
+  <div id="url-args-quick-save" class="ctx-item">Save</div>
+  <div id="url-args-manage-all" class="ctx-item">Manage yt-dlp Arguments...</div>
+</div>
+
 <!-- Settings flyout: Max Res + toggles -->
 <div id="settings-flyout" class="ctx-menu hidden">
   <div class="ctx-item ctx-row">
@@ -147,6 +160,11 @@
   <div id="ctx-m3u-toggle" class="ctx-item ctx-checkable">
     <span class="ctx-check"></span> M3U Sniffer Mode
   </div>
+  <div id="ctx-auto-m3u-retry-toggle" class="ctx-item ctx-checkable">
+    <span class="ctx-check">✓</span> Auto-Retry Failed Downloads via M3U
+  </div>
+  <div class="ctx-separator"></div>
+  <div id="ctx-manage-ytdlp-args" class="ctx-item">Manage yt-dlp Arguments...</div>
 </div>
 
 <div id="job-menu" class="ctx-menu hidden">
@@ -249,6 +267,43 @@
     </div>
   </div>
 </div>
+
+<div id="ytdlp-args-modal" class="modal-overlay hidden">
+  <div class="modal-box">
+    <div class="modal-title">yt-dlp Arguments</div>
+    <div class="hint">Applied to every download - useful for throttling flags, --cookies-from-browser, etc.</div>
+    <div class="modal-row" style="margin-top:8px;">
+      <input id="ytdlp-default-args-input" class="input-field" type="text" placeholder="Default arguments (applied to every download)" autocomplete="off" spellcheck="false">
+    </div>
+    <div id="ytdlp-default-args-error" class="modal-error hidden"></div>
+    <div class="ctx-separator" style="margin:12px 0;"></div>
+    <div class="hint">Per-site rules - added on top of the defaults above, matched against the domain of the pasted URL.</div>
+    <div id="ytdlp-domain-args-list" class="modal-recent-list external-programs-list" style="margin-top:8px;"></div>
+    <div class="modal-actions external-programs-actions">
+      <button id="add-ytdlp-domain-args-btn" class="btn">+ Add Site Rule</button>
+      <button id="ytdlp-args-close-btn" class="btn btn-primary">Close</button>
+    </div>
+  </div>
+</div>
+
+<div id="ytdlp-domain-args-form-modal" class="modal-overlay hidden">
+  <div class="modal-box">
+    <div id="ytdlp-domain-args-form-title" class="modal-title">Add Site Rule</div>
+    <div class="modal-row program-form-row">
+      <input id="ytdlp-domain-input" class="input-field" type="text" placeholder="Domain (e.g. tiktok, youtube)" autocomplete="off" spellcheck="false">
+    </div>
+    <div class="modal-row program-form-row">
+      <input id="ytdlp-domain-args-input" class="input-field" type="text" placeholder='Arguments (e.g. --extractor-args "tiktok:api_hostname=...")' autocomplete="off" spellcheck="false">
+    </div>
+    <div id="ytdlp-domain-args-form-error" class="modal-error hidden"></div>
+    <div class="modal-actions">
+      <button id="ytdlp-domain-args-delete-btn" class="btn btn-danger hidden">Delete</button>
+      <button id="ytdlp-domain-args-form-cancel-btn" class="btn">Cancel</button>
+      <button id="ytdlp-domain-args-form-save-btn" class="btn btn-primary">Save</button>
+    </div>
+  </div>
+</div>
+
 
 <div id="video-modal" class="modal-overlay hidden">
   <div class="video-modal-box">

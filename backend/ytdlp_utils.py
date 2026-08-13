@@ -6,6 +6,7 @@ event loop.
 import asyncio
 import os
 import re
+import sys
 from urllib.parse import urlparse
 
 from config import AUDIO_EXTENSIONS
@@ -165,11 +166,32 @@ async def fetch_title(url: str) -> str:
 
 async def check_and_update_ytdlp():
     """Mirrors boot_filesystem_scan/finalize_boot_scan's version + update
-    detection. Returns (version, just_updated)."""
+    detection. Returns (version, just_updated).
+
+    Uses the nightly channel instead of stable, since nightly picks up
+    extractor fixes faster than the ~weekly stable releases. There are
+    two totally different update mechanisms depending on how yt-dlp was
+    installed, and only one works for a given install:
+
+    - Standalone binary builds: `yt-dlp --update-to nightly` works and
+      self-replaces the executable.
+    - pip installs: `--update-to` is a no-op that just prints
+      "ERROR: You installed yt-dlp with pip or using the wheel from
+      PyPi; Use that to update" and exits - it can NEVER update a pip
+      install, regardless of channel. Pip installs have to instead be
+      upgraded via `pip install -U --pre "yt-dlp[default]"` (--pre is
+      what pulls in nightly/dev builds from PyPI, since pip ignores
+      pre-release versions by default).
+
+    We try --update-to first (cheap, and correct for binary installs).
+    If its output shows the "installed with pip" error, we fall back to
+    the pip upgrade path using sys.executable so it targets the exact
+    Python environment this app is running under."""
     try:
         proc = await asyncio.create_subprocess_exec(
             "yt-dlp",
-            "-U",
+            "--update-to",
+            "nightly",
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
             **NO_CONSOLE_KWARGS,
@@ -179,8 +201,14 @@ async def check_and_update_ytdlp():
     except Exception:
         output = ""
 
-    updated_match = re.search(r"Updated yt-dlp to version\s+([\d.]+)", output, re.IGNORECASE)
-    uptodate_match = re.search(r"up to date\s*\(?\s*([\d.]+)", output, re.IGNORECASE)
+    if re.search(r"installed yt-dlp with pip", output, re.IGNORECASE):
+        return await _update_ytdlp_via_pip()
+
+    # Nightly output looks like:
+    #   "Updated yt-dlp to nightly@2025.07.25.233059 from yt-dlp/yt-dlp-nightly-builds"
+    #   "yt-dlp is up to date (nightly@2025.07.25.233059 from yt-dlp/yt-dlp-nightly-builds)"
+    updated_match = re.search(r"Updated yt-dlp to\s+(\S+)", output, re.IGNORECASE)
+    uptodate_match = re.search(r"up to date\s*\(\s*(\S+)", output, re.IGNORECASE)
 
     if updated_match:
         return updated_match.group(1), True
@@ -189,6 +217,28 @@ async def check_and_update_ytdlp():
         return uptodate_match.group(1), False
 
     return await fetch_version_sync(), False
+
+
+async def _update_ytdlp_via_pip():
+    """Upgrades a pip-installed yt-dlp to the latest nightly/dev build
+    on PyPI. Returns (version, just_updated), matching
+    check_and_update_ytdlp()'s contract."""
+    before = await fetch_version_sync()
+
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            sys.executable,
+            "-m", "pip", "install", "-U", "--pre", "yt-dlp[default]",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.STDOUT,
+            **NO_CONSOLE_KWARGS,
+        )
+        await asyncio.wait_for(proc.communicate(), timeout=60)
+    except Exception:
+        pass
+
+    after = await fetch_version_sync()
+    return after, (after != before and after != "")
 
 
 async def fetch_version_sync() -> str:
