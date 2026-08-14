@@ -58,6 +58,19 @@ html, body {
   gap: 6px;
 }
 
+.top-row-url {
+  flex: 1;
+  display: flex;
+  min-width: 0;
+}
+
+.top-row-buttons {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
 .logo {
   height: 28px;
   flex-shrink: 0;
@@ -1256,6 +1269,20 @@ html, body {
   .job-path { display: none; }
   .job-card-icons { display: none; }
   .job-title { font-size: calc(var(--base-font) + 4px); }
+
+  /* ── Mobile top layout: URL bar on its own row, controls on the
+     row below, folder status pushed down to the row after that. ── */
+  .top-row {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .top-row-url {
+    width: 100%;
+  }
+  .top-row-buttons {
+    width: 100%;
+    justify-content: flex-start;
+  }
 }
 
 /* ── Synchronize Audio ─────────────────────────────────────── */

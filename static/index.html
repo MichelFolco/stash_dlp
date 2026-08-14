@@ -13,20 +13,23 @@
 <div id="app" class="app">
 
   <div class="top-row">
-    <img id="logo" class="logo" src="/static/logo.png" alt="" onerror="this.style.display='none'">
-
-    <input id="input-field" class="input-field" type="text"
-           placeholder="Checking for yt-dlp updates..." autocomplete="off" spellcheck="false">
-
-    <div id="mode-container" class="mode-container">
-      <button id="dl-mode-btn" class="mode-btn mode-btn-left" title="Download Mode Active">⬇️</button>
-      <button id="history-mode-btn" class="mode-btn mode-btn-mid" title="Switch to Search History Mode (Ctrl+F)">🔍</button>
-      <button id="encode-mode-btn" class="mode-btn mode-btn-right" title="Encode Manager">🎞️</button>
+    <div class="top-row-url">
+      <input id="input-field" class="input-field" type="text"
+             placeholder="Checking for yt-dlp updates..." autocomplete="off" spellcheck="false">
     </div>
+    <div class="top-row-buttons">
+      <img id="logo" class="logo" src="/static/logo.png" alt="" onerror="this.style.display='none'">
 
-    <button id="url-args-btn" class="icon-btn" title="No custom yt-dlp args for this site">🧩</button>
+      <div id="mode-container" class="mode-container">
+        <button id="dl-mode-btn" class="mode-btn mode-btn-left" title="Download Mode Active">⬇️</button>
+        <button id="history-mode-btn" class="mode-btn mode-btn-mid" title="Switch to Search History Mode (Ctrl+F)">🔍</button>
+        <button id="encode-mode-btn" class="mode-btn mode-btn-right" title="Encode Manager">🎞️</button>
+      </div>
 
-    <button id="gear-btn" class="icon-btn" title="Options">⚙️</button>
+      <button id="url-args-btn" class="icon-btn" title="No custom yt-dlp args for this site">🧩</button>
+
+      <button id="gear-btn" class="icon-btn" title="Options">⚙️</button>
+    </div>
   </div>
 
   <div id="folder-status-row" class="folder-status-row">
@@ -38,9 +41,7 @@
   <div id="download-view">
     <div id="control-bar" class="control-bar">
       <button id="refresh-btn" class="btn">Refresh</button>
-      <button id="stash-menu-btn" class="btn">Stash</button>
-      <button id="move-all-btn" class="btn">Move All to Target</button>
-      <button id="select-mode-btn" class="btn">Select</button>
+      <button id="move-all-btn" class="btn">Move All</button>
     </div>
 
     <div id="selection-action-bar" class="selection-action-bar hidden">
@@ -62,6 +63,7 @@
         <option value="name">Filename</option>
       </select>
       <button id="ledger-sort-dir" class="icon-btn" title="Toggle sort direction">↓</button>
+      <button id="select-mode-btn" class="icon-btn" title="Select"><i class="ti ti-checkbox"></i></button>
     </div>
     <div id="ledger-stats-bar" class="ledger-stats-bar"></div>
 

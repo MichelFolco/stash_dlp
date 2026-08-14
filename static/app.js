@@ -82,7 +82,6 @@ const logoMenu = el("logo-menu");
 const jobMenu = el("job-menu");
 const historyMenu = el("history-menu");
 const folderModal = el("folder-modal");
-const stashMenuBtn = el("stash-menu-btn");
 const stashMenuFlyout = el("stash-menu-flyout");
 const stashImportModal = el("stash-import-modal");
 const stashImportInput = el("stash-import-input");
@@ -220,15 +219,14 @@ stashImportInput.addEventListener("keydown", (e) => {
 });
 
 // ── Stash menu (Stash button -> Import from Stash / Check Tag) ──
-stashMenuBtn.addEventListener("click", (e) => {
-  e.stopPropagation();
+function openStashMenuFlyout() {
   if (!stashMenuFlyout.classList.contains("hidden")) {
     stashMenuFlyout.classList.add("hidden");
     return;
   }
   closeOtherFlyouts(stashMenuFlyout);
-  positionDropdownBelow(stashMenuFlyout, stashMenuBtn);
-});
+  positionDropdownBelow(stashMenuFlyout, inputField);
+}
 el("stash-menu-import").addEventListener("click", () => {
   stashMenuFlyout.classList.add("hidden");
   openStashImportModal();
@@ -1184,7 +1182,7 @@ function toggleSelection(filename) {
 function enterSelectionMode() {
   state.selectionMode = true;
   selectModeBtn.classList.add("active");
-  selectModeBtn.textContent = "Cancel Select";
+  selectModeBtn.title = "Cancel Select";
   queueList.classList.add("selection-mode");
   selectionActionBar.classList.remove("hidden");
   updateSelectionBar();
@@ -1195,7 +1193,7 @@ function exitSelectionMode() {
   state.selectionMode = false;
   state.selectedFilenames.clear();
   selectModeBtn.classList.remove("active");
-  selectModeBtn.textContent = "Select";
+  selectModeBtn.title = "Select";
   queueList.classList.remove("selection-mode");
   selectionActionBar.classList.add("hidden");
   for (const card of queueList.querySelectorAll(".job-card.selected")) {
@@ -3293,12 +3291,13 @@ function updateModeButtons() {
 }
 
 // Search History Mode reuses the same ledger toolbar (filter + sort),
-// but "Move All to Target"/"Refresh" and the audio-only filter don't
+// but "Move All"/"Refresh" and the audio-only filter don't
 // apply to history records, and there's no file size to sort by.
 function enterHistoryModeUI() {
   el("control-bar").classList.add("hidden");
   ledgerAudioFilterBtn.classList.add("hidden");
   ledgerHideCompletedBtn.classList.add("hidden");
+  selectModeBtn.classList.add("hidden");
   const sizeOption = ledgerSortSelect.querySelector('option[value="size"]');
   if (sizeOption) sizeOption.disabled = true;
   if (state.sortField === "size") {
@@ -3311,6 +3310,7 @@ function exitHistoryModeUI() {
   el("control-bar").classList.remove("hidden");
   ledgerAudioFilterBtn.classList.remove("hidden");
   ledgerHideCompletedBtn.classList.remove("hidden");
+  selectModeBtn.classList.remove("hidden");
   const sizeOption = ledgerSortSelect.querySelector('option[value="size"]');
   if (sizeOption) sizeOption.disabled = false;
 }
@@ -3662,7 +3662,7 @@ document.addEventListener("keydown", async (e) => {
   }
   if (e.ctrlKey && e.key.toLowerCase() === "s" && state.appMode === "DOWNLOAD") {
     e.preventDefault();
-    openStashImportModal();
+    openStashMenuFlyout();
     return;
   }
   if (!folderModal.classList.contains("hidden")) return; // modal has its own handler

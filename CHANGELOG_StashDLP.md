@@ -1,3 +1,9 @@
+## v0.97 - Toolbar cleanup
+- Removed the "Stash" button from the main control bar; Import from Stash and Check Tag are now reached via Ctrl+S, which opens the same menu the button used to.
+- Renamed "Move All to Target" to "Move All".
+- Replaced the text "Select" button with a checkbox icon button, moved from the control bar into the filter toolbar.
+- On mobile/touch layouts, the URL input is now its own top row, the logo/mode/settings buttons sit on the row below it, and the download/target folder status line is pushed down to the third row.
+
 ## v0.96 - Import from tag search results
 - Added an "Import" button next to "Open" on each row of the Check Tag results dialog, so a scene can be imported straight from the search results without needing its URL pasted into the separate Import from Stash dialog.
 
