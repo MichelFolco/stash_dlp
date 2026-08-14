@@ -2256,9 +2256,6 @@ async function closeSyncAudioModal(runCancel = true) {
 
 el("sync-audio-close").addEventListener("click", () => closeSyncAudioModal(true));
 el("sync-audio-cancel-btn").addEventListener("click", () => closeSyncAudioModal(true));
-syncAudioModal.addEventListener("click", (e) => {
-  if (e.target === syncAudioModal) closeSyncAudioModal(true);
-});
 
 el("ctx-delete-file").addEventListener("click", async () => {
   const filename = jobMenu.dataset.filename;
