@@ -43,7 +43,7 @@ from ytdlp_utils import clean_filename, find_media_file, format_file_size
 
 RENDER_TIMEOUT = 120       # ceiling for a full-video audio re-encode
 CLIP_RENDER_TIMEOUT = 30   # clips are tiny; this is generous already
-CLIP_DURATION_S = 10.0
+CLIP_DURATION_S = 20.0
 
 FILE_OP_RETRIES = 12
 FILE_OP_RETRY_DELAY = 0.3  # ~3.6s total ceiling before giving up
