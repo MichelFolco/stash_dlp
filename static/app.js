@@ -117,10 +117,14 @@ const audioPlayer = el("audio-player");
 const syncAudioModal = el("sync-audio-modal");
 const syncAudioPlayer = el("sync-audio-player");
 const syncAudioTitle = el("sync-audio-title");
+const syncAudioStageBadge = el("sync-audio-stage-badge");
 const syncAudioDelayInput = el("sync-audio-delay-input");
 const syncAudioStatus = el("sync-audio-status");
-const syncAudioApplyBtn = el("sync-audio-apply-btn");
+const syncAudioPrimaryBtn = el("sync-audio-primary-btn");
+const syncAudioRedoClipBtn = el("sync-audio-redo-clip-btn");
 const syncAudioConfirmBtn = el("sync-audio-confirm-btn");
+const syncAudioDiscardBtn = el("sync-audio-discard-btn");
+const syncAudioAcceptBtn = el("sync-audio-accept-btn");
 const syncAudioCancelBtn = el("sync-audio-cancel-btn");
 const openWithFlyout = el("open-with-flyout");
 const openWithProgramsList = el("open-with-programs-list");
@@ -1933,33 +1937,84 @@ videoModal.addEventListener("click", (e) => {
 });
 
 // ── Synchronize Audio ────────────────────────────────────────
-// syncAudioState tracks the currently-open session: whether anything
-// has actually been Applied yet (so Close can skip the cancel call
-// entirely when nothing changed) and the delay that's currently live in
-// the player, so Confirm always persists exactly what was last Applied.
-let syncAudioState = null; // { filename, hasAppliedThisSession, lastAppliedDelayMs }
+// syncAudioState.stage walks through: "original" -> "clip" -> "full",
+// with Redo Clip stepping back to "original" and Discard stepping
+// back to "clip". everCreatedThisSession tracks whether any render
+// exists server-side yet, so a plain Close/Cancel with nothing done
+// can skip the cleanup call entirely.
+let syncAudioState = null; // { filename, stage, clipStart, everCreatedThisSession }
 
 function openSyncAudioModal(filename) {
   const job = state.jobs.get(filename);
   if (!job) return;
 
-  syncAudioState = { filename, hasAppliedThisSession: false, lastAppliedDelayMs: null };
+  syncAudioState = { filename, stage: "original", clipStart: null, everCreatedThisSession: false };
   syncAudioTitle.textContent = `Synchronize Audio - ${filename}`;
   syncAudioDelayInput.value = job.audio_delay_ms || 0;
   setSyncAudioStatus("");
-  syncAudioConfirmBtn.disabled = !job.synchronized;
 
-  // Already-synchronized files play their confirmed twin; anything else
-  // starts from the original download until the first Apply.
+  // Already-synchronized files play their confirmed twin at first;
+  // anything else starts from the original download. Either way, the
+  // sync workflow itself (Create Clip, Confirm Sync) always renders
+  // off the true original media, never off a previous twin.
   const source = job.synchronized ? "converted" : "original";
-  syncAudioPlayer.src = `/api/jobs/stream?filename=${encodeURIComponent(filename)}&source=${source}&t=${Date.now()}`;
+  setSyncPlayerSource(filename, source);
+  syncAudioStageBadge.textContent = job.synchronized ? "Synchronized file loaded" : "Original file loaded";
+  applySyncStageUI();
   syncAudioModal.classList.remove("hidden");
+}
+
+function setSyncPlayerSource(filename, source) {
+  syncAudioPlayer.src = `/api/jobs/stream?filename=${encodeURIComponent(filename)}&source=${source}&t=${Date.now()}`;
+}
+
+// Pauses and fully detaches the player before any request that will
+// replace/delete the file it's currently showing - on Windows a file
+// still open for reading by the player can't be written to, and this
+// gives the browser (and the server's streaming generator) a moment
+// to actually let go of it before the file op runs.
+function detachSyncPlayer() {
+  syncAudioPlayer.pause();
+  syncAudioPlayer.removeAttribute("src");
+  syncAudioPlayer.load();
+  return new Promise((resolve) => setTimeout(resolve, 150));
 }
 
 function setSyncAudioStatus(text, kind) {
   syncAudioStatus.textContent = text;
   syncAudioStatus.classList.toggle("error", kind === "error");
   syncAudioStatus.classList.toggle("success", kind === "success");
+}
+
+function formatClipTime(seconds) {
+  const s = Math.max(0, Math.round(seconds || 0));
+  const m = Math.floor(s / 60);
+  const rem = s % 60;
+  return `${String(m).padStart(2, "0")}:${String(rem).padStart(2, "0")}`;
+}
+
+// Shows/hides/relabels the action buttons and delay dial for the
+// current stage. The delay dial only makes sense while a clip is
+// loaded (nothing to preview it against beforehand, nothing left to
+// tweak once the full render is staged).
+function applySyncStageUI() {
+  const stage = syncAudioState ? syncAudioState.stage : "original";
+  el("sync-audio-controls").classList.toggle("hidden", stage === "full");
+  syncAudioCancelBtn.classList.toggle("hidden", stage === "full");
+  syncAudioRedoClipBtn.classList.toggle("hidden", stage !== "clip");
+  syncAudioConfirmBtn.classList.toggle("hidden", stage !== "clip");
+  syncAudioDiscardBtn.classList.toggle("hidden", stage !== "full");
+  syncAudioAcceptBtn.classList.toggle("hidden", stage !== "full");
+  syncAudioPrimaryBtn.classList.toggle("hidden", stage === "full");
+  syncAudioPrimaryBtn.textContent = stage === "clip" ? "Apply Sync" : "Create Clip";
+}
+
+function setSyncButtonsDisabled(disabled) {
+  syncAudioPrimaryBtn.disabled = disabled;
+  syncAudioRedoClipBtn.disabled = disabled;
+  syncAudioConfirmBtn.disabled = disabled;
+  syncAudioDiscardBtn.disabled = disabled;
+  syncAudioAcceptBtn.disabled = disabled;
 }
 
 function nudgeSyncAudioDelay(deltaMs) {
@@ -1972,76 +2027,221 @@ el("sync-audio-dial-down-small").addEventListener("click", () => nudgeSyncAudioD
 el("sync-audio-dial-up-small").addEventListener("click", () => nudgeSyncAudioDelay(10));
 el("sync-audio-dial-up-big").addEventListener("click", () => nudgeSyncAudioDelay(100));
 
-syncAudioApplyBtn.addEventListener("click", async () => {
+// Create Clip / Apply Sync share one button - same slot in the
+// workflow, just a different render underneath depending on stage.
+syncAudioPrimaryBtn.addEventListener("click", async () => {
   if (!syncAudioState) return;
+  if (syncAudioState.stage === "clip") {
+    await applyClipDelay();
+  } else {
+    await createClip();
+  }
+});
+
+async function createClip() {
+  const { filename } = syncAudioState;
+  const startSeconds = syncAudioPlayer.currentTime || 0;
+
+  setSyncButtonsDisabled(true);
+  setSyncAudioStatus(`Cutting a clip from ${formatClipTime(startSeconds)}...`);
+  await detachSyncPlayer();
+
+  try {
+    const res = await fetch("/api/jobs/sync-audio/create-clip", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ filename, start_seconds: startSeconds, delay_ms: 0 }),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      setSyncAudioStatus(data.error || "Couldn't create the clip.", "error");
+      return;
+    }
+    syncAudioState.stage = "clip";
+    syncAudioState.clipStart = data.render.clip_start;
+    syncAudioState.everCreatedThisSession = true;
+    syncAudioDelayInput.value = 0;
+    setSyncPlayerSource(filename, "sync-clip");
+    syncAudioStageBadge.textContent = `Clip from ${formatClipTime(syncAudioState.clipStart)} loaded`;
+    setSyncAudioStatus("");
+    applySyncStageUI();
+  } catch (e) {
+    setSyncAudioStatus("Couldn't reach the server to create the clip.", "error");
+  } finally {
+    setSyncButtonsDisabled(false);
+  }
+}
+
+async function applyClipDelay() {
   const { filename } = syncAudioState;
   const delayMs = parseFloat(syncAudioDelayInput.value) || 0;
 
-  syncAudioApplyBtn.disabled = true;
-  syncAudioConfirmBtn.disabled = true;
-  setSyncAudioStatus(`Rendering with a ${delayMs} ms delay...`);
+  setSyncButtonsDisabled(true);
+  setSyncAudioStatus(`Rendering the clip with a ${delayMs} ms delay...`);
+  await detachSyncPlayer();
 
   try {
-    const res = await fetch("/api/jobs/sync-audio/apply", {
+    const res = await fetch("/api/jobs/sync-audio/apply-clip-delay", {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ filename, delay_ms: delayMs }),
     });
     const data = await res.json();
     if (!res.ok) {
-      setSyncAudioStatus(data.error || "Couldn't render the synced audio.", "error");
+      setSyncAudioStatus(data.error || "Couldn't render the synced clip.", "error");
       return;
     }
-    syncAudioState.hasAppliedThisSession = true;
-    syncAudioState.lastAppliedDelayMs = delayMs;
-    syncAudioPlayer.src = `/api/jobs/stream?filename=${encodeURIComponent(filename)}&source=converted&t=${Date.now()}`;
-    setSyncAudioStatus(`New synced render loaded (${delayMs} ms).`, "success");
+    setSyncPlayerSource(filename, "sync-clip");
+    setSyncAudioStatus(`Clip re-rendered with a ${delayMs} ms delay.`, "success");
   } catch (e) {
-    setSyncAudioStatus("Couldn't reach the server to render the synced audio.", "error");
+    setSyncAudioStatus("Couldn't reach the server to render the synced clip.", "error");
   } finally {
-    syncAudioApplyBtn.disabled = false;
-    syncAudioConfirmBtn.disabled = false;
+    setSyncButtonsDisabled(false);
+  }
+}
+
+syncAudioRedoClipBtn.addEventListener("click", async () => {
+  if (!syncAudioState) return;
+  const { filename } = syncAudioState;
+
+  setSyncButtonsDisabled(true);
+  setSyncAudioStatus("Reloading the full video...");
+  await detachSyncPlayer();
+
+  try {
+    const res = await fetch("/api/jobs/sync-audio/redo-clip", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ filename }),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      setSyncAudioStatus(data.error || "Couldn't reload the full video.", "error");
+      return;
+    }
+    syncAudioState.stage = "original";
+    syncAudioState.clipStart = null;
+    const job = state.jobs.get(filename);
+    setSyncPlayerSource(filename, job && job.synchronized ? "converted" : "original");
+    syncAudioStageBadge.textContent = job && job.synchronized ? "Synchronized file loaded" : "Original file loaded";
+    setSyncAudioStatus("");
+    applySyncStageUI();
+  } catch (e) {
+    setSyncAudioStatus("Couldn't reach the server to reload the full video.", "error");
+  } finally {
+    setSyncButtonsDisabled(false);
   }
 });
 
 syncAudioConfirmBtn.addEventListener("click", async () => {
   if (!syncAudioState) return;
   const { filename } = syncAudioState;
-  const delayMs = syncAudioState.lastAppliedDelayMs !== null
-    ? syncAudioState.lastAppliedDelayMs
-    : (parseFloat(syncAudioDelayInput.value) || 0);
+  const delayMs = parseFloat(syncAudioDelayInput.value) || 0;
 
-  syncAudioConfirmBtn.disabled = true;
+  setSyncButtonsDisabled(true);
+  setSyncAudioStatus(`Encoding the full video with a ${delayMs} ms delay - this can take a while...`);
+  await detachSyncPlayer();
+
   try {
-    const res = await fetch("/api/jobs/sync-audio/confirm", {
+    const res = await fetch("/api/jobs/sync-audio/render-full", {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ filename, delay_ms: delayMs }),
     });
     const data = await res.json();
     if (!res.ok) {
-      setSyncAudioStatus(data.error || "Couldn't confirm the sync.", "error");
-      syncAudioConfirmBtn.disabled = false;
+      setSyncAudioStatus(data.error || "Couldn't render the full synced video.", "error");
       return;
     }
-    state.jobs.set(filename, data.job);
-    syncAudioState.hasAppliedThisSession = false; // confirmed - nothing left to roll back
-    renderLedger();
-    flashStatus(`Synchronized: ${filename}`);
-    closeSyncAudioModal(false);
+    syncAudioState.stage = "full";
+    syncAudioState.everCreatedThisSession = true;
+    syncAudioState.lastDelayMs = delayMs;
+    setSyncPlayerSource(filename, "sync-full");
+    syncAudioStageBadge.textContent = "Full Video Synchronized";
+    setSyncAudioStatus("");
+    applySyncStageUI();
   } catch (e) {
-    setSyncAudioStatus("Couldn't reach the server to confirm the sync.", "error");
-    syncAudioConfirmBtn.disabled = false;
+    setSyncAudioStatus("Couldn't reach the server to render the full synced video.", "error");
+  } finally {
+    setSyncButtonsDisabled(false);
   }
 });
 
-async function closeSyncAudioModal(runCancel = true) {
-  const session = syncAudioState;
+syncAudioAcceptBtn.addEventListener("click", async () => {
+  if (!syncAudioState) return;
+  const { filename } = syncAudioState;
+  const delayMs = syncAudioState.lastDelayMs != null
+    ? syncAudioState.lastDelayMs
+    : (parseFloat(syncAudioDelayInput.value) || 0);
+
+  setSyncButtonsDisabled(true);
+  setSyncAudioStatus("Accepting the sync...");
+  await detachSyncPlayer();
+
+  try {
+    const res = await fetch("/api/jobs/sync-audio/accept", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ filename, delay_ms: delayMs }),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      setSyncAudioStatus(data.error || "Couldn't accept the sync.", "error");
+      setSyncButtonsDisabled(false);
+      return;
+    }
+    state.jobs.set(filename, data.job);
+    renderLedger();
+    flashStatus(`Synchronized: ${filename}`);
+    hideSyncAudioModal();
+  } catch (e) {
+    setSyncAudioStatus("Couldn't reach the server to accept the sync.", "error");
+    setSyncButtonsDisabled(false);
+  }
+});
+
+syncAudioDiscardBtn.addEventListener("click", async () => {
+  if (!syncAudioState) return;
+  const { filename } = syncAudioState;
+
+  setSyncButtonsDisabled(true);
+  setSyncAudioStatus("Discarding the full render...");
+  await detachSyncPlayer();
+
+  try {
+    const res = await fetch("/api/jobs/sync-audio/discard-full", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ filename }),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      setSyncAudioStatus(data.error || "Couldn't discard the full render.", "error");
+      return;
+    }
+    syncAudioState.stage = "clip";
+    setSyncPlayerSource(filename, "sync-clip");
+    syncAudioStageBadge.textContent = `Clip from ${formatClipTime(syncAudioState.clipStart)} loaded`;
+    setSyncAudioStatus("");
+    applySyncStageUI();
+  } catch (e) {
+    setSyncAudioStatus("Couldn't reach the server to discard the full render.", "error");
+  } finally {
+    setSyncButtonsDisabled(false);
+  }
+});
+
+// UI-only teardown used right after a successful Accept - the backend
+// has already cleaned up everything, so no cancel call is needed.
+function hideSyncAudioModal() {
   syncAudioModal.classList.add("hidden");
   syncAudioPlayer.pause();
   syncAudioPlayer.removeAttribute("src");
   syncAudioPlayer.load();
   syncAudioState = null;
+}
 
-  if (runCancel && session && session.hasAppliedThisSession) {
+async function closeSyncAudioModal(runCancel = true) {
+  const session = syncAudioState;
+  await detachSyncPlayer();
+  syncAudioModal.classList.add("hidden");
+  syncAudioState = null;
+
+  if (runCancel && session && session.everCreatedThisSession) {
     try {
       await fetch("/api/jobs/sync-audio/cancel", {
         method: "POST", headers: { "Content-Type": "application/json" },

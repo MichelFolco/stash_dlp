@@ -329,12 +329,14 @@
 
     <video id="sync-audio-player" class="video-player" controls playsinline preload="metadata"></video>
 
+    <div id="sync-audio-stage-badge" class="sync-audio-stage-badge">Original file loaded</div>
+
     <div class="sync-audio-tips">
       <div><strong>Audio plays too early (leads video):</strong> enter a positive number (e.g. 500 delays audio by 500 ms).</div>
       <div><strong>Audio plays too late (lags video):</strong> enter a negative number (e.g. -500 advances audio by 500 ms).</div>
     </div>
 
-    <div class="sync-audio-controls">
+    <div id="sync-audio-controls" class="sync-audio-controls">
       <button id="sync-audio-dial-down-big" class="btn sync-audio-dial">-100</button>
       <button id="sync-audio-dial-down-small" class="btn sync-audio-dial">-10</button>
       <div class="sync-audio-input-wrap">
@@ -349,8 +351,11 @@
 
     <div class="modal-actions">
       <button id="sync-audio-cancel-btn" class="btn">Cancel</button>
-      <button id="sync-audio-apply-btn" class="btn">Apply Delay</button>
-      <button id="sync-audio-confirm-btn" class="btn btn-primary">Confirm Sync</button>
+      <button id="sync-audio-redo-clip-btn" class="btn hidden">Redo Clip</button>
+      <button id="sync-audio-primary-btn" class="btn btn-primary">Create Clip</button>
+      <button id="sync-audio-confirm-btn" class="btn btn-primary hidden">Confirm Sync</button>
+      <button id="sync-audio-discard-btn" class="btn hidden">Discard</button>
+      <button id="sync-audio-accept-btn" class="btn btn-primary hidden">Accept Sync</button>
     </div>
   </div>
 </div>

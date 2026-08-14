@@ -1208,6 +1208,15 @@ html, body {
   overflow-y: auto;
 }
 
+.sync-audio-stage-badge {
+  margin-top: 8px;
+  text-align: center;
+  font-size: calc(var(--base-font) - 1px);
+  font-weight: bold;
+  letter-spacing: 0.02em;
+  color: var(--accent);
+}
+
 .sync-audio-tips {
   margin-top: 8px;
   padding: 8px 10px;

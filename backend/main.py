@@ -269,6 +269,12 @@ class SyncAudioConfirmRequest(BaseModel):
     delay_ms: float
 
 
+class SyncClipCreateRequest(BaseModel):
+    filename: str
+    start_seconds: float
+    delay_ms: float = 0.0
+
+
 # ── REST endpoints ──────────────────────────────────────────────
 @app.get("/api/version")
 async def get_version():
@@ -761,14 +767,14 @@ async def api_extract_audio(req: CancelRequest):
     return {"ok": True, "job": new_job}
 
 
-@app.post("/api/jobs/sync-audio/apply")
-async def api_sync_audio_apply(req: SyncAudioApplyRequest):
+@app.post("/api/jobs/sync-audio/create-clip")
+async def api_sync_audio_create_clip(req: SyncClipCreateRequest):
     if _has_reencode_twin(req.filename):
         return JSONResponse(status_code=400, content={
             "error": "This file already has a re-encoded version - remove it before synchronizing audio.",
         })
     try:
-        info = await audio_sync.apply_delay(job_manager, req.filename, req.delay_ms)
+        info = await audio_sync.create_clip(job_manager, req.filename, req.start_seconds, req.delay_ms)
     except ValueError as e:
         return JSONResponse(status_code=400, content={"error": str(e)})
     except RuntimeError as e:
@@ -776,14 +782,60 @@ async def api_sync_audio_apply(req: SyncAudioApplyRequest):
     return {"ok": True, "render": info}
 
 
-@app.post("/api/jobs/sync-audio/confirm")
-async def api_sync_audio_confirm(req: SyncAudioConfirmRequest):
+@app.post("/api/jobs/sync-audio/apply-clip-delay")
+async def api_sync_audio_apply_clip_delay(req: SyncAudioApplyRequest):
     try:
-        job = await audio_sync.confirm(job_manager, req.filename, req.delay_ms)
+        info = await audio_sync.apply_clip_delay(job_manager, req.filename, req.delay_ms)
     except ValueError as e:
         return JSONResponse(status_code=400, content={"error": str(e)})
+    except RuntimeError as e:
+        return JSONResponse(status_code=500, content={"error": str(e)})
+    return {"ok": True, "render": info}
+
+
+@app.post("/api/jobs/sync-audio/redo-clip")
+async def api_sync_audio_redo_clip(req: CancelRequest):
+    try:
+        await audio_sync.redo_clip(job_manager, req.filename)
+    except RuntimeError as e:
+        return JSONResponse(status_code=500, content={"error": str(e)})
+    return {"ok": True}
+
+
+@app.post("/api/jobs/sync-audio/render-full")
+async def api_sync_audio_render_full(req: SyncAudioApplyRequest):
+    if _has_reencode_twin(req.filename):
+        return JSONResponse(status_code=400, content={
+            "error": "This file already has a re-encoded version - remove it before synchronizing audio.",
+        })
+    try:
+        info = await audio_sync.render_full(job_manager, req.filename, req.delay_ms)
+    except ValueError as e:
+        return JSONResponse(status_code=400, content={"error": str(e)})
+    except RuntimeError as e:
+        return JSONResponse(status_code=500, content={"error": str(e)})
+    return {"ok": True, "render": info}
+
+
+@app.post("/api/jobs/sync-audio/accept")
+async def api_sync_audio_accept(req: SyncAudioConfirmRequest):
+    try:
+        job = await audio_sync.accept(job_manager, req.filename, req.delay_ms)
+    except ValueError as e:
+        return JSONResponse(status_code=400, content={"error": str(e)})
+    except RuntimeError as e:
+        return JSONResponse(status_code=500, content={"error": str(e)})
     await job_manager.connections.broadcast({"type": "refresh", "jobs": job_manager.snapshot()})
     return {"ok": True, "job": job}
+
+
+@app.post("/api/jobs/sync-audio/discard-full")
+async def api_sync_audio_discard_full(req: CancelRequest):
+    try:
+        await audio_sync.discard_full(job_manager, req.filename)
+    except RuntimeError as e:
+        return JSONResponse(status_code=500, content={"error": str(e)})
+    return {"ok": True}
 
 
 @app.post("/api/jobs/sync-audio/cancel")
@@ -817,7 +869,10 @@ async def api_stream_video(filename: str, request: Request, source: str = "origi
     Windows means the file stays locked (can't be deleted/moved) until
     something else forces it closed.
     """
-    if source == "converted":
+    sync_path = audio_sync.resolve_stream_path(filename, source)
+    if sync_path is not None:
+        media_path = sync_path
+    elif source == "converted":
         media_path = find_converted_file(filename)
     else:
         media_path = find_media_file(filename)
