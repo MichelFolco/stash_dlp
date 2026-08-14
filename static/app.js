@@ -3807,8 +3807,10 @@ const encodeContainerSelect = el("encode-container-select");
 const encodeDenoiseCheck = el("encode-denoise-check");
 const encodeSubtitlesSelect = el("encode-subtitles-select");
 const encodeOversizedSelect = el("encode-oversized-select");
+const encodeEstimateOriginal = el("encode-estimate-original");
 const encodeEstimateLabel = el("encode-estimate-label");
 const encodeEstimateValue = el("encode-estimate-value");
+const encodeEstimateSavings = el("encode-estimate-savings");
 const encodeEstimateRefreshBtn = el("encode-estimate-refresh-btn");
 const encodeJobError = el("encode-job-error");
 
@@ -4283,6 +4285,13 @@ function populateAspectQuickRow() {
       encodeAspectQuickRow.querySelectorAll(".aspect-quick-btn").forEach((b) => b.classList.remove("active"));
       btn.classList.add("active");
       applyActiveAspectRatio();
+      // The preset row is always visible now (not gated behind the
+      // checkbox), so picking a ratio here is itself the signal that
+      // the user wants it forced - flip the checkbox on to match.
+      if (!encodeForceArCheck.checked) {
+        encodeForceArCheck.checked = true;
+        encodeForceArFields.classList.remove("disabled-field");
+      }
       requestEncodeEstimate();
     });
     encodeAspectQuickRow.appendChild(btn);
@@ -4410,11 +4419,16 @@ async function probeSelectedSource() {
     if (!res.ok) {
       state.encodeSourceInfo = null;
       encodeSourceInfo.textContent = data.error || "Couldn't read that file.";
+      encodeEstimateOriginal.textContent = "-";
+      encodeEstimateValue.textContent = "-";
+      encodeEstimateSavings.textContent = "-";
       return;
     }
     state.encodeSourceInfo = data;
     encodeSourceInfo.textContent = `${data.width}×${data.height} · ${formatDuration(data.duration)} · ${data.size_label}`;
     encodeResolutionLabel.textContent = `Resolution cap (downscale only) — source is ${data.width}×${data.height}`;
+    encodeEstimateOriginal.textContent = data.size_label || "-";
+    encodeEstimateSavings.textContent = "-";
     encodeArWidthInput.value = data.width;
     encodeArHeightInput.value = data.height;
     applyActiveAspectRatio();
@@ -4478,7 +4492,7 @@ async function doRequestEncodeEstimate() {
   if (!sourceBody || !state.encodeSourceInfo) return;
   const mySeq = ++state.encodeEstimateSeq;
   const options = collectEncodeOptions();
-  encodeEstimateLabel.textContent = options.mode === "size" ? "Target output size" : "Estimated output size";
+  encodeEstimateLabel.textContent = options.mode === "size" ? "Target" : "Estimated";
   try {
     const res = await fetch("/api/encode/estimate", {
       method: "POST", headers: { "Content-Type": "application/json" },
@@ -4486,11 +4500,28 @@ async function doRequestEncodeEstimate() {
     });
     const data = await res.json();
     if (mySeq !== state.encodeEstimateSeq) return; // superseded by a newer request
-    if (!res.ok) { encodeEstimateValue.textContent = "-"; return; }
+    if (!res.ok) {
+      encodeEstimateValue.textContent = "-";
+      encodeEstimateSavings.textContent = "-";
+      return;
+    }
     const prefix = options.mode === "size" ? "" : "~";
     encodeEstimateValue.textContent = data.estimated_size_label ? `${prefix}${data.estimated_size_label}` : "-";
+
+    const sourceBytes = state.encodeSourceInfo?.size_bytes;
+    encodeEstimateSavings.classList.remove("good", "bad");
+    if (sourceBytes && data.estimated_bytes) {
+      const pct = Math.round((1 - data.estimated_bytes / sourceBytes) * 100);
+      encodeEstimateSavings.textContent = pct >= 0 ? `-${pct}%` : `+${Math.abs(pct)}%`;
+      encodeEstimateSavings.classList.add(pct >= 0 ? "good" : "bad");
+    } else {
+      encodeEstimateSavings.textContent = "-";
+    }
   } catch (e) {
-    if (mySeq === state.encodeEstimateSeq) encodeEstimateValue.textContent = "-";
+    if (mySeq === state.encodeEstimateSeq) {
+      encodeEstimateValue.textContent = "-";
+      encodeEstimateSavings.textContent = "-";
+    }
   }
 }
 
@@ -4516,6 +4547,10 @@ async function openNewEncodeJobModal(preselectFilename) {
 
   encodeSourceBrowseRow.classList.add("hidden");
   encodeSourceBrowsePath.value = "";
+  encodeEstimateOriginal.textContent = "-";
+  encodeEstimateValue.textContent = "-";
+  encodeEstimateSavings.textContent = "-";
+  encodeEstimateSavings.classList.remove("good", "bad");
   encodeForceArCheck.checked = false;
   encodeForceArFields.classList.add("disabled-field");
   encodeArWidthInput.value = "";

@@ -1,3 +1,15 @@
+## v1.02 - Fixed thumbnail leaking into the download folder
+- Root cause: yt-dlp ignores `--paths TYPE:...` whenever the main `-o` outtmpl is an absolute path, and ours always is - so the `--paths thumbnail:...` redirect to the library_data thumbnail cache was silently a no-op, and the thumbnail landed beside the video/audio file in the download folder instead.
+- Fixed by giving the `thumbnail` type its own absolute `-o thumbnail:...` outtmpl (pointed at the same path `thumbnails.py` already looks for), which yt-dlp always honors regardless of the main outtmpl. Dropped the now-redundant `--paths thumbnail:...` flag.
+- Thumbnails now only ever get written to the central `library_data/.thumbnails/` cache, never the download folder.
+
+## v1.01 - New Encode Job modal reorganized
+- Widened the modal to two columns (Quality on the left, Resolution & Correction on the right) so it's much shorter for a given amount of content instead of one long vertical stack.
+- Moved the size estimate to a stat strip right under the source info, now showing Original size, Estimated size, and % savings side by side (colored green for a smaller output, red if the encode would end up larger than the source) - visible before touching any settings.
+- "Force aspect ratio" presets (16:9 / 4:3 / 21:9 / Custom) are now always visible next to the checkbox instead of hidden until it's checked; picking a preset auto-enables the checkbox.
+- Advanced options now expand inline in place with a compact 3-column layout (Audio / Container / Subtitles) plus a combined denoise + oversized-output row, instead of stacking every field vertically.
+- No backend changes - the estimate/probe endpoints already returned the source and estimated byte counts needed for the savings %.
+
 ## v1.00 - Logo shows app version
 - Clicking the logo (top-left, next to the URL field) now flashes the current stash_dlp version in the input placeholder, via a new `/api/app_version` endpoint backed by `APP_VERSION` in `backend/config.py`.
 - `APP_VERSION` is the single source of truth for this - bump it in the same edit as any new entry added here (see the comment above its definition in config.py).

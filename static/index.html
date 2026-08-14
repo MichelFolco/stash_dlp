@@ -486,79 +486,102 @@
     </div>
     <div id="encode-source-info" class="hint"></div>
 
-    <div class="section-label">Quality</div>
-    <div class="form-field">
-      <div class="pill-toggle-group">
-        <div id="encode-mode-crf-btn" class="pill-toggle active">Quality (CRF)</div>
-        <div id="encode-mode-size-btn" class="pill-toggle">Target Size</div>
+    <div class="est-size-box">
+      <div class="est-stat">
+        <div class="est-stat-label">Original</div>
+        <div class="est-stat-value" id="encode-estimate-original">-</div>
       </div>
+      <div class="est-arrow">→</div>
+      <div class="est-stat">
+        <div class="est-stat-label" id="encode-estimate-label">Estimated</div>
+        <div class="est-stat-value accent" id="encode-estimate-value">-</div>
+      </div>
+      <div class="est-stat align-right">
+        <div class="est-stat-label">Savings</div>
+        <div class="est-stat-value" id="encode-estimate-savings">-</div>
+      </div>
+      <button type="button" id="encode-estimate-refresh-btn" class="est-refresh-btn" title="Recalculate estimate">⟳</button>
     </div>
 
-    <div id="encode-crf-fields">
-      <div class="field-grid">
+    <div class="encode-grid-2col">
+      <div>
+        <div class="section-label">Quality</div>
         <div class="form-field">
-          <label>Codec</label>
-          <select id="encode-codec-select"></select>
+          <div class="pill-toggle-group">
+            <div id="encode-mode-crf-btn" class="pill-toggle active">Quality (CRF)</div>
+            <div id="encode-mode-size-btn" class="pill-toggle">Target Size</div>
+          </div>
         </div>
+
+        <div id="encode-crf-fields">
+          <div class="field-grid">
+            <div class="form-field">
+              <label>Codec</label>
+              <select id="encode-codec-select"></select>
+            </div>
+            <div class="form-field">
+              <label>Encoder</label>
+              <select id="encode-backend-select"></select>
+            </div>
+          </div>
+          <div class="form-field">
+            <label>CRF (lower = higher quality, bigger file)</label>
+            <div class="range-row">
+              <input type="range" id="encode-crf-slider">
+              <span class="range-value" id="encode-crf-value"></span>
+            </div>
+            <div class="hint" id="encode-crf-hint"></div>
+          </div>
+          <div class="form-field">
+            <label>Preset (speed vs. compression)</label>
+            <select id="encode-preset-select"></select>
+          </div>
+        </div>
+
+        <div id="encode-size-fields" style="display:none;">
+          <div class="form-field">
+            <label>Target output size (MB)</label>
+            <input type="number" id="encode-target-size-input" min="1" step="1" placeholder="e.g. 1500">
+            <div class="hint">Two-pass encode. File size is precise; visual quality will vary depending on how ambitious the target is.</div>
+          </div>
+        </div>
+      </div>
+
+      <div>
+        <div class="section-label">Resolution &amp; Correction</div>
         <div class="form-field">
-          <label>Encoder</label>
-          <select id="encode-backend-select"></select>
+          <label id="encode-resolution-label">Resolution cap (downscale only)</label>
+          <select id="encode-resolution-select"></select>
+        </div>
+
+        <div class="checkbox-row">
+          <input type="checkbox" id="encode-deinterlace-check">
+          <label for="encode-deinterlace-check">Deinterlace (bwdif)</label>
+        </div>
+        <div class="checkbox-row">
+          <input type="checkbox" id="encode-autocrop-check">
+          <label for="encode-autocrop-check">Auto-crop black bars</label>
+        </div>
+
+        <div class="checkbox-row">
+          <input type="checkbox" id="encode-force-ar-check">
+          <label for="encode-force-ar-check">Force aspect ratio</label>
+        </div>
+        <div class="aspect-quick-row" id="encode-aspect-quick-row"></div>
+        <div class="form-field disabled-field" id="encode-force-ar-fields">
+          <div class="field-grid">
+            <div class="form-field">
+              <label>Target width</label>
+              <input type="number" id="encode-ar-width-input" min="2" step="2">
+            </div>
+            <div class="form-field">
+              <label>Target height</label>
+              <input type="number" id="encode-ar-height-input" min="2" step="2">
+            </div>
+          </div>
+          <div class="hint">Fixes squished/stretched sources - re-scales pixel dimensions to correct proportions.</div>
         </div>
       </div>
-      <div class="form-field">
-        <label>CRF (lower = higher quality, bigger file)</label>
-        <div class="range-row">
-          <input type="range" id="encode-crf-slider">
-          <span class="range-value" id="encode-crf-value"></span>
-        </div>
-        <div class="hint" id="encode-crf-hint"></div>
-      </div>
-      <div class="form-field">
-        <label>Preset (speed vs. compression)</label>
-        <select id="encode-preset-select"></select>
-      </div>
-    </div>
-
-    <div id="encode-size-fields" style="display:none;">
-      <div class="form-field">
-        <label>Target output size (MB)</label>
-        <input type="number" id="encode-target-size-input" min="1" step="1" placeholder="e.g. 1500">
-        <div class="hint">Two-pass encode. File size is precise; visual quality will vary depending on how ambitious the target is.</div>
-      </div>
-    </div>
-
-    <div class="section-label">Resolution &amp; Correction</div>
-    <div class="form-field">
-      <label id="encode-resolution-label">Resolution cap (downscale only)</label>
-      <select id="encode-resolution-select"></select>
-    </div>
-
-    <div class="checkbox-row">
-      <input type="checkbox" id="encode-force-ar-check">
-      <label for="encode-force-ar-check">Force aspect ratio (fix stretched/squished source)</label>
-    </div>
-    <div class="form-field disabled-field" id="encode-force-ar-fields">
-      <div class="aspect-quick-row" id="encode-aspect-quick-row"></div>
-      <div class="field-grid" style="margin-top:6px;">
-        <div class="form-field">
-          <label>Target width</label>
-          <input type="number" id="encode-ar-width-input" min="2" step="2">
-        </div>
-        <div class="form-field">
-          <label>Target height</label>
-          <input type="number" id="encode-ar-height-input" min="2" step="2">
-        </div>
-      </div>
-      <div class="hint">Re-scales pixel dimensions to correct proportions - for sources that are actually stored squished, not just flagged wrong.</div>
-    </div>
-
-    <div class="checkbox-row">
-      <input type="checkbox" id="encode-deinterlace-check">
-      <label for="encode-deinterlace-check">Deinterlace (bwdif)</label>
-    </div>
-    <div class="checkbox-row">
-      <input type="checkbox" id="encode-autocrop-check">
-      <label for="encode-autocrop-check">Auto-crop black bars</label>
     </div>
 
     <div class="advanced-toggle" id="encode-advanced-toggle">
@@ -566,7 +589,7 @@
       <span id="encode-advanced-caret">▾</span>
     </div>
     <div class="advanced-body" id="encode-advanced-body">
-      <div class="field-grid">
+      <div class="field-grid-3">
         <div class="form-field">
           <label>Audio</label>
           <select id="encode-audio-select">
@@ -582,32 +605,26 @@
             <option value="mkv">MKV</option>
           </select>
         </div>
+        <div class="form-field">
+          <label>Subtitles</label>
+          <select id="encode-subtitles-select">
+            <option value="copy" selected>Copy if present</option>
+            <option value="drop">Drop</option>
+          </select>
+        </div>
       </div>
-      <div class="checkbox-row">
-        <input type="checkbox" id="encode-denoise-check">
-        <label for="encode-denoise-check">Light denoise (helps grainy/noisy sources compress smaller)</label>
-      </div>
-      <div class="form-field">
-        <label>Subtitles</label>
-        <select id="encode-subtitles-select">
-          <option value="copy" selected>Copy if present</option>
-          <option value="drop">Drop</option>
-        </select>
-      </div>
-      <div class="form-field">
-        <label>If encoded output ends up larger than the source</label>
-        <select id="encode-oversized-select">
-          <option value="flag" selected>Keep both, flag it</option>
-          <option value="discard">Discard the encode</option>
-        </select>
-      </div>
-    </div>
-
-    <div class="est-size-box">
-      <span class="label" id="encode-estimate-label">Estimated output size</span>
-      <div class="est-size-right">
-        <span class="value" id="encode-estimate-value">-</span>
-        <button type="button" id="encode-estimate-refresh-btn" class="est-refresh-btn" title="Recalculate estimate">⟳</button>
+      <div class="advanced-inline-row">
+        <div class="checkbox-row advanced-inline-checkbox">
+          <input type="checkbox" id="encode-denoise-check">
+          <label for="encode-denoise-check">Light denoise</label>
+        </div>
+        <div class="form-field advanced-inline-select">
+          <label>If output ends up larger than source</label>
+          <select id="encode-oversized-select">
+            <option value="flag" selected>Keep both, flag it</option>
+            <option value="discard">Discard the encode</option>
+          </select>
+        </div>
       </div>
     </div>
 

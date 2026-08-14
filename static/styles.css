@@ -1088,7 +1088,20 @@ html, body {
 .job-card-footer .job-card-icons { margin-left: auto; }
 
 /* ── New Encode Job modal ─────────────────────────────────────── */
-.modal-box.wide { max-width: 480px; max-height: 88vh; overflow-y: auto; }
+.modal-box.wide { max-width: 640px; max-height: 88vh; overflow-y: auto; }
+
+.encode-grid-2col { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+.field-grid-3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 10px; }
+
+.advanced-inline-row { display: flex; align-items: center; gap: 18px; margin-top: 2px; }
+.advanced-inline-checkbox { flex: 0 0 auto; padding: 0; }
+.advanced-inline-select { flex: 1; min-width: 0; margin-bottom: 0; }
+
+@media (max-width: 700px) {
+  .encode-grid-2col { grid-template-columns: 1fr; gap: 0; }
+  .field-grid-3 { grid-template-columns: 1fr; }
+  .advanced-inline-row { flex-direction: column; align-items: stretch; gap: 8px; }
+}
 
 /* ── Re-encode choice modal ────────────────────────────────── */
 .reencode-choice-filename {
@@ -1211,7 +1224,7 @@ html, body {
 .advanced-body { display: none; padding-top: 4px; }
 .advanced-body.open { display: block; }
 
-.aspect-quick-row { display: flex; gap: 6px; margin-top: 6px; }
+.aspect-quick-row { display: flex; gap: 6px; margin: 4px 0 8px; }
 .aspect-quick-btn {
   flex: 1;
   background: #15151a;
@@ -1230,24 +1243,32 @@ html, body {
   background: #15151a;
   border: 1px solid var(--border);
   border-radius: 6px;
-  padding: 10px;
-  margin-top: 4px;
+  padding: 10px 12px;
+  margin: 6px 0 12px;
   display: flex;
-  justify-content: space-between;
   align-items: center;
+  gap: 4px;
 }
-.est-size-box .label { color: var(--text-dim); font-size: calc(var(--base-font) - 1px); }
-.est-size-box .value {
-  color: var(--accent);
+.est-stat { flex: 1; min-width: 0; }
+.est-stat.align-right { text-align: right; }
+.est-stat-label {
+  color: var(--text-dim);
+  font-size: calc(var(--base-font) - 2px);
+  margin-bottom: 2px;
+  white-space: nowrap;
+}
+.est-stat-value {
+  color: var(--text);
   font-weight: bold;
   font-family: "SF Mono", Consolas, monospace;
+  font-size: var(--base-font);
 }
-.est-size-right {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
+.est-stat-value.accent { color: var(--accent); }
+.est-stat-value.good { color: var(--done-text); }
+.est-stat-value.bad { color: var(--error-text); }
+.est-arrow { color: var(--text-disabled); padding: 0 6px; flex: 0 0 auto; }
 .est-refresh-btn {
+  margin-left: 6px;
   width: 24px;
   height: 24px;
   flex-shrink: 0;

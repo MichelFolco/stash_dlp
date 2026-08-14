@@ -14,7 +14,7 @@ from typing import Dict, Optional
 from config import RES_FORMATS, AUDIO_ONLY_KEY
 from ffmpeg_encode import probe_basic_info
 from procflags import NO_CONSOLE_KWARGS
-from settings import get_download_prefs, get_save_dir, get_target_dir, get_ytdlp_args, get_thumbnails_dir
+from settings import get_download_prefs, get_save_dir, get_target_dir, get_ytdlp_args
 from storage import load_saved_queue, save_queue_to_disk, write_to_history_log
 from thumbnails import thumbnail_path_for
 from ytdlp_utils import (
@@ -310,12 +310,16 @@ class JobManager:
                     "--no-playlist",
                     "--newline",
                     "--progress",
-                    # Send yt-dlp thumbnails directly to the central library_data
-                    # thumbnail cache. This prevents a second thumbnail from being
-                    # left beside the downloaded media file.
-                    "--paths", f"thumbnail:{get_thumbnails_dir()}",
+                    # yt-dlp only honors --paths TYPE:... when the main
+                    # -o outtmpl is relative; ours below is absolute, so
+                    # --paths would silently be ignored and the thumbnail
+                    # would land beside the media file instead. Giving the
+                    # "thumbnail" type its own absolute -o instead is the
+                    # form yt-dlp always honors, and sends it straight to
+                    # the central library_data thumbnail cache.
                     "--write-thumbnail",
                     "--convert-thumbnails", "jpg",
+                    "-o", f"thumbnail:{os.path.splitext(thumbnail_path_for(filename))[0]}.%(ext)s",
                     *extra_args,
                     "-o", out_path,
                     url,
@@ -332,12 +336,10 @@ class JobManager:
                     "--no-playlist",
                     "--newline",
                     "--progress",
-                    # Send yt-dlp thumbnails directly to the central library_data
-                    # thumbnail cache. This prevents a second thumbnail from being
-                    # left beside the downloaded media file.
-                    "--paths", f"thumbnail:{get_thumbnails_dir()}",
+                    # See comment in the is_audio_only branch above.
                     "--write-thumbnail",
                     "--convert-thumbnails", "jpg",
+                    "-o", f"thumbnail:{os.path.splitext(thumbnail_path_for(filename))[0]}.%(ext)s",
                     *extra_args,
                     "-o", out_path,
                     url,
