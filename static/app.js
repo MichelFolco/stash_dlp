@@ -1950,6 +1950,9 @@ function openSyncAudioModal(filename) {
   if (!job) return;
 
   syncAudioState = { filename, stage: "original", clipStart: null, everCreatedThisSession: false };
+  // A previous sync operation may have disabled the action buttons while
+  // rendering. Reinitialize them every time the dialog is opened.
+  setSyncButtonsDisabled(false);
   syncAudioTitle.textContent = `Synchronize Audio - ${filename}`;
   syncAudioDelayInput.value = job.audio_delay_ms || 0;
   syncAudioClipDurationInput.value = 10;

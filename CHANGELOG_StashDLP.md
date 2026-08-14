@@ -1,4 +1,9 @@
 ## v0.92 - Windows drag cursor
+
+## v0.93
+- Fixed Synchronize Audio dialog action buttons remaining disabled after a previous sync job.
+- The Create Clip button is now explicitly re-enabled whenever the Synchronize Audio dialog is opened.
+
 - Changed the completed-card drag-and-drop cursor from the grab/hand-style cursor to the standard Windows arrow cursor.
 
 ## v0.90 - Synchronize Audio clip duration control
