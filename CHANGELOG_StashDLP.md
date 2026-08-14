@@ -1,3 +1,13 @@
+## v0.96 - Import from tag search results
+- Added an "Import" button next to "Open" on each row of the Check Tag results dialog, so a scene can be imported straight from the search results without needing its URL pasted into the separate Import from Stash dialog.
+
+## v0.95 - Stash tag check
+- Renamed the "Import from Stash" button to "Stash", now opening a submenu with Import from Stash (unchanged) and a new Check Tag action.
+- Check Tag queries the Stash DB for a tag by name and lists every scene that has it (title, path, Open link) in a results dialog.
+
+## v0.94 - Synchronize Audio full-video encoding status
+- Changed the Full Video encoding status message to `Synching full video, please wait...`.
+
 ## v0.92 - Windows drag cursor
 
 ## v0.93

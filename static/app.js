@@ -82,9 +82,17 @@ const logoMenu = el("logo-menu");
 const jobMenu = el("job-menu");
 const historyMenu = el("history-menu");
 const folderModal = el("folder-modal");
+const stashMenuBtn = el("stash-menu-btn");
+const stashMenuFlyout = el("stash-menu-flyout");
 const stashImportModal = el("stash-import-modal");
 const stashImportInput = el("stash-import-input");
 const stashImportError = el("stash-import-error");
+const stashTagModal = el("stash-tag-modal");
+const stashTagInput = el("stash-tag-input");
+const stashTagError = el("stash-tag-error");
+const stashTagResultsModal = el("stash-tag-results-modal");
+const stashTagResultsTitle = el("stash-tag-results-title");
+const stashTagResultsList = el("stash-tag-results-list");
 const folderInput = el("folder-input");
 const folderError = el("folder-error");
 const folderRecentWrap = el("folder-recent-wrap");
@@ -204,12 +212,168 @@ async function importFromStash() {
   }
 }
 
-el("import-stash-btn").addEventListener("click", openStashImportModal);
 el("stash-import-cancel-btn").addEventListener("click", closeStashImportModal);
 el("stash-import-btn-confirm").addEventListener("click", importFromStash);
 stashImportInput.addEventListener("keydown", (e) => {
   if (e.key === "Enter") importFromStash();
   else if (e.key === "Escape") closeStashImportModal();
+});
+
+// ── Stash menu (Stash button -> Import from Stash / Check Tag) ──
+stashMenuBtn.addEventListener("click", (e) => {
+  e.stopPropagation();
+  if (!stashMenuFlyout.classList.contains("hidden")) {
+    stashMenuFlyout.classList.add("hidden");
+    return;
+  }
+  closeOtherFlyouts(stashMenuFlyout);
+  positionDropdownBelow(stashMenuFlyout, stashMenuBtn);
+});
+el("stash-menu-import").addEventListener("click", () => {
+  stashMenuFlyout.classList.add("hidden");
+  openStashImportModal();
+});
+el("stash-menu-check-tag").addEventListener("click", () => {
+  stashMenuFlyout.classList.add("hidden");
+  openStashTagModal();
+});
+
+function openStashTagModal() {
+  stashTagError.classList.add("hidden");
+  stashTagError.textContent = "";
+  stashTagInput.value = "";
+  stashTagModal.classList.remove("hidden");
+  setTimeout(() => stashTagInput.focus(), 0);
+}
+
+function closeStashTagModal() {
+  stashTagModal.classList.add("hidden");
+}
+
+async function checkStashTag() {
+  const tag = stashTagInput.value.trim();
+  if (!tag) {
+    stashTagError.textContent = "Enter a Stash tag name.";
+    stashTagError.classList.remove("hidden");
+    return;
+  }
+  const btn = el("stash-tag-btn-confirm");
+  btn.disabled = true;
+  btn.textContent = "Checking...";
+  stashTagError.classList.add("hidden");
+  try {
+    const res = await fetch("/api/stash/check-tag", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ tag }),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      stashTagError.textContent = data.error || "Check failed.";
+      stashTagError.classList.remove("hidden");
+      return;
+    }
+    closeStashTagModal();
+    openStashTagResultsModal(data);
+  } catch (e) {
+    stashTagError.textContent = "Couldn't reach the server.";
+    stashTagError.classList.remove("hidden");
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "Check";
+  }
+}
+
+el("stash-tag-cancel-btn").addEventListener("click", closeStashTagModal);
+el("stash-tag-btn-confirm").addEventListener("click", checkStashTag);
+stashTagInput.addEventListener("keydown", (e) => {
+  if (e.key === "Enter") checkStashTag();
+  else if (e.key === "Escape") closeStashTagModal();
+});
+
+function openStashTagResultsModal(data) {
+  stashTagResultsTitle.textContent = `Scenes tagged "${data.tag_name}" (${data.count})`;
+  stashTagResultsList.innerHTML = "";
+
+  if (!data.scenes || data.scenes.length === 0) {
+    const empty = document.createElement("div");
+    empty.className = "program-empty-note";
+    empty.textContent = "No scenes found with this tag.";
+    stashTagResultsList.appendChild(empty);
+  } else {
+    for (const scene of data.scenes) {
+      const row = document.createElement("div");
+      row.className = "stash-scene-row";
+
+      const info = document.createElement("div");
+      info.className = "stash-scene-row-info";
+      const titleEl = document.createElement("div");
+      titleEl.className = "stash-scene-row-title";
+      titleEl.textContent = scene.title;
+      const pathEl = document.createElement("div");
+      pathEl.className = "stash-scene-row-path";
+      pathEl.textContent = scene.path || scene.url;
+      pathEl.title = scene.path || scene.url;
+      info.appendChild(titleEl);
+      info.appendChild(pathEl);
+
+      const btnGroup = document.createElement("div");
+      btnGroup.className = "stash-scene-row-btns";
+
+      const openBtn = document.createElement("button");
+      openBtn.className = "stash-scene-open-btn";
+      openBtn.textContent = "Open";
+      openBtn.addEventListener("click", () => window.open(scene.url, "_blank"));
+
+      const importBtn = document.createElement("button");
+      importBtn.className = "stash-scene-open-btn stash-scene-import-btn";
+      importBtn.textContent = "Import";
+      importBtn.addEventListener("click", () => importStashSceneFromResults(scene, importBtn));
+
+      btnGroup.appendChild(openBtn);
+      btnGroup.appendChild(importBtn);
+
+      row.appendChild(info);
+      row.appendChild(btnGroup);
+      stashTagResultsList.appendChild(row);
+    }
+  }
+
+  stashTagResultsModal.classList.remove("hidden");
+}
+
+async function importStashSceneFromResults(scene, btn) {
+  btn.disabled = true;
+  btn.textContent = "Importing...";
+  try {
+    const res = await fetch("/api/import/stash", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ scene: scene.id }),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      btn.disabled = false;
+      btn.textContent = "Import";
+      flashStatus(data.error || "Import failed.");
+      return;
+    }
+    if (data.job) state.jobs.set(data.job.filename, data.job);
+    renderLedger();
+    btn.textContent = "Imported";
+    flashStatus(`Imported from Stash: ${data.job.filename}`);
+  } catch (e) {
+    btn.disabled = false;
+    btn.textContent = "Import";
+    flashStatus("Couldn't reach the server.");
+  }
+}
+
+function closeStashTagResultsModal() {
+  stashTagResultsModal.classList.add("hidden");
+}
+
+el("stash-tag-results-close-btn").addEventListener("click", closeStashTagResultsModal);
+stashTagResultsModal.addEventListener("click", (e) => {
+  if (e.target === stashTagResultsModal) closeStashTagResultsModal();
 });
 
 // ── Boot ──────────────────────────────────────────────────────
@@ -1557,7 +1721,7 @@ function cssEscape(s) {
 // Every submenu flyout in the app - Copy/File (job menu) and
 // Folders/Settings (logo menu) all share this one open/close/position
 // mechanism, so anything that resets menu state just walks this list.
-const ALL_FLYOUTS = [openWithFlyout, copyFlyout, fileFlyout, foldersFlyout, settingsFlyout, dlFolderQuickMenu, targetFolderQuickMenu, urlArgsFlyout];
+const ALL_FLYOUTS = [openWithFlyout, copyFlyout, fileFlyout, foldersFlyout, settingsFlyout, dlFolderQuickMenu, targetFolderQuickMenu, urlArgsFlyout, stashMenuFlyout];
 
 function hideAllFlyouts() {
   for (const flyout of ALL_FLYOUTS) flyout.classList.add("hidden");
@@ -2172,7 +2336,7 @@ syncAudioConfirmBtn.addEventListener("click", async () => {
   const delayMs = parseFloat(syncAudioDelayInput.value) || 0;
 
   setSyncButtonsDisabled(true);
-  setSyncAudioStatus(`Encoding the full video with a ${delayMs} ms delay - this can take a while...`);
+  setSyncAudioStatus("Synching full video, please wait...");
   await detachSyncPlayer();
 
   try {
@@ -3491,6 +3655,11 @@ let baseFontSize = 12;
 
 document.addEventListener("keydown", async (e) => {
   if (!stashImportModal.classList.contains("hidden")) return;
+  if (!stashTagModal.classList.contains("hidden")) return; // input has its own handler
+  if (!stashTagResultsModal.classList.contains("hidden")) {
+    if (e.key === "Escape") closeStashTagResultsModal();
+    return;
+  }
   if (e.ctrlKey && e.key.toLowerCase() === "s" && state.appMode === "DOWNLOAD") {
     e.preventDefault();
     openStashImportModal();

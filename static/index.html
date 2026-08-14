@@ -38,7 +38,7 @@
   <div id="download-view">
     <div id="control-bar" class="control-bar">
       <button id="refresh-btn" class="btn">Refresh</button>
-      <button id="import-stash-btn" class="btn">Import from Stash</button>
+      <button id="stash-menu-btn" class="btn">Stash</button>
       <button id="move-all-btn" class="btn">Move All to Target</button>
       <button id="select-mode-btn" class="btn">Select</button>
     </div>
@@ -221,6 +221,14 @@
 </div>
 
 
+<!-- "Stash" button submenu - click-to-toggle dropdown, same
+     positionDropdownBelow mechanism as the DL:/Target: folder
+     quick-select menus (drops straight down from the button). -->
+<div id="stash-menu-flyout" class="ctx-menu hidden">
+  <div id="stash-menu-import" class="ctx-item">Import from Stash</div>
+  <div id="stash-menu-check-tag" class="ctx-item">Check Tag</div>
+</div>
+
 <div id="stash-import-modal" class="modal-overlay hidden">
   <div class="modal-box">
     <div class="modal-title">Import from Stash</div>
@@ -232,6 +240,31 @@
     <div class="modal-actions">
       <button id="stash-import-cancel-btn" class="btn">Cancel</button>
       <button id="stash-import-btn-confirm" class="btn btn-primary">Import</button>
+    </div>
+  </div>
+</div>
+
+<div id="stash-tag-modal" class="modal-overlay hidden">
+  <div class="modal-box">
+    <div class="modal-title">Check Tag</div>
+    <div class="hint">Enter a Stash tag name. Every scene with that tag will be listed.</div>
+    <div class="modal-row" style="margin-top:10px;">
+      <input id="stash-tag-input" class="input-field" type="text" placeholder="e.g. Favorites" autocomplete="off" spellcheck="false">
+    </div>
+    <div id="stash-tag-error" class="modal-error hidden"></div>
+    <div class="modal-actions">
+      <button id="stash-tag-cancel-btn" class="btn">Cancel</button>
+      <button id="stash-tag-btn-confirm" class="btn btn-primary">Check</button>
+    </div>
+  </div>
+</div>
+
+<div id="stash-tag-results-modal" class="modal-overlay hidden">
+  <div class="modal-box wide">
+    <div class="modal-title" id="stash-tag-results-title">Scenes</div>
+    <div id="stash-tag-results-list" class="modal-recent-list stash-tag-results-list"></div>
+    <div class="modal-actions">
+      <button id="stash-tag-results-close-btn" class="btn btn-primary">Close</button>
     </div>
   </div>
 </div>

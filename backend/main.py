@@ -255,6 +255,10 @@ class StashImportRequest(BaseModel):
     scene: str
 
 
+class StashTagCheckRequest(BaseModel):
+    tag: str
+
+
 class ReplaceSourceRequest(BaseModel):
     filename: str
     variant: Optional[str] = None  # "original" | "reencoded" | None
@@ -529,6 +533,18 @@ async def api_import_stash(req: StashImportRequest):
         return JSONResponse(status_code=502, content={"error": str(e)})
 
     return {"ok": True, "job": result}
+
+
+@app.post("/api/stash/check-tag")
+async def api_stash_check_tag(req: StashTagCheckRequest):
+    """Look up a Stash tag by name and list every scene that has it."""
+    try:
+        result = await stash_integration.find_scenes_by_tag(req.tag)
+    except ValueError as e:
+        return JSONResponse(status_code=400, content={"error": str(e)})
+    except RuntimeError as e:
+        return JSONResponse(status_code=502, content={"error": str(e)})
+    return {"ok": True, **result}
 
 
 @app.post("/api/jobs/replace-source")

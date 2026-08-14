@@ -750,6 +750,75 @@ html, body {
   font-size: calc(var(--base-font) - 1px);
 }
 
+/* ── Stash tag-check results list ──────────────────────────── */
+.stash-tag-results-list {
+  max-height: 360px;
+}
+
+.stash-scene-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 4px;
+  border-bottom: 1px solid var(--border);
+}
+.stash-scene-row:last-child { border-bottom: none; }
+
+.stash-scene-row-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.stash-scene-row-title {
+  color: var(--text);
+  font-weight: bold;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.stash-scene-row-path {
+  color: var(--text-disabled);
+  font-size: calc(var(--base-font) - 2px);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.stash-scene-row-btns {
+  flex: 0 0 auto;
+  display: flex;
+  gap: 6px;
+}
+
+.stash-scene-open-btn {
+  flex: 0 0 auto;
+  background: var(--panel);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 4px 10px;
+  font-size: calc(var(--base-font) - 1px);
+  cursor: pointer;
+}
+.stash-scene-open-btn:hover {
+  background: var(--border);
+  border-color: var(--accent);
+}
+.stash-scene-open-btn:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+
+.stash-scene-import-btn {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.stash-scene-import-btn:hover {
+  background: var(--accent);
+  color: var(--panel);
+}
+
 /* ── Video playback modal ──────────────────────────────────── */
 .video-modal-box {
   background: var(--panel);

@@ -64,6 +64,104 @@ async def _fetch_scene_path(scene_id: str) -> str:
     return os.path.abspath(os.path.normpath(unquote(source_path)))
 
 
+async def _graphql_query(query: str, variables: Optional[dict] = None) -> dict:
+    """Run a GraphQL query/mutation against Stash using variables (never raw
+    string interpolation of user input, unlike the scene-id lookup above)."""
+    body = json.dumps({"query": query, "variables": variables or {}}).encode("utf-8")
+    request = urllib.request.Request(
+        f"{STASH_HOST}/graphql",
+        data=body,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=8) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+    except urllib.error.URLError as e:
+        reason = getattr(e, "reason", str(e))
+        raise RuntimeError(f"Could not reach Stash at {STASH_HOST}: {reason}")
+    except Exception as e:
+        raise RuntimeError(f"Could not query Stash: {e}")
+
+    if payload.get("errors"):
+        message = "; ".join(err.get("message", "Unknown error") for err in payload["errors"])
+        raise RuntimeError(f"Stash returned an error: {message}")
+    return payload.get("data") or {}
+
+
+async def find_scenes_by_tag(tag_name: str) -> dict:
+    """Look up a Stash tag by name and list every scene tagged with it.
+
+    Only the fields needed to identify and open each scene are requested
+    (id, title, date, file path) -- no other scene metadata is imported.
+    """
+    query_text = (tag_name or "").strip()
+    if not query_text:
+        raise ValueError("Please enter a Stash tag name.")
+
+    tags_query = """
+        query FindTag($q: String!) {
+          findTags(filter: { q: $q, per_page: 20 }) {
+            count
+            tags { id name }
+          }
+        }
+    """
+    tags_data = await _graphql_query(tags_query, {"q": query_text})
+    tags = (tags_data.get("findTags") or {}).get("tags") or []
+    match = next((t for t in tags if (t.get("name") or "").lower() == query_text.lower()), None)
+    if not match:
+        if tags:
+            suggestions = ", ".join(t.get("name", "") for t in tags[:8])
+            raise ValueError(f'No exact tag named "{query_text}". Did you mean: {suggestions}?')
+        raise ValueError(f'No Stash tag named "{query_text}" was found.')
+
+    tag_id = match["id"]
+    tag_name_resolved = match["name"]
+
+    scenes_query = """
+        query FindScenesByTag($tagId: ID!) {
+          findScenes(
+            scene_filter: { tags: { value: [$tagId], modifier: INCLUDES } }
+            filter: { per_page: -1, sort: "path", direction: ASC }
+          ) {
+            count
+            scenes {
+              id
+              title
+              date
+              files { path }
+            }
+          }
+        }
+    """
+    scenes_data = await _graphql_query(scenes_query, {"tagId": tag_id})
+    found = scenes_data.get("findScenes") or {}
+    scenes_raw = found.get("scenes") or []
+
+    scenes = []
+    for scene in scenes_raw:
+        files = scene.get("files") or []
+        raw_path = files[0].get("path", "") if files else ""
+        path = os.path.normpath(unquote(raw_path)) if raw_path else ""
+        filename = os.path.basename(path) if path else ""
+        title = scene.get("title") or filename or f"Scene {scene.get('id')}"
+        scenes.append({
+            "id": scene.get("id"),
+            "title": title,
+            "date": scene.get("date") or "",
+            "path": path,
+            "url": f"{STASH_HOST}/scenes/{scene.get('id')}",
+        })
+
+    return {
+        "tag_id": tag_id,
+        "tag_name": tag_name_resolved,
+        "count": found.get("count", len(scenes)),
+        "scenes": scenes,
+    }
+
+
 async def import_stash_scene(manager, scene_input: str) -> dict:
     """Import the first media file belonging to a Stash scene.
 
