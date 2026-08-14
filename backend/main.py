@@ -13,7 +13,7 @@ from pydantic import BaseModel
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from config import PROJECT_ROOT, BUNDLE_DIR, FROZEN, HOST, PORT
+from config import PROJECT_ROOT, BUNDLE_DIR, FROZEN, HOST, PORT, APP_VERSION
 from diskspace import get_free_space_label
 from encode_manager import EncodeManager
 from filesystem_scan import scan_filesystem
@@ -281,6 +281,14 @@ class SyncClipCreateRequest(BaseModel):
 
 
 # ── REST endpoints ──────────────────────────────────────────────
+@app.get("/api/app_version")
+async def get_app_version():
+    """stash_dlp's own version (see APP_VERSION in config.py), shown to
+    the user when they click the logo - distinct from /api/version below,
+    which reports the bundled yt-dlp version instead."""
+    return {"version": APP_VERSION}
+
+
 @app.get("/api/version")
 async def get_version():
     return version_state
@@ -518,6 +526,14 @@ async def api_browse_target_folder(request: Request):
     except Exception as e:
         return JSONResponse(status_code=500, content={"error": str(e)})
     return {"path": path}
+
+
+@app.get("/api/stash/status")
+async def api_stash_status():
+    """Cheap liveness check the frontend polls to decide whether to show
+    the Stash button at all."""
+    running = await stash_integration.is_stash_running()
+    return {"running": running}
 
 
 @app.post("/api/import/stash")

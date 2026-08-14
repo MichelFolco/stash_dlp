@@ -89,6 +89,31 @@ async def _graphql_query(query: str, variables: Optional[dict] = None) -> dict:
     return payload.get("data") or {}
 
 
+async def is_stash_running() -> bool:
+    """Lightweight liveness check for the Stash server: a short-timeout
+    GraphQL ping, used to decide whether to surface the Stash button in
+    the UI at all. Any failure (unreachable host, connection refused,
+    timeout, non-GraphQL response) is treated as "not running" - this
+    is a presence check, not a diagnostic, so errors are swallowed
+    rather than raised.
+    """
+    query = json.dumps({"query": "{ systemStatus { status } }"}).encode("utf-8")
+    request = urllib.request.Request(
+        f"{STASH_HOST}/graphql",
+        data=query,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        def _do_request():
+            with urllib.request.urlopen(request, timeout=2) as response:
+                return json.loads(response.read().decode("utf-8"))
+        payload = await asyncio.to_thread(_do_request)
+    except Exception:
+        return False
+    return not payload.get("errors")
+
+
 async def find_scenes_by_tag(tag_name: str) -> dict:
     """Look up a Stash tag by name and list every scene tagged with it.
 

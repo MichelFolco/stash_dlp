@@ -14,17 +14,20 @@
 
   <div class="top-row">
     <div class="top-row-url">
+      <img id="logo" class="logo" src="/static/logo.png" alt="" title="Click to show app version" onerror="this.style.display='none'">
       <input id="input-field" class="input-field" type="text"
              placeholder="Checking for yt-dlp updates..." autocomplete="off" spellcheck="false">
     </div>
     <div class="top-row-buttons">
-      <img id="logo" class="logo" src="/static/logo.png" alt="" onerror="this.style.display='none'">
-
       <div id="mode-container" class="mode-container">
         <button id="dl-mode-btn" class="mode-btn mode-btn-left" title="Download Mode Active">⬇️</button>
         <button id="history-mode-btn" class="mode-btn mode-btn-mid" title="Switch to Search History Mode (Ctrl+F)">🔍</button>
         <button id="encode-mode-btn" class="mode-btn mode-btn-right" title="Encode Manager">🎞️</button>
       </div>
+
+      <button id="stash-status-btn" class="icon-btn hidden" title="Stash (Ctrl+S)">
+        <img src="/static/stash_logo.png" alt="Stash" class="stash-status-icon">
+      </button>
 
       <button id="url-args-btn" class="icon-btn" title="No custom yt-dlp args for this site">🧩</button>
 

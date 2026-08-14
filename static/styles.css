@@ -61,6 +61,8 @@ html, body {
 .top-row-url {
   flex: 1;
   display: flex;
+  align-items: center;
+  gap: 6px;
   min-width: 0;
 }
 
@@ -74,6 +76,7 @@ html, body {
 .logo {
   height: 28px;
   flex-shrink: 0;
+  cursor: pointer;
 }
 
 .input-field {
@@ -153,6 +156,10 @@ html, body {
   width: 32px;
   height: 32px;
   flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
   background: var(--panel);
   color: var(--text);
   border: 1px solid var(--border);
@@ -168,6 +175,13 @@ html, body {
   border: 1px solid var(--accent);
   background: var(--border);
   color: var(--accent);
+}
+
+.stash-status-icon {
+  width: 20px;
+  height: 20px;
+  object-fit: contain;
+  display: block;
 }
 
 /* ── Control bar ────────────────────────────────────────────── */
@@ -238,6 +252,8 @@ html, body {
 .ledger-filter-input {
   flex: 1;
   min-width: 0;
+  height: 32px;
+  box-sizing: border-box;
   background: var(--panel);
   color: var(--text);
   border: 1px solid var(--border);
@@ -249,11 +265,13 @@ html, body {
 
 .ledger-sort-select {
   flex: 0 0 auto;
+  height: 32px;
+  box-sizing: border-box;
   background: var(--panel);
   color: var(--text);
   border: 1px solid var(--border);
   border-radius: 4px;
-  padding: 6px 6px;
+  padding: 0 6px;
   font-size: var(--base-font);
 }
 

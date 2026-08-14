@@ -1,3 +1,15 @@
+## v1.00 - Logo shows app version
+- Clicking the logo (top-left, next to the URL field) now flashes the current stash_dlp version in the input placeholder, via a new `/api/app_version` endpoint backed by `APP_VERSION` in `backend/config.py`.
+- `APP_VERSION` is the single source of truth for this - bump it in the same edit as any new entry added here (see the comment above its definition in config.py).
+
+## v0.99 - Stash presence indicator
+- Added a `/api/stash/status` endpoint that pings Stash's GraphQL API with a short timeout to check whether it's currently running.
+- The top row now shows a Stash logo button, only when Stash is detected as running (checked at boot and re-checked every 30s). Clicking it opens the same menu as Ctrl+S (Import from Stash / Check Tag).
+
+## v0.98 - Top row / toolbar polish
+- The logo now always sits directly to the left of the URL input, in both desktop and mobile layouts (previously it moved to the button row on mobile).
+- Unified the filter toolbar controls (audio filter, hide-completed, sort select, sort direction, select) to the same 32px height with consistent spacing and centered icons.
+
 ## v0.97 - Toolbar cleanup
 - Removed the "Stash" button from the main control bar; Import from Stash and Check Tag are now reached via Ctrl+S, which opens the same menu the button used to.
 - Renamed "Move All to Target" to "Move All".

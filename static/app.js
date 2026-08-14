@@ -70,6 +70,7 @@ const inputField = el("input-field");
 const app = el("app");
 const queueList = el("queue-list");
 const gearBtn = el("gear-btn");
+const logoImg = el("logo");
 const dlModeBtn = el("dl-mode-btn");
 const historyModeBtn = el("history-mode-btn");
 const encodeModeBtn = el("encode-mode-btn");
@@ -83,6 +84,7 @@ const jobMenu = el("job-menu");
 const historyMenu = el("history-menu");
 const folderModal = el("folder-modal");
 const stashMenuFlyout = el("stash-menu-flyout");
+const stashStatusBtn = el("stash-status-btn");
 const stashImportModal = el("stash-import-modal");
 const stashImportInput = el("stash-import-input");
 const stashImportError = el("stash-import-error");
@@ -227,6 +229,10 @@ function openStashMenuFlyout() {
   closeOtherFlyouts(stashMenuFlyout);
   positionDropdownBelow(stashMenuFlyout, inputField);
 }
+stashStatusBtn.addEventListener("click", (e) => {
+  e.stopPropagation();
+  openStashMenuFlyout();
+});
 el("stash-menu-import").addEventListener("click", () => {
   stashMenuFlyout.classList.add("hidden");
   openStashImportModal();
@@ -390,6 +396,21 @@ async function boot() {
   inputField.setPlaceholderText = null; // n/a, kept for readability
   inputField.placeholder = "Paste a link, then press ENTER...";
   inputField.focus();
+  refreshStashStatus();
+  setInterval(refreshStashStatus, 30000);
+}
+
+// Polls Stash's reachability so the Stash button in the top row only
+// shows up when Stash is actually running - avoids a dead button that
+// just errors out on every click when Stash is off.
+async function refreshStashStatus() {
+  try {
+    const res = await fetch("/api/stash/status");
+    const data = await res.json();
+    stashStatusBtn.classList.toggle("hidden", !data.running);
+  } catch (e) {
+    stashStatusBtn.classList.add("hidden");
+  }
 }
 
 // Static for the life of the page (IS_LOCAL doesn't change at runtime),
@@ -780,6 +801,19 @@ async function refreshVersion() {
     ctxVersion.textContent = "yt-dlp version unknown";
   }
 }
+
+// Clicking the logo shows the app's own version (stash_dlp, not yt-dlp -
+// see ctxVersion/refreshVersion above for that). Source of truth is
+// APP_VERSION in backend/config.py via /api/app_version.
+logoImg.addEventListener("click", async () => {
+  try {
+    const res = await fetch("/api/app_version");
+    const data = await res.json();
+    flashStatus(data.version ? `stash_dlp v${data.version}` : "stash_dlp version unknown");
+  } catch (e) {
+    flashStatus("stash_dlp version unknown");
+  }
+});
 
 async function loadJobsSnapshot() {
   try {

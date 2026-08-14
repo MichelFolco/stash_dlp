@@ -10,6 +10,17 @@ import os
 import sys
 from pathlib import Path
 
+# stash_dlp's own version (NOT yt-dlp's - see version_state/api/version in
+# main.py for that). Shown to the user via the /api/app_version endpoint
+# when they click the logo (see app.js showAppVersion()).
+#
+# MAINTENANCE: this must always match the top entry of
+# CHANGELOG_StashDLP.md. Whenever a change warrants a new changelog
+# entry, bump this string in the SAME commit/edit. This applies to any
+# LLM/agent editing this codebase as much as a human - do not add a
+# CHANGELOG_StashDLP.md entry without also updating APP_VERSION here.
+APP_VERSION = "1.00"
+
 BACKEND_DIR = Path(__file__).resolve().parent
 
 FROZEN = getattr(sys, "frozen", False)
