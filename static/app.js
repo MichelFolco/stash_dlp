@@ -119,6 +119,7 @@ const syncAudioPlayer = el("sync-audio-player");
 const syncAudioTitle = el("sync-audio-title");
 const syncAudioStageBadge = el("sync-audio-stage-badge");
 const syncAudioDelayInput = el("sync-audio-delay-input");
+const syncAudioClipDurationInput = el("sync-audio-clip-duration-input");
 const syncAudioStatus = el("sync-audio-status");
 const syncAudioPrimaryBtn = el("sync-audio-primary-btn");
 const syncAudioRedoClipBtn = el("sync-audio-redo-clip-btn");
@@ -1951,6 +1952,11 @@ function openSyncAudioModal(filename) {
   syncAudioState = { filename, stage: "original", clipStart: null, everCreatedThisSession: false };
   syncAudioTitle.textContent = `Synchronize Audio - ${filename}`;
   syncAudioDelayInput.value = job.audio_delay_ms || 0;
+  syncAudioClipDurationInput.value = 10;
+  fetch("/api/jobs/sync-audio/settings")
+    .then(r => r.json())
+    .then(data => { if (data.clip_duration_s > 0) syncAudioClipDurationInput.value = data.clip_duration_s; })
+    .catch(() => {});
   setSyncAudioStatus("");
 
   // Already-synchronized files play their confirmed twin at first;
@@ -2021,6 +2027,33 @@ function nudgeSyncAudioDelay(deltaMs) {
   const current = parseFloat(syncAudioDelayInput.value) || 0;
   syncAudioDelayInput.value = current + deltaMs;
 }
+
+async function saveSyncClipDuration() {
+  const value = parseFloat(syncAudioClipDurationInput.value);
+  if (!Number.isFinite(value) || value <= 0) {
+    setSyncAudioStatus("Clip duration must be greater than 0 seconds.", "error");
+    return false;
+  }
+  try {
+    const res = await fetch("/api/jobs/sync-audio/settings", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ clip_duration_s: value }),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      setSyncAudioStatus(data.error || "Couldn't save clip duration.", "error");
+      return false;
+    }
+    syncAudioClipDurationInput.value = data.clip_duration_s;
+    return true;
+  } catch (e) {
+    setSyncAudioStatus("Couldn't save clip duration.", "error");
+    return false;
+  }
+}
+
+syncAudioClipDurationInput.addEventListener("change", saveSyncClipDuration);
+syncAudioClipDurationInput.addEventListener("blur", saveSyncClipDuration);
 
 el("sync-audio-dial-down-big").addEventListener("click", () => nudgeSyncAudioDelay(-100));
 el("sync-audio-dial-down-small").addEventListener("click", () => nudgeSyncAudioDelay(-10));

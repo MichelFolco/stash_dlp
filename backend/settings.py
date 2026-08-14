@@ -382,6 +382,30 @@ def set_download_prefs(quality: str, tag_domain: bool, m3u_sniffer: bool, auto_m
     return prefs
 
 
+
+# ── Synchronize Audio preferences ───────────────────────────────
+CLIP_DURATION_KEY = "sync_clip_duration_s"
+DEFAULT_CLIP_DURATION_S = 10.0
+
+def get_sync_clip_duration() -> float:
+    try:
+        value = float(_load().get(CLIP_DURATION_KEY, DEFAULT_CLIP_DURATION_S))
+        return value if value > 0 else DEFAULT_CLIP_DURATION_S
+    except (TypeError, ValueError):
+        return DEFAULT_CLIP_DURATION_S
+
+def set_sync_clip_duration(value: float) -> float:
+    try:
+        value = float(value)
+    except (TypeError, ValueError):
+        raise ValueError("Clip duration must be a number.")
+    if value <= 0:
+        raise ValueError("Clip duration must be greater than 0 seconds.")
+    data = _load()
+    data[CLIP_DURATION_KEY] = value
+    _persist(data)
+    return value
+
 # ── yt-dlp extra arguments (global default + per-domain overrides) ──
 # Two tiers, both stored flat like download_prefs: `default_args` is a
 # single string appended to every yt-dlp invocation (throttling knobs,

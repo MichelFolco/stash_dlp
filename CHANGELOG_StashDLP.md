@@ -1,3 +1,10 @@
+## v0.92 - Windows drag cursor
+- Changed the completed-card drag-and-drop cursor from the grab/hand-style cursor to the standard Windows arrow cursor.
+
+## v0.90 - Synchronize Audio clip duration control
+- Added a Synchronize Audio UI control for changing the clip preview duration.
+- The value is persisted in app settings and applied to `audio_sync.CLIP_DURATION_S` at runtime.
+
 # Changelog
 0.89 Synchronize Audio UI now fills the screen height (video flexes to fill remaining space, no more internal scrolling) and no longer closes on an outside click - only the X, Cancel, Discard/Accept, etc.
 0.88 reworked Synchronize Audio into a clip-based flow: Create Clip cuts a fast 10s preview from the playback position instead of re-rendering the whole file on every tweak, Apply Sync/Redo Clip iterate on that clip, Confirm Sync renders the full video into a staging file, and Accept Sync/Discard decide whether it becomes the confirmed twin - previously-confirmed twin is never touched until Accept; all sync file writes/deletes now retry through Windows file-in-use sharing violations instead of failing outright

@@ -283,10 +283,10 @@ html, body {
   cursor: pointer;
 }
 .job-card.done[draggable="true"] {
-  cursor: grab;
+  cursor: default;
 }
 .job-card.done[draggable="true"]:active {
-  cursor: grabbing;
+  cursor: default;
 }
 .job-card.dragging {
   opacity: 0.55;
@@ -1240,6 +1240,24 @@ html, body {
   gap: 4px;
 }
 .sync-audio-tips strong { color: var(--text); }
+
+.sync-audio-clip-duration {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.sync-audio-clip-duration label {
+  color: var(--text-dim);
+  font-size: calc(var(--base-font) - 1px);
+}
+
+.sync-audio-clip-duration-input {
+  width: 70px;
+  text-align: center;
+}
 
 .sync-audio-controls {
   display: flex;

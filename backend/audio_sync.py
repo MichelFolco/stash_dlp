@@ -38,12 +38,12 @@ import os
 
 from ffmpeg_encode import probe_basic_info
 from procflags import NO_CONSOLE_KWARGS
-from settings import get_converted_dir
+from settings import get_converted_dir, get_sync_clip_duration
 from ytdlp_utils import clean_filename, find_media_file, format_file_size
 
 RENDER_TIMEOUT = 120       # ceiling for a full-video audio re-encode
 CLIP_RENDER_TIMEOUT = 30   # clips are tiny; this is generous already
-CLIP_DURATION_S = 20.0
+CLIP_DURATION_S = get_sync_clip_duration()
 
 FILE_OP_RETRIES = 12
 FILE_OP_RETRY_DELAY = 0.3  # ~3.6s total ceiling before giving up

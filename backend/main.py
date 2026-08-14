@@ -27,6 +27,7 @@ from settings import (
     get_external_programs, get_external_program, add_external_program,
     update_external_program, delete_external_program,
     get_converted_dir, get_download_prefs, set_download_prefs,
+    get_sync_clip_duration, set_sync_clip_duration,
     get_ytdlp_args, set_ytdlp_default_args, set_ytdlp_domain_args, delete_ytdlp_domain_args,
 )
 from storage import search_history, get_history_entries, delete_history_entry, lookup_history_in_folder, HistoryLookupError
@@ -765,6 +766,25 @@ async def api_extract_audio(req: CancelRequest):
 
     await job_manager.connections.broadcast({"type": "job_added", "job": new_job})
     return {"ok": True, "job": new_job}
+
+
+@app.get("/api/jobs/sync-audio/settings")
+async def api_get_sync_audio_settings():
+    return {"clip_duration_s": audio_sync.CLIP_DURATION_S}
+
+
+class SyncAudioSettingsRequest(BaseModel):
+    clip_duration_s: float
+
+
+@app.post("/api/jobs/sync-audio/settings")
+async def api_set_sync_audio_settings(req: SyncAudioSettingsRequest):
+    try:
+        value = set_sync_clip_duration(req.clip_duration_s)
+        audio_sync.CLIP_DURATION_S = value
+    except ValueError as e:
+        return JSONResponse(status_code=400, content={"error": str(e)})
+    return {"ok": True, "clip_duration_s": audio_sync.CLIP_DURATION_S}
 
 
 @app.post("/api/jobs/sync-audio/create-clip")
