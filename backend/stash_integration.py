@@ -22,12 +22,47 @@ from typing import Optional
 from urllib.parse import unquote
 
 STASH_HOST = os.environ.get("STASH_HOST", "http://localhost:9999").rstrip("/")
+from audio_sync import FILE_OP_RETRIES, FILE_OP_RETRY_DELAY, _is_lock_error, _remove_with_retry
 from ffmpeg_encode import probe_basic_info
 from job_manager import NeedsDecisionError
 from settings import get_save_dir
 from storage import save_queue_to_disk
 from thumbnails import thumbnail_path_for
 from ytdlp_utils import clean_filename, find_converted_file, find_media_file, format_file_size, is_audio_file
+
+
+def _safe_getsize(path: str) -> int:
+    """Best-effort file size for display in the reencode/sync decision
+    prompt - a momentary Windows sharing violation on a file that was
+    just written (a fresh sync twin right after Confirm Sync, or a
+    fresh Encode Manager output) shouldn't block showing the prompt."""
+    try:
+        return os.path.getsize(path)
+    except OSError:
+        return 0
+
+
+async def _copy_or_move_with_retry(op, src: str, dst: str) -> None:
+    """Runs shutil.copy2/shutil.move with the same Windows-sharing-
+    violation retry tolerance audio_sync.py's own file ops use - a file
+    that was just written (e.g. a sync twin moments after Confirm Sync)
+    can still be transiently locked by antivirus/indexing right after
+    the write completes, and a single-shot attempt was failing the
+    whole Replace Stash Source operation on exactly that timing."""
+    last_err = None
+    for _ in range(FILE_OP_RETRIES):
+        try:
+            op(src, dst)
+            return
+        except OSError as e:
+            if not _is_lock_error(e):
+                raise
+            last_err = e
+            await asyncio.sleep(FILE_OP_RETRY_DELAY)
+    raise OSError(
+        f"'{os.path.basename(src)}' is still in use (likely still open in the preview "
+        f"player) - close the preview and try again. Details: {last_err}"
+    )
 
 
 def _scene_id(scene_input: str) -> str:
@@ -363,13 +398,13 @@ async def replace_source(
             "filename": filename,
             "kind": "synchronized" if job.get("synchronized") else "reencoded",
             "original": {
-                "size_bytes": os.path.getsize(media_path),
-                "size_label": format_file_size(os.path.getsize(media_path)),
+                "size_bytes": _safe_getsize(media_path),
+                "size_label": format_file_size(_safe_getsize(media_path)),
                 "width": original_info["width"], "height": original_info["height"],
             },
             "reencoded": {
-                "size_bytes": os.path.getsize(converted_path),
-                "size_label": format_file_size(os.path.getsize(converted_path)),
+                "size_bytes": _safe_getsize(converted_path),
+                "size_label": format_file_size(_safe_getsize(converted_path)),
                 "width": reencoded_info["width"], "height": reencoded_info["height"],
             },
         })
@@ -380,24 +415,21 @@ async def replace_source(
 
     try:
         if src_ext.lower() == source_ext.lower():
-            shutil.copy2(chosen, source_path)
+            await _copy_or_move_with_retry(shutil.copy2, chosen, source_path)
         else:
             new_source = os.path.splitext(source_path)[0] + src_ext
             if os.path.exists(new_source) and os.path.abspath(new_source) != os.path.abspath(source_path):
                 raise ValueError(f"A source file already exists at '{new_source}'.")
-            shutil.move(chosen, new_source)
+            await _copy_or_move_with_retry(shutil.move, chosen, new_source)
             if os.path.exists(source_path):
-                os.remove(source_path)
+                await _remove_with_retry(source_path)
             source_path = new_source
     except OSError as e:
         raise ValueError(f"Could not replace the Stash source: {e}")
 
     for path in (media_path, converted_path):
         if path and os.path.exists(path) and os.path.abspath(path) != os.path.abspath(source_path):
-            try:
-                os.remove(path)
-            except OSError:
-                pass
+            await _remove_with_retry(path)
 
     thumb_path = thumbnail_path_for(filename)
     if os.path.exists(thumb_path):

@@ -23,6 +23,8 @@ from ytdlp_utils import (
     get_downloaded_file_size,
     find_media_file,
     find_converted_file,
+    list_converted_stems,
+    has_converted_twin,
     is_audio_file,
     get_domain,
     split_args_string,
@@ -99,6 +101,14 @@ class JobManager:
 
         disk_queue = load_saved_queue()
         queue_dirty = False
+
+        # One Converted/ listing for the whole batch, instead of one
+        # os.listdir() per job via find_converted_file() - this loop
+        # runs on every /api/refresh call (including the frontend's 5s
+        # auto-refresh poll), so turning that into N listdirs per tick
+        # would scale badly with queue size, and worse on a networked
+        # Converted/ path.
+        converted_stems = list_converted_stems()
 
         for job in done_jobs:
             filename = job["filename"]
@@ -200,6 +210,14 @@ class JobManager:
                 "stash_tags": disk_queue.get(filename, {}).get("stash_tags", []),
                 "synchronized": disk_queue.get(filename, {}).get("synchronized", False),
                 "audio_delay_ms": disk_queue.get(filename, {}).get("audio_delay_ms", 0),
+                # Direct filesystem check for a twin file sitting in
+                # Converted/ - independent of isReencoded()'s in-memory
+                # Encode Manager history and the persisted "synchronized"
+                # flag, so it still catches a twin after a server restart
+                # (or one dropped into Converted/ by hand). Checked
+                # against the single listing above, not a fresh listdir
+                # per job.
+                "has_twin": has_converted_twin(filename, converted_stems),
             }
 
         if queue_dirty:
@@ -237,6 +255,7 @@ class JobManager:
             "eta": "",
             "synchronized": False,
             "audio_delay_ms": 0,
+            "has_twin": False,  # nothing in Converted/ yet - a download just started
         }
         self.jobs[filename] = job
 

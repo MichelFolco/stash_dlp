@@ -54,6 +54,16 @@ const state = {
   selectionMode: false,       // multi-select mode in the download ledger
   selectedFilenames: new Set(),
 
+  // Ledger render cache: filename -> already-built card element / the
+  // signature it was built from. Lets renderLedger() reuse a job's
+  // existing DOM node (thumbnail <img> and all) when nothing about
+  // that job actually changed since the last render, instead of
+  // tearing down and rebuilding every card on every call - this
+  // matters because renderLedger() now also runs on the 5s
+  // auto-refresh poll, not just on real job changes.
+  renderedCards: new Map(),
+  renderedCardSigs: new Map(),
+
   // Encode Manager
   encodeJobs: new Map(),          // id -> job dict
   encodeCapabilities: null,
@@ -1036,12 +1046,55 @@ function renderLedger() {
     renderHistoryLedger();
     return;
   }
-  queueList.innerHTML = "";
   const jobs = getFilteredSortedJobs();
+
+  // Reuse each job's existing card node when its signature (see
+  // jobCardSignature) hasn't changed since the last render, instead of
+  // rebuilding every card from scratch every call. A full rebuild would
+  // recreate every thumbnail <img> (forcing a re-request/re-decode) and
+  // flash the whole ledger, which is wasteful when this fires from the
+  // 5s auto-refresh poll and nothing actually changed. Selection state
+  // (checkbox/.selected class) lives on the DOM node itself via
+  // setCardSelectedVisual(), so it survives reuse untouched.
+  const fragment = document.createDocumentFragment();
+  const seen = new Set();
   for (const job of jobs) {
-    queueList.appendChild(buildJobCard(job));
+    const sig = jobCardSignature(job);
+    seen.add(job.filename);
+    let card = state.renderedCards.get(job.filename);
+    if (!card || state.renderedCardSigs.get(job.filename) !== sig) {
+      card = buildJobCard(job);
+      state.renderedCards.set(job.filename, card);
+      state.renderedCardSigs.set(job.filename, sig);
+    }
+    fragment.appendChild(card); // moves the node out of queueList if it's already there
   }
+  for (const filename of Array.from(state.renderedCards.keys())) {
+    if (!seen.has(filename)) {
+      state.renderedCards.delete(filename);
+      state.renderedCardSigs.delete(filename);
+    }
+  }
+  queueList.innerHTML = "";
+  queueList.appendChild(fragment);
   renderLedgerStatsBar(jobs);
+}
+
+// Everything that visibly (or functionally, e.g. has_twin gating the
+// context menu) affects a job's card. state.saveDirPath is folded in
+// too since it feeds the path tooltip/filename-path line - keeping it
+// out of the per-field list below so a folder change doesn't need its
+// own special case.
+function jobCardSignature(job) {
+  return [
+    state.saveDirPath,
+    job.status, job.pct, job.total, job.speed, job.eta,
+    job.file_size, job.is_audio, job.ext,
+    job.width, job.height, job.duration, job.video_codec, job.audio_codec,
+    job.url, job.source_type, job.source_path,
+    job.stash_tag_name, job.stash_scene_id,
+    job.synchronized, job.has_twin, job.playback_position,
+  ].join("\u0001");
 }
 
 // Thin summary row under the toolbar: count + total size of whatever's
@@ -1537,6 +1590,19 @@ function buildJobCard(job) {
     pill.textContent = "SYNCHRONIZED";
     titleRow.appendChild(pill);
   }
+  // Direct filesystem check (done server-side on every Refresh, see
+  // job_manager.seed_from_filesystem) for a twin sitting in Converted/.
+  // Only surfaced when RE-ENCODED/SYNCHRONIZED aren't already showing,
+  // since those already say "there's a twin" more specifically - this
+  // pill exists to catch the cases those miss, e.g. a twin left over
+  // from before a server restart (Encode Manager history is in-memory).
+  if (job.status === "DONE" && job.has_twin && !isReencoded(job.filename) && !job.synchronized) {
+    const pill = document.createElement("span");
+    pill.className = "has-twin-badge";
+    pill.textContent = "HAS TWIN";
+    pill.title = "A file already exists for this download in Converted/. Press Refresh if this seems out of date.";
+    titleRow.appendChild(pill);
+  }
   if (job.source_type === "stash" && !job.is_audio) {
     const pill = document.createElement("span");
     pill.className = "stash-badge";
@@ -1723,7 +1789,7 @@ function buildTooltip(job) {
   const durText = formatDuration(job.duration);
   if (durText) t += `\nDuration: ${durText}`;
   if (job.file_size) t += `\nSize: ${job.file_size}`;
-  if (job.status === "DONE" && isReencoded(job.filename)) t += `\nRe-encoded copy available in Converted/`;
+  if (job.status === "DONE" && job.has_twin) t += `\nTwin copy available in Converted/`;
   return t;
 }
 
@@ -1830,12 +1896,15 @@ function openJobMenu(x, y, job) {
   el("ctx-cancel-job").classList.toggle("hidden", !isDownloading);
   el("ctx-play-video").classList.toggle("hidden", !isVideo);
   el("ctx-play-audio").classList.toggle("hidden", !isAudioDone);
-  // Offered whenever this file has a re-encoded or synchronized twin
-  // sitting in Converted/ - same detection the RE-ENCODED/SYNCHRONIZED
-  // pills and the reencode/sync gating above already rely on.
+  // Offered whenever this file has a twin sitting in Converted/ -
+  // regardless of how it got there (re-encode, audio sync, or just
+  // dropped in by hand). Driven by job.has_twin, the direct Converted/
+  // filesystem check refreshed on every Refresh press/auto-refresh -
+  // NOT isReencoded()/isSynchronized(), since those miss a twin left
+  // over from before a server restart or placed manually.
   el("ctx-play-converted").classList.toggle(
     "hidden",
-    !isDone || !(isReencoded(job.filename) || isSynchronized(job.filename)),
+    !isDone || !job.has_twin,
   );
   el("ctx-extract-audio").classList.toggle("hidden", !isVideo);
   // Jumps straight into the encode setup modal with this file
@@ -3619,14 +3688,36 @@ folderStatusTarget.addEventListener("click", (e) => {
 });
 
 // ── Control bar ────────────────────────────────────────────────
+let _refreshInFlight = false;
 async function refreshDownloadLedger() {
-  const res = await fetch("/api/refresh", { method: "POST" });
-  const data = await res.json();
-  loadJobsIntoMap(data.jobs);
-  renderLedger();
+  // Guards against overlapping calls piling up if a previous refresh
+  // (manual click or the auto-refresh poll below) is still in flight -
+  // e.g. on a slow network the poll interval could otherwise fire again
+  // before the first request even returns.
+  if (_refreshInFlight) return;
+  _refreshInFlight = true;
+  try {
+    const res = await fetch("/api/refresh", { method: "POST" });
+    const data = await res.json();
+    loadJobsIntoMap(data.jobs);
+    renderLedger();
+  } finally {
+    _refreshInFlight = false;
+  }
 }
 
 el("refresh-btn").addEventListener("click", refreshDownloadLedger);
+
+// Keeps the queue (and in particular the has_twin/HAS TWIN pill, which
+// only gets recomputed server-side on a scan) current without the user
+// needing to press Refresh themselves - e.g. a twin dropped into
+// Converted/ by hand, or Encode Manager history lost across a server
+// restart, would otherwise only surface on the next manual Refresh.
+// Silently swallow failures (e.g. a momentary network blip on
+// Tailscale) rather than spamming flashStatus every few seconds.
+setInterval(() => {
+  refreshDownloadLedger().catch(() => {});
+}, 5000);
 
 
 el("move-all-btn").addEventListener("click", async () => {

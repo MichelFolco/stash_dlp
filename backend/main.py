@@ -589,6 +589,12 @@ async def api_replace_source(req: ReplaceSourceRequest):
         return JSONResponse(status_code=409, content={"needs_decision": True, **e.info})
     except ValueError as e:
         return JSONResponse(status_code=400, content={"error": str(e)})
+    except Exception as e:
+        # Surfaces anything unanticipated (e.g. a genuinely permanent file
+        # lock the retry loop in replace_source gave up on) as a real
+        # error message instead of an opaque 500 the frontend can only
+        # report as "couldn't reach the server".
+        return JSONResponse(status_code=400, content={"error": f"Unexpected error: {e}"})
     await job_manager.connections.broadcast({"type": "job_deleted", "filename": req.filename})
     return {"ok": True, **tag_result}
 

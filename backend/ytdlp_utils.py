@@ -134,6 +134,36 @@ def find_converted_file(filename: str):
     return None
 
 
+def list_converted_stems() -> set:
+    """Returns the set of file stems currently sitting in Converted/,
+    listing the folder exactly once. Lets a caller that needs a yes/no
+    twin-exists answer for many filenames (e.g. job_manager's per-refresh
+    has_twin check) do it against one directory listing instead of
+    calling find_converted_file() - and paying its own os.listdir() -
+    once per filename."""
+    converted_dir = get_converted_dir()
+    try:
+        entries = os.listdir(converted_dir)
+    except OSError:
+        return set()
+    stems = set()
+    for fname in entries:
+        if os.path.isfile(os.path.join(converted_dir, fname)):
+            stems.add(os.path.splitext(fname)[0])
+    return stems
+
+
+def has_converted_twin(filename: str, converted_stems: set) -> bool:
+    """True if `filename` has a twin in Converted/, given the stem set
+    from list_converted_stems(). Mirrors find_converted_file()'s
+    exact-stem-first, then ' (' suffix fallback matching, but purely
+    in-memory - no disk access."""
+    if filename in converted_stems:
+        return True
+    suffix_prefix = filename + " ("
+    return any(stem.startswith(suffix_prefix) for stem in converted_stems)
+
+
 def get_downloaded_file_size(filename: str):
     path = find_media_file(filename)
     if path is None:

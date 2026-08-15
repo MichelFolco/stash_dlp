@@ -1377,6 +1377,20 @@ html, body {
   padding: 1px 5px;
 }
 
+/* Fallback pill for a Converted/ twin found by direct filesystem check
+   (see job.has_twin) rather than tracked Encode Manager / sync state. */
+.has-twin-badge {
+  flex: 0 0 auto;
+  font-size: 9px;
+  font-weight: bold;
+  letter-spacing: 0.04em;
+  color: #ffcf8f;
+  background: #3a2a10;
+  border: 1px solid #7a5a20;
+  border-radius: 3px;
+  padding: 1px 5px;
+}
+
 .sync-audio-box {
   display: flex;
   flex-direction: column;
