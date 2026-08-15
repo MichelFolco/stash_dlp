@@ -13,7 +13,7 @@ from pydantic import BaseModel
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from config import PROJECT_ROOT, BUNDLE_DIR, FROZEN, HOST, PORT, APP_VERSION
+from config import PROJECT_ROOT, BUNDLE_DIR, FROZEN, HOST, PORT, APP_VERSION, CONVERTED_DIR_NAME
 from diskspace import get_free_space_label
 from encode_manager import EncodeManager
 from filesystem_scan import scan_filesystem
@@ -934,6 +934,15 @@ async def api_stream_video(filename: str, request: Request, source: str = "origi
     file_size = os.path.getsize(media_path)
     media_type = mimetypes.guess_type(media_path)[0] or "video/mp4"
     range_header = request.headers.get("range")
+    # Exposed so the frontend can show the literal on-disk filename (with
+    # extension) of whatever is actually loaded in the sync UI's video
+    # player - the sync workflow's in-progress files (clip/staging) have
+    # names that differ from the job's own filename, and both those and
+    # confirmed re-encode twins live in Converted/, so prefix that when
+    # applicable to disambiguate from an original of the same basename.
+    media_filename = os.path.basename(media_path)
+    if os.path.normpath(os.path.dirname(media_path)) == os.path.normpath(get_converted_dir()):
+        media_filename = f"{CONVERTED_DIR_NAME}/{media_filename}"
 
     if range_header:
         try:
@@ -954,13 +963,14 @@ async def api_stream_video(filename: str, request: Request, source: str = "origi
             "Content-Range": f"bytes {start}-{end}/{file_size}",
             "Accept-Ranges": "bytes",
             "Content-Length": str(chunk_length),
+            "X-Media-Filename": media_filename,
         }
         return StreamingResponse(
             _iter_file_range(media_path, start, chunk_length),
             status_code=206, media_type=media_type, headers=headers,
         )
 
-    headers = {"Accept-Ranges": "bytes", "Content-Length": str(file_size)}
+    headers = {"Accept-Ranges": "bytes", "Content-Length": str(file_size), "X-Media-Filename": media_filename}
     return StreamingResponse(
         _iter_file_range(media_path, 0, file_size),
         status_code=200, media_type=media_type, headers=headers,

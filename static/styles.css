@@ -1353,6 +1353,20 @@ html, body {
   object-fit: contain;
 }
 
+.sync-audio-filename {
+  margin-bottom: 6px;
+  padding: 4px 8px;
+  background: #14101f;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font-size: calc(var(--base-font) - 1px);
+  color: var(--text);
+  white-space: normal;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  text-align: center;
+}
+
 .sync-audio-stage-badge {
   margin-top: 8px;
   text-align: center;

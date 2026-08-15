@@ -126,6 +126,7 @@ const audioPlayer = el("audio-player");
 const syncAudioModal = el("sync-audio-modal");
 const syncAudioPlayer = el("sync-audio-player");
 const syncAudioTitle = el("sync-audio-title");
+const syncAudioFilename = el("sync-audio-filename");
 const syncAudioStageBadge = el("sync-audio-stage-badge");
 const syncAudioDelayInput = el("sync-audio-delay-input");
 const syncAudioClipDurationInput = el("sync-audio-clip-duration-input");
@@ -2149,7 +2150,11 @@ function openSyncAudioModal(filename) {
   // A previous sync operation may have disabled the action buttons while
   // rendering. Reinitialize them every time the dialog is opened.
   setSyncButtonsDisabled(false);
-  syncAudioTitle.textContent = `Synchronize Audio - ${filename}`;
+  syncAudioTitle.textContent = "Synchronize Audio";
+  // Placeholder until setSyncPlayerSource's header fetch (below) resolves
+  // the literal on-disk filename actually loaded in the player.
+  syncAudioFilename.textContent = filename;
+  syncAudioFilename.title = filename;
   syncAudioDelayInput.value = job.audio_delay_ms || 0;
   syncAudioClipDurationInput.value = 10;
   fetch("/api/jobs/sync-audio/settings")
@@ -2170,7 +2175,22 @@ function openSyncAudioModal(filename) {
 }
 
 function setSyncPlayerSource(filename, source) {
-  syncAudioPlayer.src = `/api/jobs/stream?filename=${encodeURIComponent(filename)}&source=${source}&t=${Date.now()}`;
+  const url = `/api/jobs/stream?filename=${encodeURIComponent(filename)}&source=${source}&t=${Date.now()}`;
+  syncAudioPlayer.src = url;
+  // The <video> element gives no way to read response headers, so grab
+  // the actual on-disk filename (with extension) via a tiny ranged fetch
+  // of the same URL - this is what shows in the filename line, since the
+  // sync workflow's in-progress files (clip/staging) don't share the
+  // job's own filename.
+  fetch(url, { headers: { Range: "bytes=0-0" } })
+    .then(res => {
+      const name = res.headers.get("X-Media-Filename");
+      if (name) {
+        syncAudioFilename.textContent = name;
+        syncAudioFilename.title = name;
+      }
+    })
+    .catch(() => {});
 }
 
 // Pauses and fully detaches the player before any request that will

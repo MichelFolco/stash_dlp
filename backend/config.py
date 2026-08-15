@@ -19,7 +19,7 @@ from pathlib import Path
 # entry, bump this string in the SAME commit/edit. This applies to any
 # LLM/agent editing this codebase as much as a human - do not add a
 # CHANGELOG_StashDLP.md entry without also updating APP_VERSION here.
-APP_VERSION = "1.02"
+APP_VERSION = "1.05"
 
 BACKEND_DIR = Path(__file__).resolve().parent
 

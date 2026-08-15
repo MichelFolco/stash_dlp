@@ -1,3 +1,15 @@
+## v1.05 - Sync UI filename prefixed with Converted/ when applicable
+- The filename line now shows `Converted/<filename>` whenever the file actually loaded in the player lives in the Converted/ subfolder - which covers the already-synchronized twin, all three in-progress sync render files (clip-src, clip, full-staging), and confirmed re-encode twins. Files from the original download folder still show as a bare filename.
+
+## v1.04 - Sync UI shows the literal filename of whatever is loaded
+- The filename line added in v1.03 was showing the job's own filename, not what's actually on disk - during the clip/full-render stages the player is really loaded from a differently-named file (e.g. `<stem>.sync-clip-src.mp4`, `<stem>.sync-clip.mp4`, `<stem>.sync-full-staging.mp4`).
+- `/api/jobs/stream` now returns the on-disk basename via an `X-Media-Filename` response header. The frontend reads it with a tiny ranged fetch each time it sets the player source, so the filename line always reflects the literal file (with extension) currently loaded, through every stage.
+
+## v1.03 - Sync UI always shows the loaded filename
+- The Synchronize Audio modal's header previously crammed the filename into the title bar, where long names got clipped with an ellipsis - on narrow/mobile views there was often no way to see the full name at all.
+- Added a dedicated filename line under the header that wraps instead of truncating, so the full filename stays visible through every stage of the workflow (original, clip, full render).
+- Header title is now just "Synchronize Audio"; no backend changes.
+
 ## v1.02 - Fixed thumbnail leaking into the download folder
 - Root cause: yt-dlp ignores `--paths TYPE:...` whenever the main `-o` outtmpl is an absolute path, and ours always is - so the `--paths thumbnail:...` redirect to the library_data thumbnail cache was silently a no-op, and the thumbnail landed beside the video/audio file in the download folder instead.
 - Fixed by giving the `thumbnail` type its own absolute `-o thumbnail:...` outtmpl (pointed at the same path `thumbnails.py` already looks for), which yt-dlp always honors regardless of the main outtmpl. Dropped the now-redundant `--paths thumbnail:...` flag.
