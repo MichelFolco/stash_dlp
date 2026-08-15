@@ -29,6 +29,7 @@ from settings import (
     get_converted_dir, get_download_prefs, set_download_prefs,
     get_sync_clip_duration, set_sync_clip_duration,
     get_ytdlp_args, set_ytdlp_default_args, set_ytdlp_domain_args, delete_ytdlp_domain_args,
+    get_recent_stash_tags, push_recent_stash_tag,
 )
 from storage import search_history, get_history_entries, delete_history_entry, lookup_history_in_folder, HistoryLookupError
 from thumbnails import get_thumbnail_path
@@ -253,6 +254,8 @@ class EncodeDeleteRequest(BaseModel):
 
 class StashImportRequest(BaseModel):
     scene: str
+    tag_id: Optional[str] = None    # set when importing from a Check Tag result
+    tag_name: Optional[str] = None
 
 
 class StashTagCheckRequest(BaseModel):
@@ -262,6 +265,7 @@ class StashTagCheckRequest(BaseModel):
 class ReplaceSourceRequest(BaseModel):
     filename: str
     variant: Optional[str] = None  # "original" | "reencoded" | None
+    delete_tag_ids: List[str] = []  # any subset of job["stash_tags"] to remove from the scene
 
 
 class SyncAudioApplyRequest(BaseModel):
@@ -540,15 +544,26 @@ async def api_stash_status():
 async def api_import_stash(req: StashImportRequest):
     """Import the media file belonging to a Stash scene into the current
     Stash DLP download folder. Only the scene's file path is requested;
-    tags and other Stash metadata are deliberately not imported."""
+    no Stash metadata is imported, except that when this import came from
+    a Check Tag result, that one tag's id/name are recorded on the job so
+    the UI can show a pill for it (see StashImportRequest.tag_id/tag_name)."""
     try:
-        result = await stash_integration.import_stash_scene(job_manager, req.scene)
+        result = await stash_integration.import_stash_scene(
+            job_manager, req.scene, tag_id=req.tag_id, tag_name=req.tag_name
+        )
     except ValueError as e:
         return JSONResponse(status_code=400, content={"error": str(e)})
     except RuntimeError as e:
         return JSONResponse(status_code=502, content={"error": str(e)})
 
     return {"ok": True, "job": result}
+
+
+@app.get("/api/stash/recent-tags")
+async def api_stash_recent_tags():
+    """Rolling list of the last few tags searched via Check Tag, for the
+    quick-pick chips shown when the Check Tag modal is opened."""
+    return {"recent_tags": get_recent_stash_tags()}
 
 
 @app.post("/api/stash/check-tag")
@@ -560,19 +575,22 @@ async def api_stash_check_tag(req: StashTagCheckRequest):
         return JSONResponse(status_code=400, content={"error": str(e)})
     except RuntimeError as e:
         return JSONResponse(status_code=502, content={"error": str(e)})
-    return {"ok": True, **result}
+    recent_tags = push_recent_stash_tag(result.get("tag_name", ""))
+    return {"ok": True, **result, "recent_tags": recent_tags}
 
 
 @app.post("/api/jobs/replace-source")
 async def api_replace_source(req: ReplaceSourceRequest):
     try:
-        await stash_integration.replace_source(job_manager, req.filename, variant=req.variant)
+        tag_result = await stash_integration.replace_source(
+            job_manager, req.filename, variant=req.variant, delete_tag_ids=req.delete_tag_ids
+        )
     except NeedsDecisionError as e:
         return JSONResponse(status_code=409, content={"needs_decision": True, **e.info})
     except ValueError as e:
         return JSONResponse(status_code=400, content={"error": str(e)})
     await job_manager.connections.broadcast({"type": "job_deleted", "filename": req.filename})
-    return {"ok": True}
+    return {"ok": True, **tag_result}
 
 
 @app.post("/api/jobs/move-to-target")

@@ -195,6 +195,9 @@ class JobManager:
                 "source_path": disk_queue.get(filename, {}).get("source_path", ""),
                 "stash_scene_id": disk_queue.get(filename, {}).get("stash_scene_id", ""),
                 "stash_scene_url": disk_queue.get(filename, {}).get("stash_scene_url", ""),
+                "stash_tag_id": disk_queue.get(filename, {}).get("stash_tag_id"),
+                "stash_tag_name": disk_queue.get(filename, {}).get("stash_tag_name"),
+                "stash_tags": disk_queue.get(filename, {}).get("stash_tags", []),
                 "synchronized": disk_queue.get(filename, {}).get("synchronized", False),
                 "audio_delay_ms": disk_queue.get(filename, {}).get("audio_delay_ms", 0),
             }
@@ -599,6 +602,12 @@ class JobManager:
         """Renames the media file (and thumbnail) on disk, and moves the
         job/queue entry to the new key. Returns the final clean name.
         Raises ValueError if the new name is invalid or already taken."""
+        existing = self.jobs.get(filename)
+        if existing and existing.get("stash_tag_name"):
+            raise ValueError(
+                f"Renaming is disabled for items tagged \"{existing['stash_tag_name']}\" from a Stash tag check."
+            )
+
         new_name = clean_filename(new_name_raw)
         if not new_name:
             raise ValueError("New name can't be empty.")
@@ -731,6 +740,11 @@ class JobManager:
         job = self.jobs.get(filename)
         if not job or job.get("status") != "DONE":
             raise ValueError(f"'{filename}' isn't a completed item.")
+        if job.get("source_type") == "stash":
+            raise ValueError(
+                f"'{filename}' was imported from Stash and can't be moved to the target "
+                "folder - use Replace Stash Source instead."
+            )
 
         media_path = find_media_file(filename)
         if not media_path:
@@ -802,11 +816,18 @@ class JobManager:
         caller can prompt for each one and re-call move_to_target with
         an explicit variant. Raises ValueError only if no target folder
         is configured at all - per-file failures are collected instead
-        of aborting the batch."""
+        of aborting the batch.
+
+        Stash-imported items are silently skipped rather than reported as
+        failures, since they're never eligible for this move (see
+        move_to_target) - that's expected and permanent, not an error."""
         if not get_target_dir():
             raise ValueError("No target folder configured yet.")
 
-        candidates = [f for f, j in self.jobs.items() if j.get("status") == "DONE"]
+        candidates = [
+            f for f, j in self.jobs.items()
+            if j.get("status") == "DONE" and j.get("source_type") != "stash"
+        ]
         moved = []
         failed = []
         pending_decisions = []

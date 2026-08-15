@@ -2,7 +2,13 @@
 
 This module contains all functionality specific to importing a media file
 from a Stash scene and replacing the original Stash source after processing.
-It intentionally does not request, store, or otherwise handle Stash tags.
+No general Stash metadata is imported, except the scene's tags: every tag on
+the scene is fetched and stashed on the job at import time (job["stash_tags"]),
+so the Replace Stash Source modal can later offer any of them for deletion
+from the scene once the source file is replaced. Separately, when an import
+originates from a Check Tag search, that one tag's id/name are also stashed
+under stash_tag_id/stash_tag_name purely so the UI can show a pill for it and
+lock renaming - unrelated to the full tag list above.
 """
 
 import asyncio
@@ -35,9 +41,14 @@ def _scene_id(scene_input: str) -> str:
     return scene_id
 
 
-async def _fetch_scene_path(scene_id: str) -> str:
+async def _fetch_scene_details(scene_id: str) -> dict:
+    """Fetches both the scene's file path and its full tag list in one
+    round trip. The tag list is stored verbatim on the job at import time
+    (see import_stash_scene) so the Replace Stash Source modal can later
+    offer every one of them for deletion, not just a tag used to find the
+    scene via Check Tag."""
     query = json.dumps({
-        "query": f'{{ findScene(id: "{scene_id}") {{ files {{ path }} }} }}'
+        "query": f'{{ findScene(id: "{scene_id}") {{ files {{ path }} tags {{ id name }} }} }}'
     }).encode("utf-8")
     request = urllib.request.Request(
         f"{STASH_HOST}/graphql",
@@ -61,7 +72,15 @@ async def _fetch_scene_path(scene_id: str) -> str:
     source_path = files[0].get("path", "")
     if not source_path:
         raise ValueError("Stash returned an empty file path.")
-    return os.path.abspath(os.path.normpath(unquote(source_path)))
+    tags = [
+        {"id": t.get("id"), "name": t.get("name", "")}
+        for t in (scene.get("tags") or [])
+        if t.get("id")
+    ]
+    return {
+        "path": os.path.abspath(os.path.normpath(unquote(source_path))),
+        "tags": tags,
+    }
 
 
 async def _graphql_query(query: str, variables: Optional[dict] = None) -> dict:
@@ -187,14 +206,22 @@ async def find_scenes_by_tag(tag_name: str) -> dict:
     }
 
 
-async def import_stash_scene(manager, scene_input: str) -> dict:
+async def import_stash_scene(
+    manager, scene_input: str, tag_id: Optional[str] = None, tag_name: Optional[str] = None
+) -> dict:
     """Import the first media file belonging to a Stash scene.
 
     Only ``files.path`` is requested from GraphQL. No Stash tags or other
-    scene metadata are imported.
+    scene metadata are imported, except that when this import came from a
+    Check Tag result (``tag_id``/``tag_name`` provided by the caller), that
+    single tag's id/name are recorded on the job so the UI can show a pill
+    for it and, later, offer to remove just that tag from the scene when
+    the source is replaced.
     """
     scene_id = _scene_id(scene_input)
-    source_path = await _fetch_scene_path(scene_id)
+    details = await _fetch_scene_details(scene_id)
+    source_path = details["path"]
+    stash_tags = details["tags"]
 
     if not os.path.isfile(source_path):
         raise ValueError(f"Stash file does not exist on the server: {source_path}")
@@ -247,6 +274,9 @@ async def import_stash_scene(manager, scene_input: str) -> dict:
         "source_path": source_path,
         "stash_scene_id": scene_id,
         "stash_scene_url": stash_url,
+        "stash_tag_id": tag_id or None,
+        "stash_tag_name": tag_name or None,
+        "stash_tags": stash_tags,
     }
     manager.jobs[stem] = job
     manager.saved_queue[stem] = {
@@ -255,6 +285,7 @@ async def import_stash_scene(manager, scene_input: str) -> dict:
             "url", "res_cap", "status", "file_size", "is_audio", "width", "height",
             "duration", "ext", "video_codec", "audio_codec", "source_type",
             "source_path", "stash_scene_id", "stash_scene_url",
+            "stash_tag_id", "stash_tag_name", "stash_tags",
         )
     }
     save_queue_to_disk(manager.saved_queue)
@@ -262,8 +293,54 @@ async def import_stash_scene(manager, scene_input: str) -> dict:
     return job
 
 
-async def replace_source(manager, filename: str, variant: Optional[str] = None) -> None:
-    """Replace an imported Stash source with the selected processed version."""
+async def remove_tags_from_scene(scene_id: str, tag_ids: list) -> None:
+    """Removes any number of tags from a scene's tag list in Stash, in a
+    single fetch-then-write round trip.
+
+    Stash's ``sceneUpdate`` mutation replaces the scene's whole tag list
+    rather than patching individual entries, so the current list is
+    fetched first and every id in ``tag_ids`` filtered out before writing
+    the remainder back.
+    """
+    if not tag_ids:
+        return
+    to_remove = set(tag_ids)
+
+    query = """
+        query SceneTags($id: ID!) {
+          findScene(id: $id) { tags { id } }
+        }
+    """
+    data = await _graphql_query(query, {"id": scene_id})
+    scene = data.get("findScene") or {}
+    current_tag_ids = [t["id"] for t in (scene.get("tags") or [])]
+    remaining = [t for t in current_tag_ids if t not in to_remove]
+    if len(remaining) == len(current_tag_ids):
+        return  # none of the requested tags are on the scene, nothing to do
+
+    mutation = """
+        mutation RemoveSceneTags($id: ID!, $tagIds: [ID!]) {
+          sceneUpdate(input: { id: $id, tag_ids: $tagIds }) { id }
+        }
+    """
+    await _graphql_query(mutation, {"id": scene_id, "tagIds": remaining})
+
+
+async def replace_source(
+    manager, filename: str, variant: Optional[str] = None, delete_tag_ids: Optional[list] = None
+) -> dict:
+    """Replace an imported Stash source with the selected processed version.
+
+    ``delete_tag_ids`` may name any subset of the scene's tags (as stored
+    on the job at import time in job["stash_tags"]) - not just the single
+    tag that originally matched a Check Tag search.
+
+    Returns a status dict describing which of the requested tags were
+    actually deleted, so the caller can report a partial-success message:
+    the file replacement below either fully succeeds or raises, but tag
+    deletion is treated as best-effort since the file swap has already
+    happened by the time it's attempted.
+    """
     job = manager.jobs.get(filename)
     if not job or job.get("status") != "DONE":
         raise ValueError(f"'{filename}' isn't a completed item.")
@@ -329,6 +406,20 @@ async def replace_source(manager, filename: str, variant: Optional[str] = None) 
         except OSError:
             pass
 
+    scene_id = job.get("stash_scene_id")
+    stash_tags = job.get("stash_tags") or []
+
     manager.jobs.pop(filename, None)
     manager.saved_queue.pop(filename, None)
     save_queue_to_disk(manager.saved_queue)
+
+    result = {"deleted_tag_names": [], "tag_delete_error": None}
+    delete_tag_ids = [t for t in (delete_tag_ids or []) if t]
+    if delete_tag_ids and scene_id:
+        try:
+            await remove_tags_from_scene(scene_id, delete_tag_ids)
+            id_to_name = {t["id"]: t["name"] for t in stash_tags}
+            result["deleted_tag_names"] = [id_to_name.get(t, t) for t in delete_tag_ids]
+        except Exception as e:
+            result["tag_delete_error"] = str(e)
+    return result

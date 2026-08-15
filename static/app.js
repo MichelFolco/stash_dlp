@@ -94,6 +94,8 @@ const stashTagError = el("stash-tag-error");
 const stashTagResultsModal = el("stash-tag-results-modal");
 const stashTagResultsTitle = el("stash-tag-results-title");
 const stashTagResultsList = el("stash-tag-results-list");
+const stashTagRecentWrap = el("stash-tag-recent-wrap");
+const stashTagRecentList = el("stash-tag-recent-list");
 const folderInput = el("folder-input");
 const folderError = el("folder-error");
 const folderRecentWrap = el("folder-recent-wrap");
@@ -249,6 +251,38 @@ function openStashTagModal() {
   stashTagInput.value = "";
   stashTagModal.classList.remove("hidden");
   setTimeout(() => stashTagInput.focus(), 0);
+  refreshStashTagRecent();
+}
+
+function renderStashTagRecent(tags) {
+  stashTagRecentList.innerHTML = "";
+  if (!tags || tags.length === 0) {
+    stashTagRecentWrap.classList.add("hidden");
+    return;
+  }
+  stashTagRecentWrap.classList.remove("hidden");
+  for (const tag of tags) {
+    const chip = document.createElement("div");
+    chip.className = "stash-tag-chip";
+    chip.textContent = tag;
+    chip.title = tag;
+    chip.addEventListener("click", () => {
+      stashTagInput.value = tag;
+      checkStashTag();
+    });
+    stashTagRecentList.appendChild(chip);
+  }
+}
+
+async function refreshStashTagRecent() {
+  try {
+    const res = await fetch("/api/stash/recent-tags");
+    if (!res.ok) return;
+    const data = await res.json();
+    renderStashTagRecent(data.recent_tags);
+  } catch (e) {
+    // Non-critical - just skip showing the recent-tags chips this time.
+  }
 }
 
 function closeStashTagModal() {
@@ -295,7 +329,10 @@ stashTagInput.addEventListener("keydown", (e) => {
   else if (e.key === "Escape") closeStashTagModal();
 });
 
+let currentStashTagCheck = null; // { id, name } of the most recently checked tag, for tagging imports
+
 function openStashTagResultsModal(data) {
+  currentStashTagCheck = { id: data.tag_id, name: data.tag_name };
   stashTagResultsTitle.textContent = `Scenes tagged "${data.tag_name}" (${data.count})`;
   stashTagResultsList.innerHTML = "";
 
@@ -352,7 +389,11 @@ async function importStashSceneFromResults(scene, btn) {
   try {
     const res = await fetch("/api/import/stash", {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ scene: scene.id }),
+      body: JSON.stringify({
+        scene: scene.id,
+        tag_id: currentStashTagCheck?.id || null,
+        tag_name: currentStashTagCheck?.name || null,
+      }),
     });
     const data = await res.json();
     if (!res.ok) {
@@ -1502,6 +1543,13 @@ function buildJobCard(job) {
     pill.textContent = "Stash file";
     titleRow.appendChild(pill);
   }
+  if (job.stash_tag_name) {
+    const pill = document.createElement("span");
+    pill.className = "stash-tag-badge";
+    pill.textContent = job.stash_tag_name;
+    pill.title = `Imported via Stash Check Tag: "${job.stash_tag_name}". Renaming is disabled for this item.`;
+    titleRow.appendChild(pill);
+  }
   titlePathCol.appendChild(titleRow);
 
   const folderPath = state.saveDirPath || "";
@@ -1547,10 +1595,10 @@ function buildJobCard(job) {
     makeCardIconBtn("external-link", "Copy URL", () => copyJobLink(job.filename, job.url)),
     makeCardIconBtn("file-text", "Copy file name", () => copyJobFilename(job.filename)),
   ];
-  if (!isDownloadingCard) {
+  if (!isDownloadingCard && !job.stash_tag_name) {
     cardIconBtns.push(makeCardIconBtn("forms", "Rename", () => renameJobPrompt(job.filename)));
   }
-  if (isDoneCard) {
+  if (isDoneCard && job.source_type !== "stash") {
     cardIconBtns.push(makeCardIconBtn("arrow-right", "Move to target folder", () => moveJobToTarget(job.filename)));
   }
   if (status === "ERROR" || status === "CANCELLED") {
@@ -1782,6 +1830,13 @@ function openJobMenu(x, y, job) {
   el("ctx-cancel-job").classList.toggle("hidden", !isDownloading);
   el("ctx-play-video").classList.toggle("hidden", !isVideo);
   el("ctx-play-audio").classList.toggle("hidden", !isAudioDone);
+  // Offered whenever this file has a re-encoded or synchronized twin
+  // sitting in Converted/ - same detection the RE-ENCODED/SYNCHRONIZED
+  // pills and the reencode/sync gating above already rely on.
+  el("ctx-play-converted").classList.toggle(
+    "hidden",
+    !isDone || !(isReencoded(job.filename) || isSynchronized(job.filename)),
+  );
   el("ctx-extract-audio").classList.toggle("hidden", !isVideo);
   // Jumps straight into the encode setup modal with this file
   // preselected as the source - only makes sense for a completed,
@@ -1814,8 +1869,8 @@ function openJobMenu(x, y, job) {
   el("ctx-copy-filename").classList.remove("hidden");
   el("ctx-copy-submenu").classList.remove("hidden");
 
-  el("ctx-rename-file").classList.toggle("hidden", isDownloading);
-  el("ctx-move-to-target").classList.toggle("hidden", !isDone);
+  el("ctx-rename-file").classList.toggle("hidden", isDownloading || !!job.stash_tag_name);
+  el("ctx-move-to-target").classList.toggle("hidden", !isDone || job.source_type === "stash");
   el("ctx-replace-source").classList.toggle("hidden", !isDone || job.source_type !== "stash" || !job.source_path);
   el("ctx-open-folder").classList.toggle("hidden", !isDone);
   el("ctx-file-submenu").classList.toggle("hidden", isDownloading);
@@ -1860,6 +1915,14 @@ el("ctx-play-audio").addEventListener("click", () => {
   const filename = jobMenu.dataset.filename;
   closeMenus();
   openMediaModal(filename, true);
+});
+
+el("ctx-play-converted").addEventListener("click", () => {
+  const filename = jobMenu.dataset.filename;
+  const job = state.jobs.get(filename);
+  closeMenus();
+  if (!job) return;
+  openMediaModal(filename, !!job.is_audio, "converted");
 });
 
 el("ctx-extract-audio").addEventListener("click", async () => {
@@ -2042,16 +2105,19 @@ const NEAR_END_THRESHOLD_SECONDS = 5;
 const POSITION_SAVE_INTERVAL_MS = 5000;
 let mediaTracking = null; // { filename, element, lastSentAt }
 
-function openMediaModal(filename, isAudio) {
-  videoModalTitle.textContent = filename;
+function openMediaModal(filename, isAudio, source = "original") {
+  videoModalTitle.textContent = source === "converted" ? `${filename} (Converted)` : filename;
   videoModalTitle.title = filename;
-  const streamUrl = `/api/jobs/stream?filename=${encodeURIComponent(filename)}`;
+  const streamUrl = `/api/jobs/stream?filename=${encodeURIComponent(filename)}&source=${source}`;
 
   videoPlayer.classList.toggle("hidden", isAudio);
   audioPlayerWrap.classList.toggle("hidden", !isAudio);
 
   const job = state.jobs.get(filename);
-  const resumePosition = job && job.playback_position > 0 ? job.playback_position : 0;
+  // The converted twin is a distinct file from the original, so resuming
+  // at the original's last position (and tracking position against it
+  // below) wouldn't make sense - play it from the start untracked.
+  const resumePosition = source === "original" && job && job.playback_position > 0 ? job.playback_position : 0;
   const activeEl = isAudio ? audioPlayer : videoPlayer;
 
   const onLoadedMetadata = () => {
@@ -2064,7 +2130,11 @@ function openMediaModal(filename, isAudio) {
 
   activeEl.src = streamUrl;
   videoModal.classList.remove("hidden");
-  attachPlaybackTracking(filename, activeEl);
+  if (source === "original") {
+    attachPlaybackTracking(filename, activeEl);
+  } else {
+    detachPlaybackTracking();
+  }
   activeEl.play().catch(() => {}); // ignore autoplay-blocked rejections
 }
 
@@ -2720,27 +2790,84 @@ el("ctx-move-to-target").addEventListener("click", () => {
   moveJobToTarget(filename);
 });
 
-async function requestReplaceSource(filename, variant) {
+async function requestReplaceSource(filename, variant, deleteTagIds) {
   try {
+    const body = { filename };
+    if (variant) body.variant = variant;
+    if (deleteTagIds && deleteTagIds.length) body.delete_tag_ids = deleteTagIds;
     const res = await fetch("/api/jobs/replace-source", {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(variant ? { filename, variant } : { filename }),
+      body: JSON.stringify(body),
     });
     const data = await res.json();
     if (res.status === 409 && data.needs_decision) {
       const choice = await promptReencodeChoice(data);
-      if (!choice) return "cancelled";
-      return requestReplaceSource(filename, choice);
+      if (!choice) return { status: "cancelled" };
+      return requestReplaceSource(filename, choice, deleteTagIds);
     }
     if (!res.ok) {
       window.alert(`Couldn't replace the Stash source:\n${data.error || "Unknown error"}`);
-      return "error";
+      return { status: "error" };
     }
-    return "replaced";
+    return {
+      status: "replaced",
+      deleted_tag_names: data.deleted_tag_names || [],
+      tag_delete_error: data.tag_delete_error || null,
+    };
   } catch (e) {
     window.alert("Couldn't reach the server to replace the Stash source.");
-    return "error";
+    return { status: "error" };
   }
+}
+
+// Shows the replace-source confirm modal, with one checkbox per tag on
+// job.stash_tags (the full tag list saved when the scene was imported -
+// see stash_integration.import_stash_scene), so any combination of them
+// can be picked for deletion from the Stash scene. Resolves null if
+// cancelled, or { deleteTagIds } if confirmed.
+function promptReplaceSourceConfirm(job) {
+  return new Promise((resolve) => {
+    const filenameEl = el("replace-source-filename");
+    const tagsSection = el("replace-source-tags-section");
+    const tagList = el("replace-source-tag-list");
+    const modal = el("replace-source-modal");
+    const cancelBtn = el("replace-source-cancel-btn");
+    const confirmBtn = el("replace-source-confirm-btn");
+
+    filenameEl.textContent = job.filename;
+    tagList.innerHTML = "";
+    const tags = job.stash_tags || [];
+    if (tags.length) {
+      tags.forEach((tag) => {
+        const row = document.createElement("div");
+        row.className = "checkbox-row";
+        const checkboxId = `replace-source-tag-${tag.id}`;
+        row.innerHTML = `<input type="checkbox" id="${checkboxId}" data-tag-id="${tag.id}"><label for="${checkboxId}"></label>`;
+        row.querySelector("label").textContent = tag.name;
+        tagList.appendChild(row);
+      });
+      tagsSection.classList.remove("hidden");
+    } else {
+      tagsSection.classList.add("hidden");
+    }
+
+    const cleanup = (result) => {
+      modal.classList.add("hidden");
+      cancelBtn.removeEventListener("click", onCancel);
+      confirmBtn.removeEventListener("click", onConfirm);
+      resolve(result);
+    };
+    const onCancel = () => cleanup(null);
+    const onConfirm = () => {
+      const deleteTagIds = Array.from(tagList.querySelectorAll("input[type=checkbox]:checked"))
+        .map((cb) => cb.dataset.tagId);
+      cleanup({ deleteTagIds });
+    };
+
+    cancelBtn.addEventListener("click", onCancel);
+    confirmBtn.addEventListener("click", onConfirm);
+    modal.classList.remove("hidden");
+  });
 }
 
 el("ctx-replace-source").addEventListener("click", async () => {
@@ -2748,12 +2875,19 @@ el("ctx-replace-source").addEventListener("click", async () => {
   closeMenus();
   const job = state.jobs.get(filename);
   if (!job || job.source_type !== "stash") return;
-  if (!window.confirm(`Replace the original Stash source with "${filename}"?\n\nThis will overwrite the original source file and remove the working copy from Stash DLP.`)) return;
-  const result = await requestReplaceSource(filename, null);
-  if (result === "replaced") {
+  const confirmChoice = await promptReplaceSourceConfirm(job);
+  if (!confirmChoice) return;
+  const result = await requestReplaceSource(filename, null, confirmChoice.deleteTagIds);
+  if (result.status === "replaced") {
     state.jobs.delete(filename);
     renderLedger();
-    flashStatus(`Replaced Stash source: ${filename}`);
+    if (result.deleted_tag_names.length) {
+      flashStatus(`Replaced Stash source and removed tag(s) "${result.deleted_tag_names.join(", ")}": ${filename}`);
+    } else if (result.tag_delete_error) {
+      flashStatus(`Replaced Stash source: ${filename} (couldn't remove tag(s): ${result.tag_delete_error})`);
+    } else {
+      flashStatus(`Replaced Stash source: ${filename}`);
+    }
   }
 });
 

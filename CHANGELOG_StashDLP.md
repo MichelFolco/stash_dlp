@@ -1,3 +1,15 @@
+## v1.07 - Full tag import, multi-tag cleanup on replace, and Play Converted
+- Importing a scene from Stash now saves its complete tag list (`job["stash_tags"]`), not just the single tag from a Check Tag search - persisted through folder refresh/restart via queue.json.
+- "Replace Stash Source" now lists every one of those tags as its own checkbox instead of one hardcoded checkbox for the Check Tag tag, so any combination can be removed from the scene in the same fetch-then-`sceneUpdate` GraphQL round trip (now batched into a single request for however many tags are picked).
+- Stash-imported items can no longer be moved to the target folder (icon button, right-click menu, and the "Move to Target" bulk action all now exclude them) - moving one out of the download folder orphaned it from Replace Stash Source, since that action needs the working copy to still be there. Use Replace Stash Source instead.
+- Added a "Play Converted" item to the file's right-click menu, shown whenever a re-encoded or synchronized twin exists in Converted/ for that item (same detection the RE-ENCODED/SYNCHRONIZED pills already use) - plays the twin directly without needing to go through Replace/Move to pick a variant first.
+
+## v1.06 - Stash tag pill, rename lock, recent tags, and tag-cleanup on replace
+- Importing a scene from Check Tag results now stamps the item with a pill named after the searched tag (persisted through folder refresh/restart via queue.json).
+- Renaming is disabled (both the card's quick-action icon and the right-click Rename item) for any item carrying a Stash tag pill, enforced server-side in `rename_job` as well as in the UI.
+- The Check Tag modal now shows the last 5 tags searched as clickable chips; clicking one re-runs the check immediately.
+- "Replace Stash Source" is now a proper confirm modal instead of a bare browser confirm(). When the item has a Stash tag pill, it adds a checkbox: `Delete Tag "XXX" from stash scene?` - checking it removes just that tag from the Stash scene (via a fetch-then-`sceneUpdate` GraphQL round trip) after the source file is replaced.
+
 ## v1.05 - Sync UI filename prefixed with Converted/ when applicable
 - The filename line now shows `Converted/<filename>` whenever the file actually loaded in the player lives in the Converted/ subfolder - which covers the already-synchronized twin, all three in-progress sync render files (clip-src, clip, full-staging), and confirmed re-encode twins. Files from the original download folder still show as a bare filename.
 

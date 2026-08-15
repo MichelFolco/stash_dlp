@@ -420,6 +420,44 @@ html, body {
   line-height: 1.2;
 }
 
+.stash-tag-badge {
+  flex: 0 0 auto;
+  font-size: 9px;
+  font-weight: bold;
+  color: #ffb3e0;
+  background: #3a1830;
+  border: 1px solid #7a3a63;
+  border-radius: 999px;
+  padding: 1px 7px;
+  line-height: 1.2;
+  max-width: 140px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.stash-tag-chip-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.stash-tag-chip {
+  font-size: calc(var(--base-font) - 1px);
+  color: #ffb3e0;
+  background: #3a1830;
+  border: 1px solid #7a3a63;
+  border-radius: 999px;
+  padding: 3px 10px;
+  cursor: pointer;
+  max-width: 160px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.stash-tag-chip:hover { background: #55214a; color: #ffd6ef; }
+
 .job-card-body {
   flex: 1;
   min-width: 0;
@@ -1208,6 +1246,8 @@ html, body {
 .checkbox-row { display: flex; align-items: center; gap: 8px; padding: 4px 0; }
 .checkbox-row label { color: var(--text); font-size: var(--base-font); cursor: pointer; margin: 0; font-weight: normal; }
 .checkbox-row input[type="checkbox"] { accent-color: var(--accent); width: 15px; height: 15px; cursor: pointer; }
+
+#replace-source-tag-list { max-height: 220px; overflow-y: auto; margin-top: 4px; }
 
 .advanced-toggle {
   display: flex;

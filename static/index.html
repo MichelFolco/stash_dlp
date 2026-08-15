@@ -176,6 +176,7 @@
   <div id="ctx-cancel-job" class="ctx-item hidden">Cancel Download</div>
   <div id="ctx-play-video" class="ctx-item hidden">Play Video</div>
   <div id="ctx-play-audio" class="ctx-item hidden">Play Audio</div>
+  <div id="ctx-play-converted" class="ctx-item hidden">Play Converted</div>
   <div id="ctx-extract-audio" class="ctx-item hidden">Extract Audio</div>
   <div id="ctx-reencode-file" class="ctx-item hidden">Re-encode...</div>
   <div id="ctx-sync-audio" class="ctx-item hidden">Synchronize Audio...</div>
@@ -256,6 +257,10 @@
     <div class="modal-row" style="margin-top:10px;">
       <input id="stash-tag-input" class="input-field" type="text" placeholder="e.g. Favorites" autocomplete="off" spellcheck="false">
     </div>
+    <div id="stash-tag-recent-wrap" class="modal-recent-wrap hidden">
+      <div class="modal-recent-label">Recent tags</div>
+      <div id="stash-tag-recent-list" class="stash-tag-chip-row"></div>
+    </div>
     <div id="stash-tag-error" class="modal-error hidden"></div>
     <div class="modal-actions">
       <button id="stash-tag-cancel-btn" class="btn">Cancel</button>
@@ -270,6 +275,21 @@
     <div id="stash-tag-results-list" class="modal-recent-list stash-tag-results-list"></div>
     <div class="modal-actions">
       <button id="stash-tag-results-close-btn" class="btn btn-primary">Close</button>
+    </div>
+  </div>
+</div>
+
+<div id="replace-source-modal" class="modal-overlay hidden">
+  <div class="modal-box">
+    <div class="modal-title">Replace Stash Source</div>
+    <div class="hint">Replace the original Stash source with "<span id="replace-source-filename"></span>"? This will overwrite the original source file and remove the working copy from Stash DLP.</div>
+    <div id="replace-source-tags-section" class="hidden" style="margin-top:12px;">
+      <div class="hint">Also delete any of these tags from the Stash scene?</div>
+      <div id="replace-source-tag-list"></div>
+    </div>
+    <div class="modal-actions">
+      <button id="replace-source-cancel-btn" class="btn">Cancel</button>
+      <button id="replace-source-confirm-btn" class="btn btn-primary">Replace</button>
     </div>
   </div>
 </div>

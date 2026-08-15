@@ -120,6 +120,31 @@ def set_save_dir(raw_path: str) -> str:
     return path
 
 
+MAX_RECENT_TAGS = 5
+
+
+def get_recent_stash_tags() -> list:
+    """Rolling list of the last few Stash tags searched via Check Tag,
+    most-recent-first. Used to render quick-pick chips in the Check Tag
+    modal so a repeat lookup doesn't require re-typing the name."""
+    data = _load()
+    return list(data.get("recent_stash_tags", []))
+
+
+def push_recent_stash_tag(tag_name: str) -> list:
+    """Adds a tag to the rolling recent-Stash-tags list (case-insensitive
+    de-dupe against any existing entry, most recent first, capped at
+    MAX_RECENT_TAGS). Returns the updated list."""
+    if not tag_name:
+        return get_recent_stash_tags()
+    data = _load()
+    recent = [t for t in data.get("recent_stash_tags", []) if t.lower() != tag_name.lower()]
+    recent.insert(0, tag_name)
+    data["recent_stash_tags"] = recent[:MAX_RECENT_TAGS]
+    _persist(data)
+    return data["recent_stash_tags"]
+
+
 # ── Target folder ("Move to Target") ──────────────────────────────
 # Global rather than per-download-folder - a persistent destination you
 # move finished files to, independent of which download folder is active.
