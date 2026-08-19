@@ -1,3 +1,20 @@
+<!--
+MAINTENANCE (for any LLM/agent editing this project): adding an entry
+here is a two-file edit. backend/config.py's APP_VERSION constant
+(shown to the user when they click the logo) must be bumped to match
+the version number in the new top entry below, in the same turn. This
+has drifted out of sync before - don't add an entry here without also
+updating config.py.
+-->
+
+## v1.14 - Fixed Synchronize Audio final render not matching the previewed delay
+- `createClip()` (frontend) was hardcoding `delay_ms: 0` on every Create Clip call, including after **Redo Clip** mid-session - silently discarding whatever delay the user had already dialed in and confirmed sounded right, and resetting the visible delay field back to 0 with it. This contradicted `create_clip()`'s own backend contract (it accepts `delay_ms` specifically so a Redo Clip -> Create Clip keeps the dialed-in delay), which the frontend never honored. Now `createClip()` sends the delay currently in the field and leaves the field alone instead of zeroing it.
+- Separately, **Confirm Sync** was reading the delay input's live value directly, with no guarantee it had ever actually been rendered into the clip the user just previewed - a dial-button nudge or manual edit made after the last "Apply Sync" click could flow straight into the full-video render unpreviewed. `syncAudioState` now tracks `appliedDelayMs` (the delay actually baked into whatever's currently playing, set by `createClip()`/`applyClipDelay()`), and Confirm Sync refuses to proceed if the field has drifted from it, prompting the user to Apply Sync first instead of silently rendering an unverified value.
+- Together these were the root cause of full syncs occasionally not applying the delay the user had actually decided on - the underlying ffmpeg delay-application logic (`_run_delay_render`) itself was already correct and unchanged.
+
+## v1.13 - Fixed stale app version display
+- `APP_VERSION` in `config.py` had drifted to "1.10" while this changelog was already at v1.12 (the logo-click version display reads directly from that constant, so it was showing two versions behind). Bumped to match, and added explicit maintenance notes in both this file and `config.py` telling any future LLM/agent that a new changelog entry and the `APP_VERSION` bump must happen together.
+
 ## v1.12 - History-search API now checks every download folder
 - `storage.search_history()` (backing `/api/history-search`, used for "copy link" fallback and Search History Mode's history-fill) no longer only reads the currently active download folder's log. New `settings.get_all_history_log_paths()` lists every `downloads_history.log` under the central `LIBRARY_DATA_DIR` store - one per download folder this app has ever been pointed at - with the current folder's log checked first, then the rest. A file downloaded under a folder that isn't the one currently open now still resolves to its URL instead of coming up empty.
 

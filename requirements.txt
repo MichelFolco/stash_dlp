@@ -1,8 +1,4 @@
 fastapi>=0.110
 uvicorn[standard]>=0.29
 pydantic>=2.0
-# Optional, only needed for M3U Sniffer Mode:
-playwright>=1.42
-# Optional, only needed for the Windows system tray launcher (tray_launcher.py):
-pystray>=0.19
-Pillow>=10.0
+ruamel.yaml>=0.18

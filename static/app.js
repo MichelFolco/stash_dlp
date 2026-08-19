@@ -2285,7 +2285,11 @@ function openSyncAudioModal(filename) {
   const job = state.jobs.get(filename);
   if (!job) return;
 
-  syncAudioState = { filename, stage: "original", clipStart: null, everCreatedThisSession: false };
+  // appliedDelayMs tracks the delay actually baked into whatever's
+  // currently playing (updated by createClip()/applyClipDelay()) - the
+  // value Confirm Sync trusts, as opposed to whatever's live in the
+  // delay input field, which can drift ahead of it via typing/nudging.
+  syncAudioState = { filename, stage: "original", clipStart: null, everCreatedThisSession: false, appliedDelayMs: null };
   // A previous sync operation may have disabled the action buttons while
   // rendering. Reinitialize them every time the dialog is opened.
   setSyncButtonsDisabled(false);
@@ -2432,6 +2436,13 @@ syncAudioPrimaryBtn.addEventListener("click", async () => {
 async function createClip() {
   const { filename } = syncAudioState;
   const startSeconds = syncAudioPlayer.currentTime || 0;
+  // Carry forward whatever delay is currently dialed in (e.g. after Redo
+  // Clip, or a job's previously-confirmed delay on the very first clip of
+  // a re-sync session) - matches the backend's create_clip() contract,
+  // which bakes this in immediately so the new clip previews accurately
+  // instead of silently reverting to 0. See bakedDelayMs below for why
+  // this is also the value Confirm Sync should trust afterward.
+  const bakedDelayMs = parseFloat(syncAudioDelayInput.value) || 0;
 
   setSyncButtonsDisabled(true);
   setSyncAudioStatus(`Cutting a clip from ${formatClipTime(startSeconds)}...`);
@@ -2440,7 +2451,7 @@ async function createClip() {
   try {
     const res = await fetch("/api/jobs/sync-audio/create-clip", {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ filename, start_seconds: startSeconds, delay_ms: 0 }),
+      body: JSON.stringify({ filename, start_seconds: startSeconds, delay_ms: bakedDelayMs }),
     });
     const data = await res.json();
     if (!res.ok) {
@@ -2450,9 +2461,15 @@ async function createClip() {
     syncAudioState.stage = "clip";
     syncAudioState.clipStart = data.render.clip_start;
     syncAudioState.everCreatedThisSession = true;
-    syncAudioDelayInput.value = 0;
+    // The field already holds bakedDelayMs - leave it alone rather than
+    // zeroing it out, and record it as the delay actually baked into the
+    // clip that's about to play, so Confirm Sync can trust it without
+    // requiring a redundant Apply Sync click when nothing's changed.
+    syncAudioState.appliedDelayMs = bakedDelayMs;
     setSyncPlayerSource(filename, "sync-clip");
-    syncAudioStageBadge.textContent = `Clip from ${formatClipTime(syncAudioState.clipStart)} loaded`;
+    syncAudioStageBadge.textContent = bakedDelayMs
+      ? `Clip from ${formatClipTime(syncAudioState.clipStart)} loaded (${bakedDelayMs} ms delay baked in)`
+      : `Clip from ${formatClipTime(syncAudioState.clipStart)} loaded`;
     setSyncAudioStatus("");
     applySyncStageUI();
   } catch (e) {
@@ -2480,6 +2497,9 @@ async function applyClipDelay() {
       setSyncAudioStatus(data.error || "Couldn't render the synced clip.", "error");
       return;
     }
+    // This is now the delay actually baked into what's playing - the
+    // value Confirm Sync should trust (see syncAudioConfirmBtn handler).
+    syncAudioState.appliedDelayMs = delayMs;
     setSyncPlayerSource(filename, "sync-clip");
     setSyncAudioStatus(`Clip re-rendered with a ${delayMs} ms delay.`, "success");
   } catch (e) {
@@ -2524,7 +2544,25 @@ syncAudioRedoClipBtn.addEventListener("click", async () => {
 syncAudioConfirmBtn.addEventListener("click", async () => {
   if (!syncAudioState) return;
   const { filename } = syncAudioState;
-  const delayMs = parseFloat(syncAudioDelayInput.value) || 0;
+  const fieldDelayMs = parseFloat(syncAudioDelayInput.value) || 0;
+  const appliedDelayMs = syncAudioState.appliedDelayMs != null ? syncAudioState.appliedDelayMs : 0;
+
+  // Confirm Sync must render the full video with the SAME delay the
+  // user actually previewed via Create Clip / Apply Sync - not
+  // whatever happens to be sitting in the field, which can drift out
+  // of sync with the preview if it was typed/nudged (dial buttons)
+  // without an Apply Sync click afterward. Rendering an unpreviewed
+  // value here is exactly how a full sync ends up not matching the
+  // delay the user actually decided on.
+  if (Math.abs(fieldDelayMs - appliedDelayMs) > 0.001) {
+    setSyncAudioStatus(
+      `Delay changed to ${fieldDelayMs} ms since the last preview (clip is playing at ${appliedDelayMs} ms). `
+      + `Click "Apply Sync" to preview it before confirming.`,
+      "error",
+    );
+    return;
+  }
+  const delayMs = appliedDelayMs;
 
   setSyncButtonsDisabled(true);
   setSyncAudioStatus("Synching full video, please wait...");

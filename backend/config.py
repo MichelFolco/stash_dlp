@@ -14,12 +14,21 @@ from pathlib import Path
 # main.py for that). Shown to the user via the /api/app_version endpoint
 # when they click the logo (see app.js showAppVersion()).
 #
-# MAINTENANCE: this must always match the top entry of
-# CHANGELOG_StashDLP.md. Whenever a change warrants a new changelog
-# entry, bump this string in the SAME commit/edit. This applies to any
-# LLM/agent editing this codebase as much as a human - do not add a
-# CHANGELOG_StashDLP.md entry without also updating APP_VERSION here.
-APP_VERSION = "1.10"
+# ============================================================
+# MAINTENANCE - READ THIS BEFORE EDITING CHANGELOG_StashDLP.md
+# ============================================================
+# This string must always match the version number in the TOP entry
+# of CHANGELOG_StashDLP.md (the "## vX.YY - ..." heading).
+#
+# This has already drifted out of sync more than once (a changelog
+# entry got added without bumping this line). If you are an LLM/agent
+# adding a new CHANGELOG_StashDLP.md entry, treat it as a two-file
+# edit every time - the changelog entry is not complete until this
+# line is bumped to match in the SAME turn:
+#   1. Add the new "## vX.YY - ..." entry to CHANGELOG_StashDLP.md.
+#   2. Update APP_VERSION below to that same X.YY.
+# Do not consider the changelog edit done until both are updated.
+APP_VERSION = "1.14"
 
 BACKEND_DIR = Path(__file__).resolve().parent
 
