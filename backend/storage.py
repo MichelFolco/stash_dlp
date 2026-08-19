@@ -8,7 +8,12 @@ import os
 import re
 from datetime import datetime
 
-from settings import get_queue_json_path, get_log_file_path, get_log_file_path_for_folder
+from settings import (
+    get_queue_json_path,
+    get_log_file_path,
+    get_log_file_path_for_folder,
+    get_all_history_log_paths,
+)
 
 
 def load_saved_queue() -> dict:
@@ -46,7 +51,10 @@ _FULL_LOG_PATTERN = re.compile(r"^(.*?) - \[(.*?)\] - (.*?) - (https?://.*)$", r
 
 def search_history(query: str) -> str:
     """Mirrors execute_history_search from the desktop app: returns the
-    first matching URL for a (possibly messy) filename/URL query, or ''."""
+    first matching URL for a (possibly messy) filename/URL query, or ''.
+    Checks every download folder's history log this app knows about
+    (current folder first), not just the currently active one - a file
+    downloaded under a different folder still turns up here."""
     from urllib.parse import unquote
 
     query = (query or "").strip()
@@ -59,23 +67,20 @@ def search_history(query: str) -> str:
     if "." in query:
         query = query.rsplit(".", 1)[0]
 
-    log_path = get_log_file_path()
-    if not os.path.exists(log_path):
-        return ""
+    for log_path in get_all_history_log_paths():
+        try:
+            with open(log_path, "r", encoding="utf-8") as f:
+                lines = f.readlines()
+        except Exception:
+            continue
 
-    try:
-        with open(log_path, "r", encoding="utf-8") as f:
-            lines = f.readlines()
-    except Exception:
-        return ""
-
-    for line in lines:
-        match = _LOG_PATTERN.match(line.strip())
-        if match:
-            filename_part = match.group(1).strip()
-            url_part = match.group(2).strip()
-            if query.lower() in filename_part.lower():
-                return url_part
+        for line in lines:
+            match = _LOG_PATTERN.match(line.strip())
+            if match:
+                filename_part = match.group(1).strip()
+                url_part = match.group(2).strip()
+                if query.lower() in filename_part.lower():
+                    return url_part
     return ""
 
 

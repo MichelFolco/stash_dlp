@@ -339,6 +339,36 @@ def get_log_file_path() -> str:
     return os.path.join(get_data_dir(), "downloads_history.log")
 
 
+def get_all_history_log_paths() -> list:
+    """Every downloads_history.log this app knows about, one per download
+    folder that's ever been used - i.e. every hashed subfolder under
+    LIBRARY_DATA_DIR that actually has a log in it. Order is: the
+    currently active folder's log first (if it has one), then the rest
+    in no particular order - used by search_history() so a lookup checks
+    the current folder first but still falls back across every other
+    download folder instead of coming up empty for a file that was
+    downloaded (and logged) somewhere else."""
+    paths = []
+    current_log = get_log_file_path()
+    if os.path.exists(current_log):
+        paths.append(current_log)
+
+    try:
+        entries = os.listdir(LIBRARY_DATA_DIR)
+    except OSError:
+        entries = []
+
+    for entry in entries:
+        folder_dir = os.path.join(LIBRARY_DATA_DIR, entry)
+        if not os.path.isdir(folder_dir):
+            continue
+        log_path = os.path.join(folder_dir, "downloads_history.log")
+        if os.path.exists(log_path) and log_path not in paths:
+            paths.append(log_path)
+
+    return paths
+
+
 def get_log_file_path_for_folder(folder: str) -> str:
     """Same layout as get_log_file_path(), but for an arbitrary folder
     rather than the currently active save_dir. Used by external callers

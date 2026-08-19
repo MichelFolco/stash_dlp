@@ -661,6 +661,9 @@ class JobManager:
             self.saved_queue[new_name] = entry
             save_queue_to_disk(self.saved_queue)
 
+        job_url = (job or {}).get("url", "") or self.saved_queue.get(new_name, {}).get("url", "")
+        write_to_history_log(new_name, job_url, f"RENAMED from {filename}")
+
         return new_name
 
     # ── Extracting audio from an already-downloaded video ─────────
