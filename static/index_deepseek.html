@@ -56,15 +56,16 @@
           </button>
         </div>
       </div>
-      <div id="folder-status-row" class="folder-status-row">
-        <div id="folder-status-save" class="folder-status-item" title="Click to choose a download folder">
-          <i class="ti ti-folder-down" aria-hidden="true"></i>
-          <span class="folder-status-path">…</span>
-        </div>
-        <div id="folder-status-target" class="folder-status-item" title="Click to choose a target folder">
-          <i class="ti ti-target" aria-hidden="true"></i>
-          <span class="folder-status-path">…</span>
-        </div>
+    </div>
+
+    <div id="folder-status-row" class="folder-status-row">
+      <div id="folder-status-save" class="folder-status-item" title="Click to choose a download folder">
+        <i class="ti ti-folder-down" aria-hidden="true"></i>
+        <span class="folder-status-path">…</span>
+      </div>
+      <div id="folder-status-target" class="folder-status-item" title="Click to choose a target folder">
+        <i class="ti ti-target" aria-hidden="true"></i>
+        <span class="folder-status-path">…</span>
       </div>
     </div>
   </div>
@@ -209,9 +210,6 @@
   </div>
   <div id="ctx-auto-confirm-titles-toggle" class="ctx-item ctx-checkable">
     <span class="ctx-check"></span> Auto-Confirm Titles (skip edit step)
-  </div>
-  <div id="ctx-clipboard-monitor-toggle" class="ctx-item ctx-checkable">
-    <span class="ctx-check"></span> Clipboard Monitoring (auto-download URLs)
   </div>
   <div class="ctx-separator"></div>
   <div id="ctx-manage-ytdlp-args" class="ctx-item">Manage yt-dlp Arguments...</div>
@@ -483,7 +481,7 @@
     </div>
     <div id="folder-error" class="modal-error hidden"></div>
     <div id="folder-recent-wrap" class="modal-recent-wrap hidden">
-      <div class="modal-recent-label">Saved folders</div>
+      <div class="modal-recent-label">Recent folders</div>
       <div id="folder-recent-list" class="modal-recent-list"></div>
     </div>
     <div class="modal-actions">
@@ -502,7 +500,7 @@
     </div>
     <div id="target-folder-error" class="modal-error hidden"></div>
     <div id="target-folder-recent-wrap" class="modal-recent-wrap hidden">
-      <div class="modal-recent-label">Saved folders</div>
+      <div class="modal-recent-label">Recent folders</div>
       <div id="target-folder-recent-list" class="modal-recent-list"></div>
     </div>
     <div class="modal-actions">

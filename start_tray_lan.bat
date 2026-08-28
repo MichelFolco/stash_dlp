@@ -12,4 +12,4 @@ REM set STASH_DLP_SAVE_DIR=C:\path\to\downloads
 REM Uncomment and edit if 8722 is taken by something else:
 REM set STASH_DLP_PORT=8722
 
-start "" pythonw.exe "%~dp0tray_launcher.py"
+start "" python.exe "%~dp0tray_launcher.py"

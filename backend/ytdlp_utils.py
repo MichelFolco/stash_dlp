@@ -4,6 +4,7 @@ logic from the desktop app, using asyncio subprocesses instead of Qt's
 event loop.
 """
 import asyncio
+import json
 import os
 import re
 import sys
@@ -11,7 +12,7 @@ from urllib.parse import urlparse
 
 from config import AUDIO_EXTENSIONS
 from procflags import NO_CONSOLE_KWARGS
-from settings import get_save_dir, get_converted_dir
+from settings import get_save_dir, get_converted_dir, get_ytdlp_args
 
 
 def is_audio_file(path: str) -> bool:
@@ -82,10 +83,13 @@ def format_file_size(num_bytes) -> str:
     return f"{size:.1f} PB"
 
 
-def find_media_file(filename: str):
+def find_media_file(filename: str, save_dir: str | None = None):
     """Returns the full path to the actual downloaded file matching this
-    job's filename stem (preferring .mp4), or None if nothing's there."""
-    save_dir = get_save_dir()
+    job's filename stem (preferring .mp4), or None if nothing's there.
+
+    save_dir can be supplied for jobs whose destination was captured when
+    they were queued; otherwise the current configured download folder is used."""
+    save_dir = save_dir or get_save_dir()
     mp4_path = os.path.join(save_dir, filename + ".mp4")
     if os.path.isfile(mp4_path):
         return mp4_path
@@ -164,8 +168,8 @@ def has_converted_twin(filename: str, converted_stems: set) -> bool:
     return any(stem.startswith(suffix_prefix) for stem in converted_stems)
 
 
-def get_downloaded_file_size(filename: str):
-    path = find_media_file(filename)
+def get_downloaded_file_size(filename: str, save_dir: str | None = None):
+    path = find_media_file(filename, save_dir)
     if path is None:
         return None
     try:
@@ -192,6 +196,85 @@ async def fetch_title(url: str) -> str:
         return title
     except Exception:
         return "Unknown Title"
+
+
+async def probe_playlist(url: str) -> dict:
+    """Cheaply checks whether `url` is a playlist/channel/multi-video page
+    rather than a single video, using yt-dlp's --flat-playlist mode (lists
+    entries without resolving/downloading each one, so this stays fast
+    even against a large channel). Called on every pasted URL - single
+    video pastes are the common case, so any failure here just falls
+    back to treating it as one.
+
+    Returns {'is_playlist': bool, 'playlist_title': str,
+    'entries': [{'url': str, 'title': str}, ...]}. A result of exactly
+    one entry is treated as NOT a playlist (single-video pages some
+    extractors still wrap in a one-item 'entries' list), so the normal
+    single-download pipeline handles it instead of the playlist batch
+    path. Never raises - any error/timeout just yields is_playlist=False."""
+    ytdlp_args = get_ytdlp_args()
+    extra_args = split_args_string(ytdlp_args["default_args"])
+    extra_args += split_args_string(ytdlp_args["domain_args"].get(get_domain(url), ""))
+
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "yt-dlp",
+            "--flat-playlist",
+            "--dump-single-json",
+            "--no-warnings",
+            "--ignore-errors",
+            *extra_args,
+            url,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.DEVNULL,
+            **NO_CONSOLE_KWARGS,
+        )
+    except Exception:
+        return {"is_playlist": False, "playlist_title": "", "entries": []}
+
+    try:
+        stdout_bytes, _ = await asyncio.wait_for(proc.communicate(), timeout=30)
+    except asyncio.TimeoutError:
+        try:
+            proc.kill()
+        except ProcessLookupError:
+            pass
+        return {"is_playlist": False, "playlist_title": "", "entries": []}
+    except Exception:
+        return {"is_playlist": False, "playlist_title": "", "entries": []}
+
+    try:
+        data = json.loads(stdout_bytes.decode("utf-8", errors="ignore"))
+    except Exception:
+        return {"is_playlist": False, "playlist_title": "", "entries": []}
+
+    raw_entries = data.get("entries")
+    if not isinstance(raw_entries, list) or len(raw_entries) < 2:
+        return {"is_playlist": False, "playlist_title": "", "entries": []}
+
+    entries = []
+    for entry in raw_entries:
+        if not entry:
+            continue
+        entry_url = entry.get("url") or entry.get("webpage_url") or entry.get("original_url") or ""
+        # Some extractors/flat-playlist versions put a bare video ID in
+        # "url" rather than a resolvable link - fall back to
+        # webpage_url when what we have doesn't look like an actual URL.
+        if not re.match(r"^[a-zA-Z][a-zA-Z0-9+.-]*://", entry_url):
+            entry_url = entry.get("webpage_url") or ""
+        if not entry_url:
+            continue
+        title = entry.get("title") or entry.get("id") or "Untitled"
+        entries.append({"url": entry_url, "title": title})
+
+    if len(entries) < 2:
+        return {"is_playlist": False, "playlist_title": "", "entries": []}
+
+    return {
+        "is_playlist": True,
+        "playlist_title": data.get("title") or "",
+        "entries": entries,
+    }
 
 
 async def check_and_update_ytdlp():

@@ -40,15 +40,14 @@ const state = {
   m3uSniffer: false,
   autoM3uRetry: true,
   autoConfirmTitles: false,
-  clipboardMonitor: false,
   ytdlpDefaultArgs: "",
   ytdlpDomainArgs: {},
   jobs: new Map(),
   saveDirPath: "",
   historyEntries: [],
   ws: null,
-  saveDirRoots: [],
-  targetDirRoots: [],
+  recentDirs: [],
+  recentTargetDirs: [],
   externalPrograms: [],
   filterText: "",
   audioOnlyFilter: false,
@@ -533,7 +532,6 @@ async function refreshDownloadPrefs() {
     state.m3uSniffer = !!data.m3u_sniffer;
     state.autoM3uRetry = data.auto_m3u_retry !== false;
     state.autoConfirmTitles = !!data.auto_confirm_titles;
-    state.clipboardMonitor = !!data.clipboard_monitor;
   } catch (e) {
     // Backend unreachable at boot - just keep the hard-coded defaults
     // already baked into the HTML/state.
@@ -542,7 +540,6 @@ async function refreshDownloadPrefs() {
   el("ctx-m3u-toggle").querySelector(".ctx-check").textContent = state.m3uSniffer ? "✓" : "";
   el("ctx-auto-m3u-retry-toggle").querySelector(".ctx-check").textContent = state.autoM3uRetry ? "✓" : "";
   el("ctx-auto-confirm-titles-toggle").querySelector(".ctx-check").textContent = state.autoConfirmTitles ? "✓" : "";
-  el("ctx-clipboard-monitor-toggle").querySelector(".ctx-check").textContent = state.clipboardMonitor ? "✓" : "";
 }
 
 async function refreshYtdlpArgs() {
@@ -802,7 +799,6 @@ function saveDownloadPrefs() {
       m3u_sniffer: state.m3uSniffer,
       auto_m3u_retry: state.autoM3uRetry,
       auto_confirm_titles: state.autoConfirmTitles,
-      clipboard_monitor: state.clipboardMonitor,
     }),
   }).catch((e) => { /* best-effort - not worth surfacing a UI error over */ });
 }
@@ -812,7 +808,7 @@ async function refreshSaveDir() {
     const res = await fetch("/api/settings");
     const data = await res.json();
     setSaveDirDisplay(data.save_dir, data.free_space);
-    state.saveDirRoots = data.roots || [];
+    state.recentDirs = data.recent_dirs || [];
   } catch (e) {
     ctxSaveDir.querySelector(".ctx-folder-path").textContent = "Folder: (unavailable)";
     ctxSaveDir.querySelector("#ctx-save-free").textContent = "";
@@ -898,7 +894,7 @@ async function refreshTargetDir() {
     const res = await fetch("/api/target-settings");
     const data = await res.json();
     setTargetDirDisplay(data.target_dir, data.free_space);
-    state.targetDirRoots = data.roots || [];
+    state.recentTargetDirs = data.recent_dirs || [];
   } catch (e) {
     ctxTargetDir.querySelector(".ctx-folder-path").textContent = "Target: (unavailable)";
     ctxTargetDir.querySelector("#ctx-target-free").textContent = "";
@@ -993,17 +989,10 @@ function connectWebSocket() {
     const msg = JSON.parse(evt.data);
     if (msg.type === "clipboard_url") {
       const url = (msg.url || "").trim();
-      if (/^https?:\/\/[^\s]+$/i.test(url) && state.clipboardMonitor && state.appMode === "DOWNLOAD") {
-        state.clipboardUrl = url;
-        // A clipboard URL is an explicit request to download. Do not require
-        // the input box to be in READY state: the user may have another title
-        // staged, be viewing an intermediate fetch state, or simply have the
-        // window unfocused. The clipboard event should still take precedence.
+      if (/^https?:\/\/[^\s]+$/i.test(url) && state.current === "READY" && state.appMode === "DOWNLOAD") {
         inputField.value = url;
         inputField.dispatchEvent(new Event("input", { bubbles: true }));
-        // Clipboard downloads are intentionally non-interactive: use the
-        // fetched/sniffed title immediately and never enter title editing.
-        beginDownloadPipeline(url, true);
+        state.clipboardUrl = url;
       }
       return;
     } else if (msg.type === "job_added") {
@@ -1348,6 +1337,15 @@ navToggleBtn.addEventListener("click", (e) => {
   navTray.classList.remove("hidden");
   navTray.classList.toggle("open");
   navToggleBtn.classList.toggle("active");
+});
+
+// Close tray when clicking outside
+document.addEventListener("click", (e) => {
+  const isInside = navTray.contains(e.target) || navToggleBtn.contains(e.target);
+  if (!isInside && navTray.classList.contains("open")) {
+    navTray.classList.remove("open");
+    navToggleBtn.classList.remove("active");
+  }
 });
 
 ledgerFilterInput.addEventListener("input", () => {
@@ -2042,7 +2040,6 @@ const ALL_FLYOUTS = [openWithFlyout, copyFlyout, fileFlyout, foldersFlyout, sett
 
 function hideAllFlyouts() {
   for (const flyout of ALL_FLYOUTS) flyout.classList.add("hidden");
-  closeAllTreeFlyouts();
 }
 
 // ── Context menus ─────────────────────────────────────────────
@@ -2247,7 +2244,6 @@ function closeOtherFlyouts(except) {
   for (const flyout of ALL_FLYOUTS) {
     if (flyout !== except) flyout.classList.add("hidden");
   }
-  closeAllTreeFlyouts();
 }
 
 function positionFlyoutNextTo(flyoutEl, anchorMenu) {
@@ -2433,45 +2429,13 @@ function attachPlaybackTracking(filename, element) {
     flushPlaybackPosition();
   };
   tracking.onPause = () => flushPlaybackPosition();
-  tracking.onEnded = () => {
-    // Work out the next queue item before marking this one complete. This is
-    // important when "Hide completed" is enabled because completing the
-    // current item can immediately remove it from the visible queue.
-    const nextFilename = getNextPlaybackQueueItem(filename);
-
-    sendPlaybackPosition(filename, 0, true);
-
-    if (nextFilename) {
-      const nextJob = state.jobs.get(nextFilename);
-      if (nextJob) {
-        // Let the current ended event finish before replacing the media
-        // element's source. Keeping the transition asynchronous also gives
-        // the position/completion update above a chance to settle.
-        setTimeout(() => {
-          if (mediaTracking && mediaTracking.filename === filename) {
-            openMediaModal(nextFilename, !!nextJob.is_audio, "original");
-          }
-        }, 0);
-      }
-    }
-  }; // finished - replay from the start next time, but remember it was fully watched/listened
+  tracking.onEnded = () => sendPlaybackPosition(filename, 0, true); // finished - replay from the start next time, but remember it was fully watched/listened
 
   element.addEventListener("timeupdate", tracking.onTimeUpdate);
   element.addEventListener("pause", tracking.onPause);
   element.addEventListener("ended", tracking.onEnded);
 
   mediaTracking = tracking;
-}
-
-// Return the item immediately after the currently playing item in the
-// queue's current sort/filter order. The queue UI is the source of truth for
-// what "next" means, so changing the sort order or active filters also changes
-// playback order.
-function getNextPlaybackQueueItem(filename) {
-  const jobs = getFilteredSortedJobs();
-  const currentIndex = jobs.findIndex((job) => job.filename === filename);
-  if (currentIndex < 0 || currentIndex >= jobs.length - 1) return null;
-  return jobs[currentIndex + 1].filename;
 }
 
 function detachPlaybackTracking() {
@@ -3361,8 +3325,7 @@ document.addEventListener("click", (e) => {
     logoMenu.contains(e.target) ||
     jobMenu.contains(e.target) ||
     historyMenu.contains(e.target) ||
-    ALL_FLYOUTS.some((flyout) => flyout.contains(e.target)) ||
-    openTreeFlyouts.some((flyout) => flyout.contains(e.target));
+    ALL_FLYOUTS.some((flyout) => flyout.contains(e.target));
   if (!clickedInsideAMenu) closeMenus();
 });
 
@@ -3391,13 +3354,6 @@ el("ctx-auto-confirm-titles-toggle").addEventListener("click", () => {
   state.autoConfirmTitles = !state.autoConfirmTitles;
   el("ctx-auto-confirm-titles-toggle").querySelector(".ctx-check").textContent = state.autoConfirmTitles ? "✓" : "";
   saveDownloadPrefs();
-});
-
-el("ctx-clipboard-monitor-toggle").addEventListener("click", () => {
-  state.clipboardMonitor = !state.clipboardMonitor;
-  el("ctx-clipboard-monitor-toggle").querySelector(".ctx-check").textContent = state.clipboardMonitor ? "✓" : "";
-  saveDownloadPrefs();
-  flashStatus(state.clipboardMonitor ? "Clipboard monitoring enabled." : "Clipboard monitoring disabled.");
 });
 
 el("ctx-restart-app").addEventListener("click", async () => {
@@ -3618,12 +3574,12 @@ for (const input of [programNameInput, programPathInput, programArgsInput]) {
 function createFolderModalController({
   modal, input, errorEl, recentWrap, recentList, browseBtn, cancelBtn, setBtn,
   browseEndpoint, applyEndpoint, applyBodyKey, removeEndpoint,
-  getCurrentPath, getRoots, setRoots, onApplied,
+  getCurrentPath, getRecentDirs, setRecentDirs, onApplied,
 }) {
   function open() {
     input.value = getCurrentPath() || "";
     errorEl.classList.add("hidden");
-    renderRoots();
+    renderRecent();
     modal.classList.remove("hidden");
     input.focus();
     input.select();
@@ -3633,14 +3589,10 @@ function createFolderModalController({
     modal.classList.add("hidden");
   }
 
-  // The modal only ever shows the flat list of saved root folders - no
-  // nesting here, that's what the quick dropdown is for (see
-  // openFolderQuickDropdown). This is purely "manage your roots":
-  // click one to make it the active folder, or delete it.
-  function renderRoots() {
+  function renderRecent() {
     recentList.innerHTML = "";
     const current = getCurrentPath() || "";
-    const entries = getRoots().filter((p) => p !== current);
+    const entries = getRecentDirs().filter((p) => p !== current);
     if (entries.length === 0) {
       recentWrap.classList.add("hidden");
       return;
@@ -3659,10 +3611,10 @@ function createFolderModalController({
       const removeBtn = document.createElement("button");
       removeBtn.className = "modal-recent-remove";
       removeBtn.textContent = "✕";
-      removeBtn.title = "Remove this saved folder";
+      removeBtn.title = "Remove from recent folders";
       removeBtn.addEventListener("click", (e) => {
         e.stopPropagation(); // don't also trigger the row's own click-to-select
-        removeRoot(path);
+        removeRecent(path);
       });
 
       row.appendChild(item);
@@ -3671,7 +3623,7 @@ function createFolderModalController({
     }
   }
 
-  async function removeRoot(path) {
+  async function removeRecent(path) {
     try {
       const res = await fetch(removeEndpoint, {
         method: "POST", headers: { "Content-Type": "application/json" },
@@ -3679,8 +3631,8 @@ function createFolderModalController({
       });
       const data = await res.json();
       if (res.ok) {
-        setRoots(data.roots || []);
-        renderRoots();
+        setRecentDirs(data.recent_dirs || []);
+        renderRecent();
       }
     } catch (e) {
       // best-effort - if this fails the entry just stays in the list, no harm done
@@ -3754,13 +3706,13 @@ const downloadFolderModal = createFolderModalController({
   recentWrap: folderRecentWrap, recentList: folderRecentList,
   browseBtn: el("folder-browse-btn"), cancelBtn: el("folder-cancel-btn"), setBtn: el("folder-set-btn"),
   browseEndpoint: "/api/browse-folder", applyEndpoint: "/api/settings", applyBodyKey: "save_dir",
-  removeEndpoint: "/api/settings/roots/remove",
+  removeEndpoint: "/api/settings/recent/remove",
   getCurrentPath: () => ctxSaveDir.title || "",
-  getRoots: () => state.saveDirRoots,
-  setRoots: (roots) => { state.saveDirRoots = roots; },
+  getRecentDirs: () => state.recentDirs,
+  setRecentDirs: (dirs) => { state.recentDirs = dirs; },
   onApplied: (data) => {
     setSaveDirDisplay(data.save_dir, data.free_space);
-    state.saveDirRoots = data.roots || [];
+    state.recentDirs = data.recent_dirs || [];
     loadJobsIntoMap(data.jobs);
     renderLedger();
   },
@@ -3771,13 +3723,13 @@ const targetFolderModal = createFolderModalController({
   recentWrap: el("target-folder-recent-wrap"), recentList: el("target-folder-recent-list"),
   browseBtn: el("target-folder-browse-btn"), cancelBtn: el("target-folder-cancel-btn"), setBtn: el("target-folder-set-btn"),
   browseEndpoint: "/api/browse-target-folder", applyEndpoint: "/api/target-settings", applyBodyKey: "target_dir",
-  removeEndpoint: "/api/target-settings/roots/remove",
+  removeEndpoint: "/api/target-settings/recent/remove",
   getCurrentPath: () => ctxTargetDir.title || "",
-  getRoots: () => state.targetDirRoots,
-  setRoots: (roots) => { state.targetDirRoots = roots; },
+  getRecentDirs: () => state.recentTargetDirs,
+  setRecentDirs: (dirs) => { state.recentTargetDirs = dirs; },
   onApplied: (data) => {
     setTargetDirDisplay(data.target_dir, data.free_space);
-    state.targetDirRoots = data.roots || [];
+    state.recentTargetDirs = data.recent_dirs || [];
   },
 });
 
@@ -3923,121 +3875,37 @@ gearBtn.addEventListener("click", (e) => {
 });
 
 // ── Folder quick-select dropdowns (click the DL:/Target: line) ──
-// Lists saved root folders for one-tap switching, nested with their
-// actual on-disk subfolders (unlimited depth, live-scanned server
-// side - see /api/settings/roots/tree). The whole tree for every root
-// is fetched once per open, so expanding a nested chevron afterward is
-// pure DOM work - no extra requests. Falls through to the full modal
-// (Browse.../type a path) via the last entry, same as before.
-//
-// Nested levels beyond the root list can't be the dropdown's own fixed
-// listEl (depth is unbounded), so each one is a freshly created flyout
-// appended to <body> and tracked in openTreeFlyouts, positioned beside
-// whichever row's chevron opened it via positionFlyoutNextTo - same
-// mechanism the Copy/File submenus already use.
-let openTreeFlyouts = [];
-
-function closeTreeFlyoutsFrom(depth) {
-  for (let i = depth; i < openTreeFlyouts.length; i++) {
-    openTreeFlyouts[i].remove();
-  }
-  openTreeFlyouts.length = depth;
-}
-
-function closeAllTreeFlyouts() {
-  closeTreeFlyoutsFrom(0);
-}
-
-// Renders one level of the tree (the root list, or one root/folder's
-// children) into `container`. `depth` identifies this level's slot in
-// openTreeFlyouts - a chevron click at this depth replaces whatever
-// was already open at that depth (a sibling's previously expanded
-// flyout) and drops anything deeper than it.
-function renderTreeLevel(nodes, container, { depth, current, applyPath, closeDropdown }) {
-  container.innerHTML = "";
-  for (const node of nodes) {
-    const row = document.createElement("div");
-    row.className = "ctx-item ctx-item-tree";
-    if (node.path === current) row.classList.add("ctx-disabled");
-
-    const label = document.createElement("span");
-    label.className = "ctx-tree-label";
-    label.textContent = node.name;
-    label.title = node.path;
-    row.appendChild(label);
-
-    if (node.path !== current) {
-      label.addEventListener("click", () => {
-        closeDropdown();
-        applyPath(node.path);
-      });
-    }
-
-    if (node.children && node.children.length > 0) {
-      const chevron = document.createElement("span");
-      chevron.className = "ctx-chevron";
-      chevron.textContent = "▸";
-      row.appendChild(chevron);
-
-      const toggleChildren = (e) => {
-        e.stopPropagation();
-        const alreadyOpenForThisRow =
-          openTreeFlyouts[depth] && openTreeFlyouts[depth].dataset.forPath === node.path;
-        closeTreeFlyoutsFrom(depth);
-        if (alreadyOpenForThisRow) return;
-
-        const flyout = document.createElement("div");
-        flyout.className = "ctx-menu folder-quickmenu tree-flyout hidden";
-        flyout.dataset.forPath = node.path;
-        document.body.appendChild(flyout);
-        openTreeFlyouts[depth] = flyout;
-        renderTreeLevel(node.children, flyout, { depth: depth + 1, current, applyPath, closeDropdown });
-        positionFlyoutNextTo(flyout, row);
-      };
-      chevron.addEventListener("click", toggleChildren);
-    }
-
-    container.appendChild(row);
-  }
-}
-
-async function openFolderQuickDropdown({ dropdownEl, listEl, anchorEl, treeEndpoint, getCurrentPath, applyPath, openAdvanced, noneLabel }) {
-  closeOtherFlyouts(dropdownEl); // also tears down any tree flyouts from a previous open
+// Lists saved folders for one-tap switching, dropping straight down
+// from whichever line was clicked; falls through to the full
+// modal (Browse.../type a path) via the last entry.
+function openFolderQuickDropdown({ dropdownEl, listEl, anchorEl, getRecentDirs, getCurrentPath, applyPath, openAdvanced, noneLabel }) {
+  closeOtherFlyouts(dropdownEl);
   listEl.innerHTML = "";
-  const loading = document.createElement("div");
-  loading.className = "ctx-item ctx-disabled";
-  loading.textContent = "Loading...";
-  listEl.appendChild(loading);
-  positionDropdownBelow(dropdownEl, anchorEl);
 
   const current = getCurrentPath() || "";
-  const closeDropdown = () => {
-    dropdownEl.classList.add("hidden");
-    closeAllTreeFlyouts();
-  };
+  const dirs = getRecentDirs();
 
-  let roots = [];
-  try {
-    const res = await fetch(treeEndpoint);
-    const data = await res.json();
-    roots = data.roots || [];
-  } catch (e) {
-    // best-effort - falls through to the empty-state below
-  }
-
-  // The dropdown may have been closed (or reopened elsewhere) while
-  // the fetch was in flight - don't resurrect it out from under the
-  // user with stale content.
-  if (dropdownEl.classList.contains("hidden")) return;
-
-  listEl.innerHTML = "";
-  if (roots.length === 0) {
+  if (dirs.length === 0) {
     const empty = document.createElement("div");
     empty.className = "ctx-item ctx-disabled";
     empty.textContent = noneLabel;
     listEl.appendChild(empty);
   } else {
-    renderTreeLevel(roots, listEl, { depth: 0, current, applyPath, closeDropdown });
+    for (const path of dirs) {
+      const item = document.createElement("div");
+      item.className = "ctx-item";
+      item.textContent = path;
+      item.title = path;
+      if (path === current) {
+        item.classList.add("ctx-disabled");
+      } else {
+        item.addEventListener("click", () => {
+          dropdownEl.classList.add("hidden");
+          applyPath(path);
+        });
+      }
+      listEl.appendChild(item);
+    }
   }
 
   const sep = document.createElement("div");
@@ -4048,7 +3916,7 @@ async function openFolderQuickDropdown({ dropdownEl, listEl, anchorEl, treeEndpo
   advanced.className = "ctx-item";
   advanced.textContent = "Browse / set custom folder...";
   advanced.addEventListener("click", () => {
-    closeDropdown();
+    dropdownEl.classList.add("hidden");
     openAdvanced();
   });
   listEl.appendChild(advanced);
@@ -4063,7 +3931,7 @@ folderStatusSave.addEventListener("click", (e) => {
   historyMenu.classList.add("hidden");
   openFolderQuickDropdown({
     dropdownEl: dlFolderQuickMenu, listEl: dlFolderQuickList, anchorEl: folderStatusSave,
-    treeEndpoint: "/api/settings/roots/tree",
+    getRecentDirs: () => state.recentDirs,
     getCurrentPath: () => ctxSaveDir.title || "",
     applyPath: downloadFolderModal.applyPath,
     openAdvanced: () => downloadFolderModal.open(),
@@ -4078,7 +3946,7 @@ folderStatusTarget.addEventListener("click", (e) => {
   historyMenu.classList.add("hidden");
   openFolderQuickDropdown({
     dropdownEl: targetFolderQuickMenu, listEl: targetFolderQuickList, anchorEl: folderStatusTarget,
-    treeEndpoint: "/api/target-settings/roots/tree",
+    getRecentDirs: () => state.recentTargetDirs,
     getCurrentPath: () => ctxTargetDir.title || "",
     applyPath: targetFolderModal.applyPath,
     openAdvanced: () => targetFolderModal.open(),
@@ -4211,28 +4079,19 @@ async function submitDownloadJob(url, filename, resCap, originalPastedUrl) {
   resetToReady();
 }
 
-async function submitPlaylistBatch(entries, resCap, playlistTitle, autoStart = false) {
+async function submitPlaylistBatch(entries, resCap, playlistTitle) {
   const label = playlistTitle ? `"${playlistTitle}"` : "This playlist";
-  if (!autoStart) {
-    const proceed = window.confirm(
-      `${label} has ${entries.length} videos.\n\nQueue all ${entries.length} for download (max 3 at a time)?`
-    );
-    if (!proceed) {
-      resetToReady();
-      return;
-    }
-  }
-
-  // Ask separately so the choice is explicit and applies to this playlist only.
-  const numberTitles = window.confirm(
-    `Add numbering to the ${entries.length} playlist titles?\n\n` +
-    `If enabled, files will be named like:\n01-My Video\n02-Another Video\n03-Another One`
+  const proceed = window.confirm(
+    `${label} has ${entries.length} videos.\n\nQueue all ${entries.length} for download (max 3 at a time)?`
   );
-
+  if (!proceed) {
+    resetToReady();
+    return;
+  }
   try {
     await fetch("/api/playlist/queue", {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ entries, res_cap: resCap, number_titles: numberTitles }),
+      body: JSON.stringify({ entries, res_cap: resCap }),
     });
   } catch (e) {
     window.alert("Couldn't reach the server to queue the playlist.");
@@ -4306,7 +4165,7 @@ async function beginM3uRetryPipeline(url, resCap, originalPastedUrl) {
 // job_manager.start_playlist_batch - each playlist gets its own
 // 3-concurrent-download cap, independent of any other playlist queued
 // separately).
-async function beginDownloadPipeline(url, forceAutoStart = false) {
+async function beginDownloadPipeline(url) {
   state.targetUrl = url;
   inputField.disabled = true;
   modeContainer.style.pointerEvents = "none";
@@ -4326,7 +4185,7 @@ async function beginDownloadPipeline(url, forceAutoStart = false) {
       });
       const probeData = await probePromise;
       if (probeData.is_playlist) {
-        await submitPlaylistBatch(probeData.entries, resDropdown.value, probeData.playlist_title, forceAutoStart);
+        await submitPlaylistBatch(probeData.entries, resDropdown.value, probeData.playlist_title);
         return;
       }
       if (!res.ok) {
@@ -4335,7 +4194,7 @@ async function beginDownloadPipeline(url, forceAutoStart = false) {
         return;
       }
       const data = await res.json();
-      if (forceAutoStart || state.autoConfirmTitles) {
+      if (state.autoConfirmTitles) {
         await submitDownloadJob(data.stream_url, data.suggested_title, resDropdown.value, state.targetUrl);
       } else {
         handleIntercepted(data.stream_url, data.suggested_title);
@@ -4343,7 +4202,7 @@ async function beginDownloadPipeline(url, forceAutoStart = false) {
     } catch (e) {
       const probeData = await probePromise;
       if (probeData.is_playlist) {
-        await submitPlaylistBatch(probeData.entries, resDropdown.value, probeData.playlist_title, forceAutoStart);
+        await submitPlaylistBatch(probeData.entries, resDropdown.value, probeData.playlist_title);
         return;
       }
       handleInterceptionFailure(String(e));
@@ -4360,10 +4219,10 @@ async function beginDownloadPipeline(url, forceAutoStart = false) {
       const data = await res.json();
       const probeData = await probePromise;
       if (probeData.is_playlist) {
-        await submitPlaylistBatch(probeData.entries, resDropdown.value, probeData.playlist_title, forceAutoStart);
+        await submitPlaylistBatch(probeData.entries, resDropdown.value, probeData.playlist_title);
         return;
       }
-      if (forceAutoStart || state.autoConfirmTitles) {
+      if (state.autoConfirmTitles) {
         await submitDownloadJob(url, data.title, resDropdown.value, state.targetUrl);
       } else {
         promptTitleEdit(data.title);
@@ -4371,10 +4230,10 @@ async function beginDownloadPipeline(url, forceAutoStart = false) {
     } catch (e) {
       const probeData = await probePromise;
       if (probeData.is_playlist) {
-        await submitPlaylistBatch(probeData.entries, resDropdown.value, probeData.playlist_title, forceAutoStart);
+        await submitPlaylistBatch(probeData.entries, resDropdown.value, probeData.playlist_title);
         return;
       }
-      if (forceAutoStart || state.autoConfirmTitles) {
+      if (state.autoConfirmTitles) {
         await submitDownloadJob(url, "Unknown Title", resDropdown.value, state.targetUrl);
       } else {
         promptTitleEdit("Unknown Title");

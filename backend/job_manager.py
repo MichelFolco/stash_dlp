@@ -8,13 +8,14 @@ import json
 import os
 import re
 import shutil
+import uuid
 from urllib.parse import urlparse
 from typing import Dict, Optional
 
 from config import RES_FORMATS, AUDIO_ONLY_KEY
 from ffmpeg_encode import probe_basic_info
 from procflags import NO_CONSOLE_KWARGS
-from settings import get_download_prefs, get_save_dir, get_target_dir, get_ytdlp_args
+from settings import get_download_prefs, get_save_dir, get_target_dir, get_ytdlp_args, get_converted_dir
 from storage import load_saved_queue, save_queue_to_disk, write_to_history_log
 from thumbnails import thumbnail_path_for
 from ytdlp_utils import (
@@ -33,6 +34,12 @@ from ytdlp_utils import (
 PROGRESS_RE = re.compile(
     r"\[download\]\s+([\d.]+)%\s+of\s+~?\s*([\d.]+)\s*(\w+)\s+at\s+([\d.]+)\s*([\w/]+)\s+ETA\s+(\d+):(\d+)"
 )
+
+# Max downloads running at once FOR A SINGLE PLAYLIST BATCH - each
+# playlist queued gets its own independent cap, so two playlists queued
+# at the same time run up to 2x this many concurrent downloads total.
+# Manually-pasted single URLs are unaffected (never throttled).
+PLAYLIST_CONCURRENCY = 3
 
 
 class NeedsDecisionError(Exception):
@@ -82,11 +89,18 @@ class JobManager:
     # ── Bootstrapping ────────────────────────────────────────────
     async def seed_from_filesystem(self, done_jobs: list, replace: bool = False):
         """Populate self.jobs with jobs discovered by filesystem_scan.
-        With replace=True (used when the download folder changes), any
-        previously-tracked completed jobs from the old folder are
-        dropped first - active DOWNLOADING jobs are kept regardless,
-        since they're mid-flight independent of which folder is
-        "current" right now.
+        With replace=True (used when the download folder changes, and on
+        every periodic refresh poll), any previously-tracked completed
+        jobs from the old folder are dropped first. This is a denylist,
+        not an allowlist: only DONE/ERROR/CANCELLED are dropped, since
+        this scan is authoritative over those (it just re-derived them
+        from what's actually on disk) - every other status, including
+        ones that don't exist yet, is kept by default rather than
+        needing to be remembered here. DOWNLOADING and QUEUED are the
+        two that matter today - neither has settled into a file on disk
+        yet for this scan to find - but a future status shouldn't need
+        a matching edit in this one place just to not get silently
+        wiped on the next refresh tick, the way QUEUED almost was.
 
         Media metadata (resolution/duration/filetype) is cached in
         queue.json once probed, so this only pays the ffprobe cost for
@@ -96,7 +110,7 @@ class JobManager:
             self.jobs = {
                 filename: job
                 for filename, job in self.jobs.items()
-                if job["status"] == "DOWNLOADING"
+                if job["status"] not in ("DONE", "ERROR", "CANCELLED")
             }
 
         disk_queue = load_saved_queue()
@@ -129,7 +143,7 @@ class JobManager:
             needs_probe = not ext or not duration or (not is_audio and not (width and height))
 
             if needs_probe:
-                media_path = find_media_file(filename)
+                media_path = find_media_file(filename, job.get("save_dir"))
                 if media_path:
                     if not ext:
                         ext = os.path.splitext(media_path)[1].lstrip(".").upper()
@@ -191,6 +205,7 @@ class JobManager:
                 "file_size": job.get("file_size", ""),
                 "is_audio": job.get("is_audio", False),
                 "playback_position": job.get("playback_position", 0),
+                "fully_played": job.get("fully_played", False),
                 "width": width,
                 "height": height,
                 "duration": duration,
@@ -218,6 +233,7 @@ class JobManager:
                 # against the single listing above, not a fresh listdir
                 # per job.
                 "has_twin": has_converted_twin(filename, converted_stems),
+                "save_dir": disk_queue.get(filename, {}).get("save_dir", get_save_dir()),
             }
 
         if queue_dirty:
@@ -243,6 +259,7 @@ class JobManager:
             "file_size": "",
             "is_audio": res_cap == AUDIO_ONLY_KEY,  # confirmed for real once the file lands
             "playback_position": 0,
+            "fully_played": False,
             "width": 0,
             "height": 0,
             "duration": 0,
@@ -256,6 +273,7 @@ class JobManager:
             "synchronized": False,
             "audio_delay_ms": 0,
             "has_twin": False,  # nothing in Converted/ yet - a download just started
+            "save_dir": get_save_dir(),
         }
         self.jobs[filename] = job
 
@@ -264,6 +282,7 @@ class JobManager:
             "res_cap": res_cap,
             "status": "DOWNLOADING",
             "original_input_url": original_pasted_url,
+            "save_dir": job["save_dir"],
         }
         save_queue_to_disk(self.saved_queue)
 
@@ -273,7 +292,9 @@ class JobManager:
 
     async def _run_download(self, job: dict, log_url: str):
         filename = job["filename"]
-        out_path = f"{get_save_dir()}/{filename}.%(ext)s"
+        save_dir = job.get("save_dir") or get_save_dir()
+        os.makedirs(save_dir, exist_ok=True)
+        out_path = os.path.join(save_dir, filename + ".%(ext)s")
         is_audio_only = job["res_cap"] == AUDIO_ONLY_KEY
 
         status = await self._attempt_ytdlp(job, job["url"], out_path, is_audio_only, filename)
@@ -292,6 +313,95 @@ class JobManager:
 
         self._cancelled.discard(filename)
         await self._finalize_job(job, status, log_url)
+
+    # ── Playlist batches ────────────────────────────────────────────
+    async def start_playlist_batch(self, entries: list, res_cap: str, save_dir: str | None = None, number_titles: bool = False) -> dict:
+        """Queues every entry from a detected playlist/channel as its own
+        ledger item with status QUEUED, then lets them start downloading
+        PLAYLIST_CONCURRENCY at a time via a semaphore scoped to just
+        this batch (a second playlist queued later gets its own separate
+        semaphore/cap, entirely independent of this one). Returns
+        {'queued': [filenames]} - entries that collide with an
+        already-downloading filename are silently skipped, same dedupe
+        behavior start_job already applies to a single submission."""
+        # Snapshot the destination once for the entire playlist. Changing the
+        # app's download folder after this point must not redirect queued items.
+        save_dir = save_dir or get_save_dir()
+        semaphore = asyncio.Semaphore(max(1, PLAYLIST_CONCURRENCY))
+        queued = []
+        for index, entry in enumerate(entries, start=1):
+            title = entry.get("title", "")
+            if number_titles:
+                title = f"{index:02d}-{title}"
+            filename = clean_filename(title)
+            url = entry.get("url", "")
+            if not filename or not url:
+                continue
+            if self.jobs.get(filename, {}).get("status") in ("DOWNLOADING", "QUEUED"):
+                continue
+            await self._enqueue_playlist_item(url, filename, res_cap, semaphore, save_dir)
+            queued.append(filename)
+        return {"queued": queued}
+
+    async def _enqueue_playlist_item(self, url: str, filename: str, res_cap: str, semaphore: asyncio.Semaphore, save_dir: str) -> None:
+        job = {
+            "filename": filename,
+            "url": url,
+            "res_cap": res_cap,
+            "status": "QUEUED",
+            "file_size": "",
+            "is_audio": res_cap == AUDIO_ONLY_KEY,
+            "playback_position": 0,
+            "fully_played": False,
+            "width": 0,
+            "height": 0,
+            "duration": 0,
+            "ext": "",
+            "video_codec": "",
+            "audio_codec": "",
+            "pct": 0,
+            "total": "",
+            "speed": "",
+            "eta": "",
+            "synchronized": False,
+            "audio_delay_ms": 0,
+            "has_twin": False,
+            "save_dir": save_dir,
+        }
+        self.jobs[filename] = job
+
+        self.saved_queue[filename] = {
+            "url": url,
+            "res_cap": res_cap,
+            "status": "QUEUED",
+            "original_input_url": url,
+            "save_dir": save_dir,
+        }
+        save_queue_to_disk(self.saved_queue)
+
+        await self.connections.broadcast({"type": "job_added", "job": job})
+
+        asyncio.create_task(self._run_queued_download(job, url, semaphore))
+
+    async def _run_queued_download(self, job: dict, log_url: str, semaphore: asyncio.Semaphore) -> None:
+        filename = job["filename"]
+        async with semaphore:
+            # Cancelled while waiting for a slot, or superseded by a
+            # retry that replaced this filename's job dict in the
+            # meantime - either way, this stale wait is done and
+            # shouldn't start a download.
+            if filename in self._cancelled or self.jobs.get(filename) is not job:
+                self._cancelled.discard(filename)
+                return
+
+            job["status"] = "DOWNLOADING"
+            if filename in self.saved_queue:
+                self.saved_queue[filename]["status"] = "DOWNLOADING"
+                save_queue_to_disk(self.saved_queue)
+            await self.connections.broadcast({
+                "type": "job_status", "filename": filename, "status": "DOWNLOADING",
+            })
+            await self._run_download(job, log_url)
 
     async def _abandon_for_m3u_retry(self, job: dict, log_url: str) -> None:
         filename = job["filename"]
@@ -440,10 +550,10 @@ class JobManager:
         width, height, duration, ext = 0, 0, 0, ""
         video_codec, audio_codec = "", ""
         if status == "DONE":
-            size_bytes = get_downloaded_file_size(filename)
+            size_bytes = get_downloaded_file_size(filename, job.get("save_dir"))
             if size_bytes is not None:
                 file_size_str = format_file_size(size_bytes)
-            media_path = find_media_file(filename)
+            media_path = find_media_file(filename, job.get("save_dir"))
             if media_path:
                 is_audio = is_audio_file(media_path)
                 ext = os.path.splitext(media_path)[1].lstrip(".").upper()
@@ -454,7 +564,7 @@ class JobManager:
                     audio_codec = probed.get("audio_codec", "")
                 except Exception:
                     pass
-            self._relocate_downloaded_thumbnail(filename)
+            self._relocate_downloaded_thumbnail(filename, job.get("save_dir"))
 
         job["status"] = status
         job["file_size"] = file_size_str
@@ -499,7 +609,7 @@ class JobManager:
             "audio_codec": audio_codec,
         })
 
-    def _relocate_downloaded_thumbnail(self, filename: str) -> None:
+    def _relocate_downloaded_thumbnail(self, filename: str, save_dir: str | None = None) -> None:
         """Compatibility fallback for thumbnails written by older yt-dlp
         configurations.
 
@@ -508,7 +618,7 @@ class JobManager:
         nothing to do. It only moves a legacy <filename>.jpg left beside
         the media file by an older yt-dlp invocation.
         """
-        source = os.path.join(get_save_dir(), filename + ".jpg")
+        source = os.path.join(save_dir or get_save_dir(), filename + ".jpg")
         if not os.path.exists(source):
             return
         dest = thumbnail_path_for(filename)
@@ -520,10 +630,21 @@ class JobManager:
             pass
 
     # ── Playback position tracking ────────────────────────────────
-    def set_playback_position(self, filename: str, position) -> bool:
+    def set_playback_position(self, filename: str, position, completed: bool = False) -> bool:
         """Persists how far into a file playback got, so it can resume
         there next time - survives the browser closing/crashing or the
-        server restarting, since it's written straight to queue.json."""
+        server restarting, since it's written straight to queue.json.
+
+        completed=True additionally sets fully_played, a separate sticky
+        flag (never cleared by this method) marking the file as having
+        been watched/listened to the end at least once. It's tracked
+        apart from playback_position because that field gets reset to 0
+        once a file finishes (so the next play starts over instead of
+        immediately resuming at the very end) - without a separate flag,
+        a finished file and a never-started one would be indistinguishable
+        once playback_position is back to 0. A partial rewatch afterwards
+        still updates playback_position normally; fully_played only ever
+        moves False -> True, here, never back."""
         job = self.jobs.get(filename)
         if not job:
             return False
@@ -533,8 +654,12 @@ class JobManager:
             return False
 
         job["playback_position"] = position
+        if completed:
+            job["fully_played"] = True
         if filename in self.saved_queue:
             self.saved_queue[filename]["playback_position"] = position
+            if completed:
+                self.saved_queue[filename]["fully_played"] = True
             save_queue_to_disk(self.saved_queue)
         return True
 
@@ -581,16 +706,42 @@ class JobManager:
         return self.jobs[filename]
 
     # ── Cancelling ────────────────────────────────────────────────
-    def cancel_job(self, filename: str) -> bool:
+    async def cancel_job(self, filename: str) -> bool:
         proc = self._processes.get(filename)
-        if proc is None:
-            return False
-        self._cancelled.add(filename)
-        try:
-            proc.kill()
-        except ProcessLookupError:
-            pass
-        return True
+        if proc is not None:
+            self._cancelled.add(filename)
+            try:
+                proc.kill()
+            except ProcessLookupError:
+                pass
+            return True
+
+        job = self.jobs.get(filename)
+        if job is not None and job.get("status") == "QUEUED":
+            # Still waiting on its playlist batch's concurrency slot -
+            # no process to kill yet. Flip it to CANCELLED in place
+            # (rather than waiting for a slot that might be a long time
+            # coming) so it stays retryable via the same Retry action as
+            # any other cancelled download; the still-pending semaphore
+            # wait (see _run_queued_download) checks self._cancelled once
+            # its turn comes up and quietly no-ops instead of downloading.
+            self._cancelled.add(filename)
+            job["status"] = "CANCELLED"
+            if filename in self.saved_queue:
+                self.saved_queue[filename]["status"] = "CANCELLED"
+                save_queue_to_disk(self.saved_queue)
+            await self.connections.broadcast({
+                "type": "job_finished",
+                "filename": filename,
+                "status": "CANCELLED",
+                "file_size": "",
+                "is_audio": job.get("is_audio", False),
+                "width": 0, "height": 0, "duration": 0, "ext": "",
+                "video_codec": "", "audio_codec": "",
+            })
+            return True
+
+        return False
 
     # ── Deleting a completed job's file ───────────────────────────
     def delete_job(self, filename: str) -> bool:
@@ -637,12 +788,26 @@ class JobManager:
 
         media_path = find_media_file(filename)
         save_dir = get_save_dir()
+
+        # If this job has a twin in Converted/, keep the twin's stem in sync
+        # with the renamed source. Preserve the twin's actual extension.
+        twin_path = find_converted_file(filename)
+        twin_new_path = None
+        if twin_path:
+            twin_ext = os.path.splitext(twin_path)[1]
+            twin_new_path = os.path.join(get_converted_dir(), new_name + twin_ext)
+            if os.path.normcase(os.path.abspath(twin_path)) != os.path.normcase(os.path.abspath(twin_new_path)) and os.path.exists(twin_new_path):
+                raise ValueError(f"A twin named '{new_name}{twin_ext}' already exists in Converted/.")
+
         if media_path:
             ext = os.path.splitext(media_path)[1]
             new_media_path = os.path.join(save_dir, new_name + ext)
             if os.path.exists(new_media_path):
                 raise ValueError(f"A file named '{new_name}{ext}' already exists.")
             os.rename(media_path, new_media_path)
+
+        if twin_path and twin_new_path:
+            os.rename(twin_path, twin_new_path)
 
         old_thumb = thumbnail_path_for(filename)
         if os.path.exists(old_thumb):
@@ -722,6 +887,7 @@ class JobManager:
             "file_size": format_file_size(size_bytes) if size_bytes is not None else "",
             "is_audio": True,
             "playback_position": 0,
+            "fully_played": False,
             "pct": 100,
             "total": "",
             "speed": "",
@@ -739,6 +905,84 @@ class JobManager:
         write_to_history_log(new_stem, job["url"], "DONE")
 
         return job
+
+    # ── Replacing a completed download with its Converted/ twin ──
+    async def replace_with_twin(self, filename: str) -> None:
+        """Replace the completed download with its twin from Converted/.
+
+        The twin is moved into the configured download folder and replaces
+        the original media file. The twin's filename/extension is retained,
+        so the ledger continues to identify the item by its filename stem.
+        """
+        job = self.jobs.get(filename)
+        if not job or job.get("status") != "DONE":
+            raise ValueError(f"'{filename}' isn't a completed item.")
+
+        media_path = find_media_file(filename)
+        if not media_path:
+            raise ValueError(f"Couldn't find the original file for '{filename}'.")
+
+        converted_path = find_converted_file(filename)
+        if not converted_path:
+            raise ValueError(f"Couldn't find a twin for '{filename}' in Converted/.")
+
+        save_dir = get_save_dir()
+        if not save_dir:
+            raise ValueError("No download folder configured yet.")
+
+        destination = os.path.join(save_dir, os.path.basename(converted_path))
+
+        try:
+            # Remove the original first so the twin can take its place even
+            # when the filesystem does not allow shutil.move() to overwrite.
+            if os.path.normcase(os.path.abspath(destination)) != os.path.normcase(os.path.abspath(media_path)):
+                if os.path.exists(destination):
+                    os.remove(destination)
+                os.remove(media_path)
+            else:
+                # Defensive fallback for the unlikely case both paths match.
+                os.remove(media_path)
+
+            shutil.move(converted_path, destination)
+        except OSError as e:
+            # If the twin was not moved and the original was removed, report
+            # the real filesystem failure rather than silently losing state.
+            raise ValueError(f"Replace failed: {e}")
+
+        # Refresh the ledger's media metadata from the newly installed file.
+        try:
+            probed = await probe_basic_info(destination)
+        except Exception:
+            probed = {}
+
+        try:
+            file_size = os.path.getsize(destination)
+        except OSError:
+            file_size = None
+
+        job["file_size"] = format_file_size(file_size) if file_size is not None else job.get("file_size", "")
+        job["ext"] = os.path.splitext(destination)[1].lstrip(".")
+        job["width"] = probed.get("width", job.get("width", 0))
+        job["height"] = probed.get("height", job.get("height", 0))
+        job["duration"] = probed.get("duration", job.get("duration", 0))
+        job["video_codec"] = probed.get("video_codec", job.get("video_codec", ""))
+        job["audio_codec"] = probed.get("audio_codec", job.get("audio_codec", ""))
+        job["has_twin"] = False
+
+        if filename in self.saved_queue:
+            self.saved_queue[filename]["file_size"] = job["file_size"]
+            self.saved_queue[filename]["ext"] = job["ext"]
+            self.saved_queue[filename]["width"] = job["width"]
+            self.saved_queue[filename]["height"] = job["height"]
+            self.saved_queue[filename]["duration"] = job["duration"]
+            self.saved_queue[filename]["video_codec"] = job["video_codec"]
+            self.saved_queue[filename]["audio_codec"] = job["audio_codec"]
+            save_queue_to_disk(self.saved_queue)
+
+        await self.connections.broadcast({
+            "type": "refresh",
+            "jobs": self.snapshot(),
+        })
 
     # ── Moving completed files to the target folder ──────────────
     async def move_to_target(self, filename: str, variant: Optional[str] = None) -> None:
@@ -898,7 +1142,7 @@ class JobManager:
         skipped = []
         for filename in filenames:
             job = self.jobs.get(filename)
-            if job and job.get("status") == "DOWNLOADING":
+            if job and job.get("status") in ("DOWNLOADING", "QUEUED"):
                 skipped.append(filename)
                 continue
             self.delete_job(filename)

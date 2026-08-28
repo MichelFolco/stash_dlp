@@ -18,12 +18,14 @@ from diskspace import get_free_space_label
 from encode_manager import EncodeManager
 from filesystem_scan import scan_filesystem
 from folder_dialog import ask_directory, ask_file_path
+from folder_tree import scan_root_tree
 from job_manager import JobManager, ConnectionManager, NeedsDecisionError
 from m3u8_finder import find_m3u8, M3u8NotFound
 from procflags import NO_CONSOLE_KWARGS
 from settings import (
-    get_save_dir, set_save_dir, get_recent_dirs, remove_recent_dir,
-    get_target_dir, set_target_dir, get_recent_target_dirs, remove_recent_target_dir,
+    get_save_dir, set_save_dir, get_save_dir_roots, add_save_dir_root, remove_save_dir_root,
+    get_target_dir, set_target_dir, get_target_dir_roots, add_target_dir_root, remove_target_dir_root,
+    get_dir_last_used_map,
     get_external_programs, get_external_program, add_external_program,
     update_external_program, delete_external_program,
     get_converted_dir, get_download_prefs, set_download_prefs,
@@ -35,9 +37,10 @@ from storage import search_history, get_history_entries, delete_history_entry, l
 from thumbnails import get_thumbnail_path
 import stash_integration
 import audio_sync
+from clipboard_monitor import monitor_clipboard
 from ytdlp_utils import (
     clean_filename, fetch_title, get_domain, check_and_update_ytdlp, find_media_file,
-    find_converted_file, build_open_with_command, format_file_size,
+    find_converted_file, build_open_with_command, format_file_size, probe_playlist,
 )
 
 STREAM_CHUNK_SIZE = 1024 * 1024  # 1 MB
@@ -93,6 +96,7 @@ async def on_startup():
     await job_manager.seed_from_filesystem(done_jobs)
 
     encode_manager.start()
+    asyncio.create_task(monitor_clipboard(connections))
 
 
 # ── Request/response models ────────────────────────────────────
@@ -149,7 +153,7 @@ class TargetDirRequest(BaseModel):
     target_dir: str
 
 
-class RecentDirRemoveRequest(BaseModel):
+class RootFolderRequest(BaseModel):
     path: str
 
 
@@ -158,6 +162,24 @@ class DownloadPrefsRequest(BaseModel):
     tag_domain: bool
     m3u_sniffer: bool
     auto_m3u_retry: bool = True
+    auto_confirm_titles: bool = False
+    clipboard_monitor: bool = False
+
+
+class PlaylistProbeRequest(BaseModel):
+    url: str
+    tag_domain: bool = True
+
+
+class PlaylistQueueEntry(BaseModel):
+    url: str
+    title: str
+
+
+class PlaylistQueueRequest(BaseModel):
+    entries: List[PlaylistQueueEntry]
+    res_cap: str = "720p"
+    number_titles: bool = False
 
 
 class YtdlpDefaultArgsRequest(BaseModel):
@@ -181,6 +203,7 @@ class RenameRequest(BaseModel):
 class PlaybackPositionRequest(BaseModel):
     filename: str
     position: float
+    completed: bool = False
 
 
 class ExternalProgramRequest(BaseModel):
@@ -316,7 +339,7 @@ async def api_get_settings():
     save_dir = get_save_dir()
     return {
         "save_dir": save_dir,
-        "recent_dirs": get_recent_dirs(),
+        "roots": get_save_dir_roots(),
         "free_space": get_free_space_label(save_dir),
     }
 
@@ -335,15 +358,40 @@ async def api_set_settings(req: SaveDirRequest):
     await job_manager.connections.broadcast({"type": "refresh", "jobs": snapshot})
     return {
         "save_dir": new_path,
-        "recent_dirs": get_recent_dirs(),
+        "roots": get_save_dir_roots(),
         "free_space": get_free_space_label(new_path),
         "jobs": snapshot,
     }
 
 
-@app.post("/api/settings/recent/remove")
-async def api_remove_recent_dir(req: RecentDirRemoveRequest):
-    return {"recent_dirs": remove_recent_dir(req.path)}
+@app.post("/api/settings/roots/add")
+async def api_add_save_dir_root(req: RootFolderRequest):
+    """Adds a new saved root download folder (modal's 'Set Folder' flow
+    already goes through /api/settings above, since setting a folder
+    auto-adds it as a root - this endpoint is for explicitly adding a
+    root without necessarily also making it the active download
+    folder). Subfolder-of-an-existing-root paths are rejected; adding a
+    folder that's an ancestor of existing roots absorbs them."""
+    try:
+        roots = add_save_dir_root(req.path)
+    except (ValueError, OSError) as e:
+        return JSONResponse(status_code=400, content={"error": str(e)})
+    return {"roots": roots}
+
+
+@app.post("/api/settings/roots/remove")
+async def api_remove_save_dir_root(req: RootFolderRequest):
+    return {"roots": remove_save_dir_root(req.path)}
+
+
+@app.get("/api/settings/roots/tree")
+async def api_get_save_dir_tree():
+    """Live-scans every saved download-folder root and returns each as
+    a nested subfolder tree (most-recently-used first at every level),
+    for the DL: quick-select dropdown."""
+    last_used = get_dir_last_used_map()
+    roots = get_save_dir_roots()  # already most-recently-used first
+    return {"roots": [scan_root_tree(r, last_used) for r in roots]}
 
 
 @app.get("/api/download-prefs")
@@ -353,7 +401,9 @@ async def api_get_download_prefs():
 
 @app.post("/api/download-prefs")
 async def api_set_download_prefs(req: DownloadPrefsRequest):
-    return set_download_prefs(req.quality, req.tag_domain, req.m3u_sniffer, req.auto_m3u_retry)
+    return set_download_prefs(
+        req.quality, req.tag_domain, req.m3u_sniffer, req.auto_m3u_retry, req.auto_confirm_titles, req.clipboard_monitor
+    )
 
 
 @app.get("/api/ytdlp-args")
@@ -395,9 +445,27 @@ async def api_delete_ytdlp_domain_args(req: YtdlpDomainArgsDeleteRequest):
     return delete_ytdlp_domain_args(req.domain)
 
 
-@app.post("/api/target-settings/recent/remove")
-async def api_remove_recent_target_dir(req: RecentDirRemoveRequest):
-    return {"recent_dirs": remove_recent_target_dir(req.path)}
+@app.post("/api/target-settings/roots/add")
+async def api_add_target_dir_root(req: RootFolderRequest):
+    try:
+        roots = add_target_dir_root(req.path)
+    except (ValueError, OSError) as e:
+        return JSONResponse(status_code=400, content={"error": str(e)})
+    return {"roots": roots}
+
+
+@app.post("/api/target-settings/roots/remove")
+async def api_remove_target_dir_root(req: RootFolderRequest):
+    return {"roots": remove_target_dir_root(req.path)}
+
+
+@app.get("/api/target-settings/roots/tree")
+async def api_get_target_dir_tree():
+    """Live-scans every saved target-folder root - see
+    api_get_save_dir_tree() above for the shape and reasoning."""
+    last_used = get_dir_last_used_map()
+    roots = get_target_dir_roots()  # already most-recently-used first
+    return {"roots": [scan_root_tree(r, last_used) for r in roots]}
 
 
 @app.post("/api/browse-folder")
@@ -497,7 +565,7 @@ async def api_get_target_settings():
     target_dir = get_target_dir()
     return {
         "target_dir": target_dir,
-        "recent_dirs": get_recent_target_dirs(),
+        "roots": get_target_dir_roots(),
         "free_space": get_free_space_label(target_dir) if target_dir else "",
     }
 
@@ -510,7 +578,7 @@ async def api_set_target_settings(req: TargetDirRequest):
         return JSONResponse(status_code=400, content={"error": str(e)})
     return {
         "target_dir": new_path,
-        "recent_dirs": get_recent_target_dirs(),
+        "roots": get_target_dir_roots(),
         "free_space": get_free_space_label(new_path),
     }
 
@@ -579,6 +647,16 @@ async def api_stash_check_tag(req: StashTagCheckRequest):
     return {"ok": True, **result, "recent_tags": recent_tags}
 
 
+@app.get("/api/stash/largest-files")
+async def api_stash_largest_files():
+    """Return the 50 largest scene files in the Stash library."""
+    try:
+        result = await stash_integration.find_largest_scenes(limit=50)
+    except RuntimeError as e:
+        return JSONResponse(status_code=502, content={"error": str(e)})
+    return {"ok": True, **result}
+
+
 @app.post("/api/jobs/replace-source")
 async def api_replace_source(req: ReplaceSourceRequest):
     try:
@@ -597,6 +675,15 @@ async def api_replace_source(req: ReplaceSourceRequest):
         return JSONResponse(status_code=400, content={"error": f"Unexpected error: {e}"})
     await job_manager.connections.broadcast({"type": "job_deleted", "filename": req.filename})
     return {"ok": True, **tag_result}
+
+
+@app.post("/api/jobs/replace-with-twin")
+async def api_replace_with_twin(req: CancelRequest):
+    try:
+        await job_manager.replace_with_twin(req.filename)
+    except ValueError as e:
+        return JSONResponse(status_code=400, content={"error": str(e)})
+    return {"ok": True, "jobs": job_manager.snapshot()}
 
 
 @app.post("/api/jobs/move-to-target")
@@ -685,6 +772,47 @@ async def api_find_link(req: FindLinkRequest):
     }
 
 
+@app.post("/api/playlist/probe")
+async def api_probe_playlist(req: PlaylistProbeRequest):
+    """Cheap yt-dlp --flat-playlist check run against every pasted URL,
+    before the normal single-video fetch-title/M3U-sniff pipeline - if
+    this comes back is_playlist=False (the common case), the caller just
+    falls through to that normal pipeline as if this had never run."""
+    result = await probe_playlist(req.url)
+    if not result["is_playlist"]:
+        return {"is_playlist": False}
+
+    tag = ""
+    if req.tag_domain:
+        domain = get_domain(req.url)
+        if domain:
+            tag = f" [{domain}]"
+
+    entries = [
+        {"url": e["url"], "title": clean_filename(e["title"]) + tag}
+        for e in result["entries"]
+    ]
+    return {
+        "is_playlist": True,
+        "playlist_title": result["playlist_title"],
+        "entries": entries,
+    }
+
+
+@app.post("/api/playlist/queue")
+async def api_queue_playlist(req: PlaylistQueueRequest):
+    """Queues every entry of a playlist already returned by
+    /api/playlist/probe - titles are taken as-is (already cleaned/tagged
+    by the probe step), no per-item edit step. Downloads at most
+    PLAYLIST_CONCURRENCY at a time, independent of any other playlist
+    queued separately."""
+    entries = [{"url": e.url, "title": e.title} for e in req.entries]
+    # Capture the configured download folder at playlist initiation time.
+    # Every item in this batch keeps this destination even if the user changes
+    # the app folder setting while the playlist is still downloading.
+    return await job_manager.start_playlist_batch(entries, req.res_cap, get_save_dir(), req.number_titles)
+
+
 @app.post("/api/jobs")
 async def api_start_job(req: StartJobRequest):
     filename = clean_filename(req.filename)
@@ -696,7 +824,7 @@ async def api_start_job(req: StartJobRequest):
 
 @app.post("/api/jobs/cancel")
 async def api_cancel_job(req: CancelRequest):
-    ok = job_manager.cancel_job(req.filename)
+    ok = await job_manager.cancel_job(req.filename)
     return {"ok": ok}
 
 
@@ -807,7 +935,7 @@ async def api_set_playback_position(req: PlaybackPositionRequest):
     no broadcast to other clients, since it's high-frequency and each
     client picks up the latest saved position next time it opens the
     player anyway."""
-    ok = job_manager.set_playback_position(req.filename, req.position)
+    ok = job_manager.set_playback_position(req.filename, req.position, req.completed)
     return {"ok": ok}
 
 

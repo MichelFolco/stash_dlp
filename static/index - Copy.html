@@ -23,77 +23,52 @@
       <button id="download-submit-btn" class="download-submit-btn" title="Start Download">
         <i class="ti ti-download" aria-hidden="true"></i><span>Download</span>
       </button>
-      <!-- Navigation tray toggle button -->
-      <button id="nav-toggle-btn" class="nav-toggle-btn" title="Toggle navigation">
-        <i class="ti ti-menu-2" aria-hidden="true"></i>
-      </button>
     </div>
 
-    <!-- Navigation tray (slides down from under the URL bar) -->
-    <div id="nav-tray" class="nav-tray hidden">
-      <div class="nav-tray-inner">
-        <div id="mode-container" class="mode-container" role="tablist" aria-label="StashDLP views">
-          <button id="dl-mode-btn" class="mode-btn mode-btn-left" title="Downloads">
-            <i class="ti ti-download" aria-hidden="true"></i><span>Downloads</span>
-          </button>
-          <button id="encode-mode-btn" class="mode-btn mode-btn-mid" title="Encoding Queue">
-            <i class="ti ti-player-record" aria-hidden="true"></i><span>Encoding Queue</span>
-          </button>
-          <button id="history-mode-btn" class="mode-btn mode-btn-right" title="History">
-            <i class="ti ti-history" aria-hidden="true"></i><span>History</span>
-          </button>
-        </div>
-
-        <div class="navigation-actions">
-          <button id="stash-status-btn" class="icon-btn hidden" title="Stash (Ctrl+S)">
-            <img src="/static/stash_logo.png" alt="Stash" class="stash-status-icon">
-          </button>
-          <button id="url-args-btn" class="icon-btn" title="Custom yt-dlp arguments">
-            <i class="ti ti-code" aria-hidden="true"></i>
-          </button>
-          <button id="gear-btn" class="icon-btn" title="Settings">
-            <i class="ti ti-settings" aria-hidden="true"></i>
-          </button>
-        </div>
+    <div class="navigation-row">
+      <div id="mode-container" class="mode-container" role="tablist" aria-label="StashDLP views">
+        <button id="dl-mode-btn" class="mode-btn mode-btn-left" title="Downloads">
+          <i class="ti ti-download" aria-hidden="true"></i><span>Downloads</span>
+        </button>
+        <button id="encode-mode-btn" class="mode-btn mode-btn-mid" title="Encoding Queue">
+          <i class="ti ti-player-record" aria-hidden="true"></i><span>Encoding Queue</span>
+        </button>
+        <button id="history-mode-btn" class="mode-btn mode-btn-right" title="History">
+          <i class="ti ti-history" aria-hidden="true"></i><span>History</span>
+        </button>
       </div>
-      <div id="folder-status-row" class="folder-status-row">
-        <div id="folder-status-save" class="folder-status-item" title="Click to choose a download folder">
-          <i class="ti ti-folder-down" aria-hidden="true"></i>
-          <span class="folder-status-path">…</span>
-        </div>
-        <div id="folder-status-target" class="folder-status-item" title="Click to choose a target folder">
-          <i class="ti ti-target" aria-hidden="true"></i>
-          <span class="folder-status-path">…</span>
-        </div>
+
+      <div class="navigation-actions">
+        <button id="stash-status-btn" class="icon-btn hidden" title="Stash (Ctrl+S)">
+          <img src="/static/stash_logo.png" alt="Stash" class="stash-status-icon">
+        </button>
+        <button id="url-args-btn" class="icon-btn" title="Custom yt-dlp arguments">
+          <i class="ti ti-code" aria-hidden="true"></i>
+        </button>
+        <button id="gear-btn" class="icon-btn" title="Settings">
+          <i class="ti ti-settings" aria-hidden="true"></i>
+        </button>
+      </div>
+    </div>
+
+    <div id="folder-status-row" class="folder-status-row">
+      <div id="folder-status-save" class="folder-status-item" title="Click to choose a download folder">
+        <i class="ti ti-folder-down" aria-hidden="true"></i>
+        <span class="folder-status-label">Download Folder</span>
+        <span class="folder-status-path">…</span>
+      </div>
+      <div id="folder-status-target" class="folder-status-item" title="Click to choose a target folder">
+        <i class="ti ti-target" aria-hidden="true"></i>
+        <span class="folder-status-label">Target Folder</span>
+        <span class="folder-status-path">…</span>
       </div>
     </div>
   </div>
 
   <div id="download-view">
-    <!-- Ledger toolbar: filter, audio, sort, sort-dir, refresh, move-all, select -->
-    <div id="ledger-toolbar" class="ledger-toolbar">
-      <input id="ledger-filter" class="ledger-filter-input" type="text"
-             placeholder="Filter by name..." autocomplete="off" spellcheck="false">
-      <button id="ledger-audio-filter-btn" class="icon-btn" title="Show audio-only downloads">
-        <i class="ti ti-music" aria-hidden="true"></i>
-      </button>
-      <select id="ledger-sort" class="ledger-sort-select">
-        <option value="added">Date Added</option>
-        <option value="size">File Size</option>
-        <option value="name">Filename</option>
-      </select>
-      <button id="ledger-sort-dir" class="icon-btn" title="Toggle sort direction">
-        <i class="ti ti-arrow-down" aria-hidden="true"></i>
-      </button>
-      <button id="refresh-btn" class="icon-btn" title="Refresh">
-        <i class="ti ti-refresh" aria-hidden="true"></i>
-      </button>
-      <button id="move-all-btn" class="icon-btn" title="Move all completed to target">
-        <i class="ti ti-arrow-right" aria-hidden="true"></i>
-      </button>
-      <button id="select-mode-btn" class="icon-btn" title="Select">
-        <i class="ti ti-checkbox" aria-hidden="true"></i>
-      </button>
+    <div id="control-bar" class="control-bar">
+      <button id="refresh-btn" class="btn">Refresh</button>
+      <button id="move-all-btn" class="btn">Move All</button>
     </div>
 
     <div id="selection-action-bar" class="selection-action-bar hidden">
@@ -104,6 +79,19 @@
       <button id="selection-delete-btn" class="btn btn-danger" disabled>Delete</button>
     </div>
 
+    <div id="ledger-toolbar" class="ledger-toolbar">
+      <input id="ledger-filter" class="ledger-filter-input" type="text"
+             placeholder="Filter by name..." autocomplete="off" spellcheck="false">
+      <button id="ledger-audio-filter-btn" class="icon-btn" title="Show audio-only downloads">🎵</button>
+      <button id="ledger-hide-completed-btn" class="icon-btn" title="Hide completed downloads">✅</button>
+      <select id="ledger-sort" class="ledger-sort-select">
+        <option value="added">Date Added</option>
+        <option value="size">File Size</option>
+        <option value="name">Filename</option>
+      </select>
+      <button id="ledger-sort-dir" class="icon-btn" title="Toggle sort direction">↓</button>
+      <button id="select-mode-btn" class="icon-btn" title="Select"><i class="ti ti-checkbox"></i></button>
+    </div>
     <div id="ledger-stats-bar" class="ledger-stats-bar"></div>
 
     <div id="queue-list" class="queue-list"></div>
@@ -115,7 +103,6 @@
       <button id="open-converted-btn" class="btn">Open "Converted" Folder</button>
     </div>
 
-    <!-- Encode toolbar: filter + sort -->
     <div id="encode-toolbar" class="ledger-toolbar">
       <input id="encode-filter" class="ledger-filter-input" type="text"
              placeholder="Filter by name..." autocomplete="off" spellcheck="false">
@@ -124,9 +111,7 @@
         <option value="size">Original Size</option>
         <option value="savings">Savings %</option>
       </select>
-      <button id="encode-sort-dir" class="icon-btn" title="Toggle sort direction">
-        <i class="ti ti-arrow-down" aria-hidden="true"></i>
-      </button>
+      <button id="encode-sort-dir" class="icon-btn" title="Toggle sort direction">↓</button>
     </div>
 
     <div id="encode-queue-list" class="queue-list"></div>
@@ -209,9 +194,6 @@
   </div>
   <div id="ctx-auto-confirm-titles-toggle" class="ctx-item ctx-checkable">
     <span class="ctx-check"></span> Auto-Confirm Titles (skip edit step)
-  </div>
-  <div id="ctx-clipboard-monitor-toggle" class="ctx-item ctx-checkable">
-    <span class="ctx-check"></span> Clipboard Monitoring (auto-download URLs)
   </div>
   <div class="ctx-separator"></div>
   <div id="ctx-manage-ytdlp-args" class="ctx-item">Manage yt-dlp Arguments...</div>
@@ -483,7 +465,7 @@
     </div>
     <div id="folder-error" class="modal-error hidden"></div>
     <div id="folder-recent-wrap" class="modal-recent-wrap hidden">
-      <div class="modal-recent-label">Saved folders</div>
+      <div class="modal-recent-label">Recent folders</div>
       <div id="folder-recent-list" class="modal-recent-list"></div>
     </div>
     <div class="modal-actions">
@@ -502,7 +484,7 @@
     </div>
     <div id="target-folder-error" class="modal-error hidden"></div>
     <div id="target-folder-recent-wrap" class="modal-recent-wrap hidden">
-      <div class="modal-recent-label">Saved folders</div>
+      <div class="modal-recent-label">Recent folders</div>
       <div id="target-folder-recent-list" class="modal-recent-list"></div>
     </div>
     <div class="modal-actions">

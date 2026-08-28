@@ -28,7 +28,7 @@ from pathlib import Path
 #   1. Add the new "## vX.YY - ..." entry to CHANGELOG_StashDLP.md.
 #   2. Update APP_VERSION below to that same X.YY.
 # Do not consider the changelog edit done until both are updated.
-APP_VERSION = "1.14"
+APP_VERSION = "1.27"
 
 BACKEND_DIR = Path(__file__).resolve().parent
 

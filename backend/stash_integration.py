@@ -241,6 +241,53 @@ async def find_scenes_by_tag(tag_name: str) -> dict:
     }
 
 
+async def find_largest_scenes(limit: int = 50) -> dict:
+    """List the largest scene files in the Stash library by file size, descending.
+
+    Fetches every scene's first file path and size in one GraphQL round trip,
+    then sorts locally so this does not depend on a server-side size sort key.
+    """
+    query = """
+        query FindAllScenesForSize {
+          findScenes(filter: { per_page: -1 }) {
+            scenes {
+              id
+              title
+              date
+              files { path size }
+            }
+          }
+        }
+    """
+    data = await _graphql_query(query)
+    found = data.get("findScenes") or {}
+    scenes_raw = found.get("scenes") or []
+
+    scored = []
+    for scene in scenes_raw:
+        files = scene.get("files") or []
+        if not files:
+            continue
+        file_info = files[0] or {}
+        raw_path = file_info.get("path", "")
+        size_bytes = int(file_info.get("size") or 0)
+        path = os.path.normpath(unquote(raw_path)) if raw_path else ""
+        filename = os.path.basename(path) if path else ""
+        scored.append({
+            "id": scene.get("id"),
+            "title": scene.get("title") or filename or f"Scene {scene.get('id')}",
+            "date": scene.get("date") or "",
+            "path": path,
+            "url": f"{STASH_HOST}/scenes/{scene.get('id')}",
+            "size_bytes": size_bytes,
+            "size_label": format_file_size(size_bytes),
+        })
+
+    scored.sort(key=lambda item: item["size_bytes"], reverse=True)
+    top = scored[:max(0, limit)]
+    return {"count": len(top), "scenes": top}
+
+
 async def import_stash_scene(
     manager, scene_input: str, tag_id: Optional[str] = None, tag_name: Optional[str] = None
 ) -> dict:
@@ -298,6 +345,7 @@ async def import_stash_scene(
         "file_size": format_file_size(size),
         "is_audio": is_audio,
         "playback_position": 0,
+        "fully_played": False,
         "width": probed.get("width", 0),
         "height": probed.get("height", 0),
         "duration": probed.get("duration", 0),

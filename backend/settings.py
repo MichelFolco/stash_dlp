@@ -14,6 +14,7 @@ import hashlib
 import json
 import os
 import shutil
+import time
 import uuid
 
 from config import (
@@ -36,11 +37,44 @@ def _load() -> dict:
         try:
             with open(SETTINGS_JSON_PATH, "r", encoding="utf-8") as f:
                 _cache = json.load(f)
+                if _migrate_recent_dirs_to_roots(_cache):
+                    _persist(_cache)
                 return _cache
         except Exception:
             pass
     _cache = {}
     return _cache
+
+
+def _migrate_recent_dirs_to_roots(data: dict) -> bool:
+    """One-time, idempotent migration from the old capped MRU
+    recent_dirs/recent_target_dirs lists to the new uncapped
+    save_dir_roots/target_dir_roots lists. Runs the same add-root
+    normalization each old entry would have gone through if it had
+    been added under the new system, so an old list that happened to
+    contain both a folder and one of its subfolders collapses down to
+    just the broader one instead of carrying forward a state the new
+    rules wouldn't allow going forward."""
+    changed = False
+    for old_key, new_key in (
+        ("recent_dirs", "save_dir_roots"),
+        ("recent_target_dirs", "target_dir_roots"),
+    ):
+        if old_key not in data:
+            continue
+        if new_key not in data:
+            roots = []
+            for p in data.get(old_key, []):
+                if not isinstance(p, str) or not os.path.isdir(p):
+                    continue
+                try:
+                    roots = _normalize_roots_for_add(roots, os.path.abspath(p))
+                except ValueError:
+                    continue  # already covered by a broader entry
+            data[new_key] = roots
+        del data[old_key]
+        changed = True
+    return changed
 
 
 def _persist(data: dict) -> None:
@@ -51,9 +85,6 @@ def _persist(data: dict) -> None:
             json.dump(data, f, indent=4)
     except Exception:
         pass
-
-
-MAX_RECENT = 8
 
 
 def _validate_folder_path(raw_path: str) -> str:
@@ -85,37 +116,110 @@ def get_save_dir() -> str:
     return path
 
 
-def get_recent_dirs() -> list:
-    data = _load()
-    recent = data.get("recent_dirs", [])
-    # Filter out folders that no longer exist so the list stays useful
-    return [p for p in recent if os.path.isdir(p)]
+# ── Saved root folders (download side) ─────────────────────────────
+# A "root" is a folder the user explicitly added. Unlike the old
+# recent-folders list, roots aren't capped and aren't themselves what
+# the quick dropdown shows - the dropdown live-scans each root's actual
+# subfolders on disk (see folder_tree.py) and nests them underneath it.
+# Adding a root that's a subfolder of an existing root is rejected
+# (it'd already be reachable by scanning the existing root); adding a
+# root that's an *ancestor* of existing roots instead absorbs them,
+# since scanning the new, broader root will surface those folders too.
+#
+# dir_last_used tracks recency per literal path - root or nested
+# subfolder alike - so both the root ordering and the ordering inside
+# each root's nested tree can be most-recently-used-first.
+def _is_within(path: str, other: str) -> bool:
+    """True if `path` is `other` itself or lives somewhere under it."""
+    path = os.path.normcase(os.path.normpath(path))
+    other = os.path.normcase(os.path.normpath(other))
+    return path == other or path.startswith(other + os.sep)
 
 
-def remove_recent_dir(path: str) -> list:
-    """Removes a single entry from the recent-download-folders list
-    (doesn't touch the folder itself, just the history entry). Returns
-    the updated list."""
+def _normalize_roots_for_add(existing: list, new_path: str) -> list:
+    """Applies the add-root rules against an existing root-path list and
+    returns the updated list (existing list is left untouched). Raises
+    ValueError if new_path is a subfolder of a root that's already
+    saved - it's already reachable there, so adding it separately would
+    just be a redundant, unnecessary duplicate entry."""
+    for root in existing:
+        if _is_within(new_path, root) and root != new_path:
+            raise ValueError(
+                f"'{new_path}' is already inside the saved folder '{root}'."
+            )
+    # Any existing root that's a subfolder of the new, broader path is
+    # now redundant - the new root's scan will surface it on its own.
+    kept = [r for r in existing if not (_is_within(r, new_path) and r != new_path)]
+    if new_path not in kept:
+        kept.append(new_path)
+    return kept
+
+
+def _touch_last_used(data: dict, path: str) -> None:
+    last_used = data.setdefault("dir_last_used", {})
+    last_used[path] = time.time()
+
+
+def get_dir_last_used_map() -> dict:
+    return dict(_load().get("dir_last_used", {}))
+
+
+def _prune_stale_roots(key: str, data: dict) -> list:
+    """Drops any saved root that no longer exists on disk, persisting
+    the change so it doesn't just get re-checked (and silently ignored)
+    forever. Returns the surviving root paths, most-recently-used
+    first (matches the ordering used inside each root's nested tree)."""
+    roots = data.get(key, [])
+    surviving = [p for p in roots if os.path.isdir(p)]
+    if surviving != roots:
+        data[key] = surviving
+        _persist(data)
+    last_used = data.get("dir_last_used", {})
+    return sorted(surviving, key=lambda p: -last_used.get(p, 0))
+
+
+def get_save_dir_roots() -> list:
+    return _prune_stale_roots("save_dir_roots", _load())
+
+
+def add_save_dir_root(raw_path: str) -> list:
+    """Validates, then adds raw_path as a new saved root folder (see
+    _normalize_roots_for_add for the subfolder/ancestor rules). Returns
+    the updated flat root list. Raises ValueError/OSError."""
+    path = _validate_folder_path(raw_path)
     data = _load()
-    data["recent_dirs"] = [p for p in data.get("recent_dirs", []) if p != path]
+    existing = _prune_stale_roots("save_dir_roots", data)
+    data["save_dir_roots"] = _normalize_roots_for_add(existing, path)
+    _touch_last_used(data, path)
     _persist(data)
-    return get_recent_dirs()
+    return data["save_dir_roots"]
 
 
-def _push_recent(path: str, data: dict) -> None:
-    recent = [p for p in data.get("recent_dirs", []) if p != path]
-    recent.insert(0, path)
-    data["recent_dirs"] = recent[:MAX_RECENT]
+def remove_save_dir_root(path: str) -> list:
+    """Removes a single saved root (just the entry, not the folder
+    itself). Returns the updated list."""
+    data = _load()
+    data["save_dir_roots"] = [p for p in data.get("save_dir_roots", []) if p != path]
+    _persist(data)
+    return get_save_dir_roots()
 
 
 def set_save_dir(raw_path: str) -> str:
-    """Validates (creating if needed) and persists a new download folder.
-    Returns the canonical absolute path. Raises ValueError/OSError on
-    anything that isn't usable (e.g. pointing at a file, no permissions)."""
+    """Validates (creating if needed) and persists a new active download
+    folder. If the path isn't already inside a saved root, it's
+    auto-added as a new root (mirrors the old recent-folders
+    convenience of remembering anywhere you've pointed the app at);
+    if it's a subfolder of an existing root, only its recency is
+    touched, since it's already reachable there. Returns the canonical
+    absolute path. Raises ValueError/OSError on anything that isn't
+    usable (e.g. pointing at a file, no permissions)."""
     path = _validate_folder_path(raw_path)
     data = _load()
+    existing = _prune_stale_roots("save_dir_roots", data)
+    if not any(_is_within(path, root) for root in existing):
+        data["save_dir_roots"] = _normalize_roots_for_add(existing, path)
     data["save_dir"] = path
-    _push_recent(path, data)
+    _touch_last_used(data, path)
     _persist(data)
     return path
 
@@ -159,34 +263,40 @@ def get_target_dir() -> str:
     return path
 
 
-def get_recent_target_dirs() -> list:
-    data = _load()
-    recent = data.get("recent_target_dirs", [])
-    return [p for p in recent if os.path.isdir(p)]
+def get_target_dir_roots() -> list:
+    return _prune_stale_roots("target_dir_roots", _load())
 
 
-def remove_recent_target_dir(path: str) -> list:
-    """Removes a single entry from the recent-target-folders list.
-    Returns the updated list."""
+def add_target_dir_root(raw_path: str) -> list:
+    """Same rules as add_save_dir_root, for the target-folder side."""
+    path = _validate_folder_path(raw_path)
     data = _load()
-    data["recent_target_dirs"] = [p for p in data.get("recent_target_dirs", []) if p != path]
+    existing = _prune_stale_roots("target_dir_roots", data)
+    data["target_dir_roots"] = _normalize_roots_for_add(existing, path)
+    _touch_last_used(data, path)
     _persist(data)
-    return get_recent_target_dirs()
+    return data["target_dir_roots"]
 
 
-def _push_recent_target(path: str, data: dict) -> None:
-    recent = [p for p in data.get("recent_target_dirs", []) if p != path]
-    recent.insert(0, path)
-    data["recent_target_dirs"] = recent[:MAX_RECENT]
+def remove_target_dir_root(path: str) -> list:
+    """Removes a single saved target root. Returns the updated list."""
+    data = _load()
+    data["target_dir_roots"] = [p for p in data.get("target_dir_roots", []) if p != path]
+    _persist(data)
+    return get_target_dir_roots()
 
 
 def set_target_dir(raw_path: str) -> str:
     """Validates (creating if needed) and persists the target folder used
-    by 'Move to Target' / 'Move All to Target'."""
+    by 'Move to Target' / 'Move All to Target'. Same auto-root and
+    recency behavior as set_save_dir - see there for the reasoning."""
     path = _validate_folder_path(raw_path)
     data = _load()
+    existing = _prune_stale_roots("target_dir_roots", data)
+    if not any(_is_within(path, root) for root in existing):
+        data["target_dir_roots"] = _normalize_roots_for_add(existing, path)
     data["target_dir"] = path
-    _push_recent_target(path, data)
+    _touch_last_used(data, path)
     _persist(data)
     return path
 
@@ -415,6 +525,16 @@ DEFAULT_DOWNLOAD_PREFS = {
     # firing on genuinely-dead links) can turn it off and just get a
     # normal ERROR card instead.
     "auto_m3u_retry": True,
+    # When on, a fetched/sniffed/playlist-provided title is submitted as
+    # a download immediately rather than staged in the input box for
+    # review/edit first. Applies to every download (single or playlist),
+    # not just playlist items - mainly useful so a playlist batch of
+    # dozens of entries doesn't need per-item review, but it's one
+    # consistent on/off switch rather than a playlist-only special case.
+    "auto_confirm_titles": False,
+    # Monitor the Windows clipboard for newly copied HTTP(S) URLs and
+    # automatically submit them for download.
+    "clipboard_monitor": False,
 }
 VALID_QUALITIES = {"Best", "720p", "480p", "Audio Only"}
 
@@ -424,12 +544,21 @@ def get_download_prefs() -> dict:
     return {**DEFAULT_DOWNLOAD_PREFS, **stored}
 
 
-def set_download_prefs(quality: str, tag_domain: bool, m3u_sniffer: bool, auto_m3u_retry: bool = True) -> dict:
+def set_download_prefs(
+    quality: str,
+    tag_domain: bool,
+    m3u_sniffer: bool,
+    auto_m3u_retry: bool = True,
+    auto_confirm_titles: bool = False,
+    clipboard_monitor: bool = False,
+) -> dict:
     prefs = {
         "quality": quality if quality in VALID_QUALITIES else DEFAULT_DOWNLOAD_PREFS["quality"],
         "tag_domain": bool(tag_domain),
         "m3u_sniffer": bool(m3u_sniffer),
         "auto_m3u_retry": bool(auto_m3u_retry),
+        "auto_confirm_titles": bool(auto_confirm_titles),
+        "clipboard_monitor": bool(clipboard_monitor),
     }
     data = _load()
     data[DOWNLOAD_PREFS_KEY] = prefs

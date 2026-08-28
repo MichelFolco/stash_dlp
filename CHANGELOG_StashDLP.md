@@ -1,3 +1,81 @@
+## v1.27 - Nested, uncapped download/target folders
+- Replaced the old capped (8-entry) recent-folders list with an uncapped list of saved "root" folders for both the download and target folder pickers.
+- The DL:/Target: quick-select dropdown now shows each saved root's actual on-disk subfolders nested underneath it (unlimited depth, 5-level safety cap), live-scanned each time the dropdown opens. Click a folder's chevron to expand its children; click the folder name itself to switch to it.
+- Adding a root that's already inside another saved root is rejected; adding a root that's an ancestor of existing saved roots absorbs them instead of keeping redundant narrower entries.
+- Folders (root or nested) are ordered most-recently-used first, tracked per exact path - picking a nested subfolder now also bumps its root to the top of the root list.
+- The "Change Download/Target Folder..." modal now manages the flat list of saved roots only (add via Browse/Set Folder, remove via the ✕) - nesting is shown in the quick dropdown, not the modal.
+- Saved roots that no longer exist on disk are now dropped automatically instead of just being hidden from the list forever.
+- Existing recent-folders lists are migrated automatically to the new root-folder format on first launch after updating.
+
+## v1.26.5 - Playlist title numbering format
+- Updated optional playlist title numbering to use zero-padded two-digit numbers (`01`, `02`, `03`, etc.) instead of `1`, `2`, `3`.
+- Updated the playlist numbering confirmation prompt to show the new format.
+
+## v1.26.4 - Playlist title numbering
+- When starting a playlist download, StashDLP asks whether playlist item titles should be numbered.
+- When enabled, filenames are prefixed with their playlist position (for example `1-My Video`, `2-Another Video`).
+- Numbering is applied to the queued playlist items on the server, preserving the playlist order.
+
+## v1.26.3
+- Playlist downloads now snapshot the download folder when the playlist is queued. Changing the app's download folder while the playlist is still downloading no longer redirects remaining playlist items to the new folder.
+
+## v1.26.2 - Queue auto-play
+
+- Added automatic playback of the next item in the queue when the current item finishes.
+- Playback follows the queue's current sort/filter order.
+- The next item is determined before the completed item is hidden by the Hide Completed filter.
+
+## v1.26.1 - Management menu styling fixes
+
+- Restored compact styled rows and Edit controls in External Programs.
+- Restored compact styled rows and Edit controls in yt-dlp Arguments site rules.
+- Restored Check Tag recent-tag chips and Stash scene result rows.
+- Restored consistent Open/Import controls for Check Tag and Largest Files results.
+- Added empty-state styling for management lists.
+
+## v1.26 - UI Fixes and Navigation
+
+- Restored styled `.btn` controls used by dialogs and the Encoding Queue.
+- Restored compact styling for ledger status/badge pills.
+- Restored formatting for the Re-encoded version found dialog and its comparison cards.
+- Hamburger navigation is now a true toggle; clicking elsewhere no longer auto-closes it.
+- Moved Download and Target folder displays into the hamburger navigation panel.
+
+## v1.25.1 - Clipboard Monitoring Fix
+
+- Fixed Windows clipboard URL detection on 64-bit systems by declaring the Win32 clipboard/pointer APIs with the correct ctypes pointer types.
+- Added short retries when another application temporarily owns the clipboard immediately after a copy operation.
+- Clipboard-triggered downloads no longer require the StashDLP input state to be READY; a newly copied valid URL takes priority and starts the automatic download pipeline.
+
+# v1.25 - Clipboard Monitoring
+
+- Added optional Windows clipboard monitoring for HTTP(S) URLs.
+- Monitoring works regardless of which application is focused.
+- Newly copied URLs automatically start downloads without title staging/editing.
+- Added a Settings toggle for Clipboard Monitoring.
+- StashDLP itself is excluded as the active source to avoid re-downloading links copied by the app.
+
+# v1.24.1
+- Removed remaining intrinsic minimum-width constraints from the ledger toolbar and its filter/sort controls so the desktop window can actually be resized down to the ultra-narrow breakpoint.
+
+# v1.24
+- Added an ultra-narrow display mode for panes as narrow as a quarter of a mobile screen.
+- Ultra-narrow view keeps only the URL input, Transfer All to Target arrow, and compact download ledger thumbnails.
+- Download cards show live progress, speed, and ETA while hiding titles and secondary metadata.
+- Preserved card context-menu behavior and direct playback for completed thumbnails.
+- Removed the application's global minimum width so the window can shrink below the previous 300px limit.
+
+# v1.23
+- Revamped the UI with a narrower, more professional dark design while preserving the existing workflow.
+- Added a persistent **Download** button beside the URL field; the URL input, logo, and download action remain visible together.
+- Replaced the icon-only view switcher with explicit **Downloads**, **Encoding Queue**, and **History** navigation.
+- Made **Download Folder** and **Target Folder** information permanently visible with compact paths and folder icons.
+- Replaced emoji controls with consistent Tabler icons and modern rounded controls.
+
+# v1.22
+- Added **Largest Files** to the Stash menu. It lists the 50 largest Stash scene files by size, descending, using the same Open/Import results modal as Check Tag. File sizes are fetched in one GraphQL request and sorted locally for Stash-version compatibility.
+- Added Windows clipboard monitoring: when a supported browser is focused and Stash DLP is not focused, newly copied HTTP/HTTPS URLs are automatically placed into the Download URL field.
+
 <!--
 MAINTENANCE (for any LLM/agent editing this project): adding an entry
 here is a two-file edit. backend/config.py's APP_VERSION constant
@@ -6,6 +84,42 @@ the version number in the new top entry below, in the same turn. This
 has drifted out of sync before - don't add an entry here without also
 updating config.py.
 -->
+
+## v1.21 - Hide empty playback progress bars
+- Completed cards no longer show an empty playback progress bar when the saved playback position is `0` or `null`.
+- The full watched bar remains visible for files marked `fully_played`.
+
+## v1.20 - Rename Converted/ twin with source file
+- When a completed card has a twin in `Converted/`, renaming the card now renames the twin to the same filename stem while preserving the twin file extension.
+- The rename is rejected if the new twin filename would collide with an existing file in `Converted/`.
+
+## v1.19 - Replace completed downloads with their Converted/ twin
+- Added **Replace with Twin** to completed cards that have a twin in `Converted/`.
+- The action moves the twin into the download folder, replacing the original file, and refreshes the card metadata.
+
+## v1.18 - Per-file playback progress bar, sticky "watched" flag, compact folder paths
+- Every completed file's card now shows a thin playback-progress bar (amber) reflecting `playback_position`/`duration`, so scanning the ledger shows at a glance what's been started vs. never touched - previously this data existed (used for player resume) but was never surfaced outside the player itself.
+- New sticky `fully_played` flag, separate from `playback_position`: reaching the end of a file already reset `playback_position` back to 0 (so the next play starts over rather than resuming right at the end) - without a separate flag, a finished file and a never-started one were indistinguishable once position was back to 0. `fully_played` only ever flips False→True (set via a new `completed` param on `POST /api/jobs/playback-position`, sent when playback reaches the end) and is never cleared afterward, even by a full rewatch - a rewatch just updates `playback_position` normally on top of it. Surfaced as a green "✓ WATCHED"/"✓ LISTENED" badge next to the filename, and the progress bar itself renders as a full green bar (rather than misleadingly empty) when `fully_played` is set and no rewatch is currently in progress.
+- New `compactFolderDisplay()` helper collapses long folder paths to `drive/.../last-folder (free space)` (e.g. `C:\Users\Phil\Documents\GitHub\project\downloads` → `C:\...\downloads (123.3 GB free)`) instead of letting the browser's CSS ellipsis clip whichever end happens to overflow first, which tended to hide the one thing that actually identifies the folder day-to-day. Applied to the settings-menu Folder/Target rows, the toolbar DL:/Target: chips, and every job card's per-file path line. The full uncollapsed path is still always available via the existing tooltip/title attribute.
+- `fully_played` threaded through every job-dict construction site (`start_job`, playlist batch items, extracted-audio jobs, Stash-imported jobs, and both the in-memory and on-disk filesystem-scan reconciliation paths) alongside the existing `playback_position` field, so it survives a refresh/restart the same way.
+
+## v1.17 - Widened auto-refresh interval, denylist instead of allowlist
+- Auto-refresh poll interval widened from 5s to 30s (matching the existing Stash-status poll) - everything the app does to its own jobs already arrives instantly over the websocket, so this poll's only real job is catching external changes (a file dropped into Converted/ by hand), which was never on a tight SLA. Also cuts the frequency of the full `os.listdir()` + `Converted/` listing + potential ffprobe calls each tick makes, which isn't free on a networked download folder.
+- `job_manager.seed_from_filesystem()`'s replace-rebuild and `filesystem_scan.scan_filesystem()`'s queue.json rewrite were both allowlists (only kept status X across a refresh) - the exact shape of bug that let QUEUED get silently wiped in v1.15 until the v1.16 hotfix. Both are now denylists instead: they only drop the specific statuses they're actually authoritative over (`DONE`/`ERROR`/`CANCELLED` derived from what's really on disk), and preserve everything else by default - so a future status won't need a matching edit in these two places just to avoid being silently dropped on the next refresh.
+
+## v1.16 - Fixed playlist queue vanishing after the 5s auto-refresh
+- Bug: right after confirming a playlist download, all queued entries (e.g. all 26 for a 26-video playlist) would appear in the ledger for well under a second, then vanish entirely except the 3 that had already started downloading.
+- Root cause: `job_manager.seed_from_filesystem(replace=True)` - called on every folder change *and* on every periodic `/api/refresh` (the frontend's 5-second auto-refresh poll, which predates playlist support) - only preserved jobs with status `DOWNLOADING` across the rebuild. The new `QUEUED` status introduced in v1.15 wasn't in that allowlist, so the very next auto-refresh tick after queueing a playlist wiped every item still waiting on a download slot.
+- Fixed in two places: `job_manager.seed_from_filesystem()`'s in-memory rebuild now keeps `QUEUED` alongside `DOWNLOADING`; `filesystem_scan.scan_filesystem()`'s disk-persisted `queue.json` rewrite now does the same (this second one didn't cause the visual bug, but would have silently dropped queued playlist items from disk permanently on a server restart mid-playlist).
+- Also tightened `start_playlist_batch()`'s duplicate-title dedupe check to skip `QUEUED` as well as `DOWNLOADING` (previously only guarded against re-queueing something already downloading).
+
+## v1.15 - Playlist download support
+- Every pasted URL is now checked with a new `probe_playlist()` (`ytdlp_utils.py`) - a `yt-dlp --flat-playlist --dump-single-json` call that lists a playlist/channel's entries without downloading anything, run in parallel with the normal single-item fetch-title/M3U-sniff call so a regular single-video paste pays no added latency. A result of 2+ entries is treated as a playlist; anything else (single video, error, timeout) falls through to the existing single-item pipeline unchanged.
+- Detected playlists skip the per-item EDITING step entirely and are queued as a batch via new `POST /api/playlist/probe` + `POST /api/playlist/queue` endpoints and `job_manager.start_playlist_batch()`. Each entry lands in the ledger immediately with a new `QUEUED` status, then downloads at most 3 at a time (`PLAYLIST_CONCURRENCY`) via an `asyncio.Semaphore` scoped to that one batch - a second playlist queued separately gets its own independent semaphore/cap, so two playlists running at once means up to 6 concurrent downloads total, not a shared cap of 3.
+- New `QUEUED` job status is fully wired through the ledger: its own card style (waiting-for-slot message, no progress bar), Cancel available while waiting (flips it straight to `CANCELLED` rather than waiting out the queue), excluded from multi-select/batch-delete the same way `DOWNLOADING` already was, and a new `job_status` websocket message for the QUEUED→DOWNLOADING transition (distinct from `job_finished`, which still only fires on a terminal state).
+- New **Auto-Confirm Titles** setting (`auto_confirm_titles` in download prefs, off by default) - when on, a fetched/sniffed/playlist title is submitted as a download immediately instead of staged in the input box for review. Applies uniformly to single downloads, M3U-sniffed links, and playlist entries alike, rather than being a playlist-only special case.
+- `job_manager.cancel_job()` is now async (was sync) to support broadcasting the QUEUED→CANCELLED transition over the websocket; its one call site in `main.py`'s `/api/jobs/cancel` was updated to `await` it.
+- A detected playlist now confirms before queueing (`window.confirm`, matching every other destructive/bulk action in the app) - shows the entry count and playlist title where available, with a chance to back out before anything is queued. Declining resets to the ready state, same as any other cancelled paste.
 
 ## v1.14 - Fixed Synchronize Audio final render not matching the previewed delay
 - `createClip()` (frontend) was hardcoding `delay_ms: 0` on every Create Clip call, including after **Redo Clip** mid-session - silently discarding whatever delay the user had already dialed in and confirmed sounded right, and resetting the visible delay field back to 0 with it. This contradicted `create_clip()`'s own backend contract (it accepts `delay_ms` specifically so a Redo Clip -> Create Clip keeps the dialed-in delay), which the frontend never honored. Now `createClip()` sends the delay currently in the field and leaves the field alone instead of zeroing it.

@@ -1,0 +1,129 @@
+/* ==========================================
+   COLOR SYSTEM & BASE RESET
+   ========================================== */
+:root {
+  --bg-main: #0a0e12;
+  --bg-card: #121820;
+  --bg-input: #0b0f14;
+  --border-subtle: #1f2937;
+  --teal-primary: #14b8a6;
+  --teal-hover: #0d9488;
+  --teal-glow: rgba(20, 184, 166, 0.25);
+  --text-primary: #f3f4f6;
+  --text-muted: #9ca3af;
+}
+
+*, *::before, *::after {
+  box-sizing: border-box;
+}
+
+body {
+  background-color: var(--bg-main) !important;
+  color: var(--text-primary);
+  font-family: system-ui, -apple-system, sans-serif;
+  margin: 0;
+  padding: 16px;
+}
+
+/* ==========================================
+   CARDS & CONTAINERS (Frame Revamp Only)
+   ========================================== */
+.card, .panel, fieldset, section, div[class*="container"], div[class*="box"] {
+  background-color: var(--bg-card);
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.card:hover, .panel:hover, fieldset:hover {
+  border-color: rgba(20, 184, 166, 0.3);
+}
+
+/* ==========================================
+   SLEEK INPUTS & CONTROLS
+   ========================================== */
+input[type="text"],
+input[type="url"],
+input[type="number"],
+input[type="password"],
+select,
+textarea {
+  background-color: var(--bg-input) !important;
+  color: var(--text-primary) !important;
+  border: 1px solid var(--border-subtle) !important;
+  border-radius: 6px !important;
+  padding: 8px 12px !important;
+  font-size: 0.875rem !important;
+  outline: none !important;
+  height: auto;
+  max-width: 100%;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+input[type="text"]:focus,
+input[type="url"]:focus,
+input[type="number"]:focus,
+select:focus,
+textarea:focus {
+  border-color: var(--teal-primary) !important;
+  box-shadow: 0 0 0 3px var(--teal-glow) !important;
+}
+
+/* Native Select Arrow Cleanup */
+select {
+  appearance: none;
+  background-image: url("data:image/svg+xml;charset=UTF-8,%3csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%2314b8a6' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3e%3cpolyline points='6 9 12 15 18 9'%3e%3c/polyline%3e%3c/svg%3e");
+  background-repeat: no-repeat;
+  background-position: right 10px center;
+  background-size: 14px;
+  padding-right: 32px !important;
+}
+
+/* Checkboxes & Radios */
+input[type="checkbox"], input[type="radio"] {
+  accent-color: var(--teal-primary);
+  width: 16px;
+  height: 16px;
+  cursor: pointer;
+}
+
+/* ==========================================
+   MODERN BUTTONS
+   ========================================== */
+button, input[type="button"], input[type="submit"] {
+  background-color: var(--teal-primary) !important;
+  color: #040d12 !important;
+  border: 1px solid var(--teal-primary) !important;
+  border-radius: 6px !important;
+  padding: 8px 16px !important;
+  font-weight: 600 !important;
+  font-size: 0.875rem !important;
+  cursor: pointer !important;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: background-color 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease, transform 0.05s ease;
+}
+
+button:hover, input[type="button"]:hover, input[type="submit"]:hover {
+  background-color: var(--teal-hover) !important;
+  border-color: var(--teal-hover) !important;
+  box-shadow: 0 0 10px var(--teal-glow) !important;
+}
+
+button:active, input[type="button"]:active, input[type="submit"]:active {
+  transform: scale(0.98);
+}
+
+/* Secondary / Cancel Action Overrides */
+button.secondary, button[data-action="cancel"], button.btn-secondary {
+  background-color: transparent !important;
+  color: var(--text-primary) !important;
+  border: 1px solid var(--border-subtle) !important;
+}
+
+button.secondary:hover, button[data-action="cancel"]:hover {
+  border-color: var(--teal-primary) !important;
+  color: var(--teal-primary) !important;
+}

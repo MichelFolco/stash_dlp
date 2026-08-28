@@ -71,6 +71,7 @@ def scan_filesystem():
                     "file_size": file_size_str,
                     "is_audio": is_audio,
                     "playback_position": info.get("playback_position", 0),
+                    "fully_played": info.get("fully_played", False),
                     "width": info.get("width", 0),
                     "height": info.get("height", 0),
                     "duration": info.get("duration", 0),
@@ -80,8 +81,12 @@ def scan_filesystem():
                 }
             )
         else:
-            if status == "DOWNLOADING":
-                updated_tracker[filename] = info
+            if status == "DONE":
+                # The file's gone - deleted outside the app, moved, etc.
+                # A DONE entry means nothing without the file it points
+                # to, so let it drop rather than persisting a dangling
+                # record forever.
+                pass
             elif status in ("ERROR", "CANCELLED"):
                 # Failed/cancelled downloads stay in the ledger until the
                 # user explicitly deletes them via the card - even if no
@@ -108,6 +113,19 @@ def scan_filesystem():
                         "audio_codec": info.get("audio_codec", ""),
                     }
                 )
+            else:
+                # DOWNLOADING, QUEUED, or any future in-flight status -
+                # no file to reconcile against yet, so just keep it as
+                # persisted. Denylist, not allowlist: DONE is the only
+                # status this function actively drops (above), so a
+                # new status added later is preserved by default
+                # instead of needing its own branch here to avoid being
+                # silently wiped on the next refresh - which is exactly
+                # what happened to QUEUED before this fix. (This branch
+                # never has to add anything to done_jobs - job_manager's
+                # own in-memory self.jobs is what keeps DOWNLOADING and
+                # QUEUED surfaced as cards after a refresh.)
+                updated_tracker[filename] = info
 
     for stem in sorted(completed_files):
         if stem not in updated_tracker:
