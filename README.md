@@ -72,7 +72,7 @@ STASH_DLP_HOST=0.0.0.0 python backend/main.py
 # SCREENSHOTS
 
 ## Main UI
-![[UI Screenshot.png](.screenshots/UI Screenshot.png)]]
+![UI Screenshot](./screenshots/UI Screenshot.png)
 1. Logo.  Click to display current version.
 2. Input box for download URLs
 3. Button to start download (keybind: Enter)
