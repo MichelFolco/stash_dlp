@@ -4,6 +4,7 @@ import os
 import subprocess
 import sys
 from typing import Optional, List
+from urllib.parse import quote
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -1095,6 +1096,15 @@ async def api_stream_video(filename: str, request: Request, source: str = "origi
     media_filename = os.path.basename(media_path)
     if os.path.normpath(os.path.dirname(media_path)) == os.path.normpath(get_converted_dir()):
         media_filename = f"{CONVERTED_DIR_NAME}/{media_filename}"
+    # HTTP header values have to be Latin-1-encodable; a title with an
+    # emoji or other non-Latin-1 character in it (playlist titles come
+    # through unsanitized aside from stripping Windows-illegal path
+    # characters, so this happens routinely) would otherwise crash this
+    # response entirely - not something the frontend could work around,
+    # since it never gets a chance to see the header at all. Percent-
+    # encoding round-trips exactly and is always header-safe; the one
+    # consumer (setSyncPlayerSource in app.js) decodes it back.
+    media_filename_header = quote(media_filename)
 
     if range_header:
         try:
@@ -1115,14 +1125,14 @@ async def api_stream_video(filename: str, request: Request, source: str = "origi
             "Content-Range": f"bytes {start}-{end}/{file_size}",
             "Accept-Ranges": "bytes",
             "Content-Length": str(chunk_length),
-            "X-Media-Filename": media_filename,
+            "X-Media-Filename": media_filename_header,
         }
         return StreamingResponse(
             _iter_file_range(media_path, start, chunk_length),
             status_code=206, media_type=media_type, headers=headers,
         )
 
-    headers = {"Accept-Ranges": "bytes", "Content-Length": str(file_size), "X-Media-Filename": media_filename}
+    headers = {"Accept-Ranges": "bytes", "Content-Length": str(file_size), "X-Media-Filename": media_filename_header}
     return StreamingResponse(
         _iter_file_range(media_path, 0, file_size),
         status_code=200, media_type=media_type, headers=headers,

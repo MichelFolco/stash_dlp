@@ -1,3 +1,7 @@
+## v1.27.1 - Fixed playback crash on filenames with emoji/non-Latin-1 characters
+- `/api/jobs/stream` was setting a raw (non-percent-encoded) `X-Media-Filename` response header. HTTP headers must be Latin-1-encodable, so any file whose title contained an emoji or other non-Latin-1 character (common on unedited playlist titles) crashed the endpoint with a 500 and refused to play in-app, even though the file itself was completely fine (playable in VLC, valid per ffprobe).
+- The header value is now percent-encoded on the way out and decoded on the way in (only consumer: the audio-sync tool's filename display) - round-trips exactly, no filenames or downloaded files need to change.
+
 ## v1.27 - Nested, uncapped download/target folders
 - Replaced the old capped (8-entry) recent-folders list with an uncapped list of saved "root" folders for both the download and target folder pickers.
 - The DL:/Target: quick-select dropdown now shows each saved root's actual on-disk subfolders nested underneath it (unlimited depth, 5-level safety cap), live-scanned each time the dropdown opens. Click a folder's chevron to expand its children; click the folder name itself to switch to it.

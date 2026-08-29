@@ -2569,8 +2569,9 @@ function setSyncPlayerSource(filename, source) {
     .then(res => {
       const name = res.headers.get("X-Media-Filename");
       if (name) {
-        syncAudioFilename.textContent = name;
-        syncAudioFilename.title = name;
+        const decoded = decodeURIComponent(name);
+        syncAudioFilename.textContent = decoded;
+        syncAudioFilename.title = decoded;
       }
     })
     .catch(() => {});
