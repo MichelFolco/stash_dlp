@@ -1,3 +1,7 @@
+## v1.28 - Title prefix
+- Added a "Title Prefix" text field + "Apply Title Prefix" toggle to the settings flyout. When on, the saved text is prepended to every generated title - single downloads, M3U8 stream sniffs, and playlist entries alike (the same three places the existing [domain] tag already applies to) - so it shows up already in place during the title review/edit step.
+- The prefix text and its on/off toggle are stored separately, so turning it off doesn't erase what you typed - flip it back on later and it's still there.
+
 ## v1.27.1 - Fixed playback crash on filenames with emoji/non-Latin-1 characters
 - `/api/jobs/stream` was setting a raw (non-percent-encoded) `X-Media-Filename` response header. HTTP headers must be Latin-1-encodable, so any file whose title contained an emoji or other non-Latin-1 character (common on unedited playlist titles) crashed the endpoint with a 500 and refused to play in-app, even though the file itself was completely fine (playable in VLC, valid per ffprobe).
 - The header value is now percent-encoded on the way out and decoded on the way in (only consumer: the audio-sync tool's filename display) - round-trips exactly, no filenames or downloaded files need to change.

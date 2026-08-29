@@ -535,6 +535,14 @@ DEFAULT_DOWNLOAD_PREFS = {
     # Monitor the Windows clipboard for newly copied HTTP(S) URLs and
     # automatically submit them for download.
     "clipboard_monitor": False,
+    # Text prepended to every generated title (single downloads, M3U8
+    # sniffs, and playlist entries alike - same three places tag_domain
+    # already applies to) when title_prefix_enabled is on. Kept as two
+    # separate fields rather than one, so turning the prefix off doesn't
+    # lose whatever text was typed in - flip it back on later and it's
+    # still there.
+    "title_prefix": "",
+    "title_prefix_enabled": False,
 }
 VALID_QUALITIES = {"Best", "720p", "480p", "Audio Only"}
 
@@ -551,6 +559,8 @@ def set_download_prefs(
     auto_m3u_retry: bool = True,
     auto_confirm_titles: bool = False,
     clipboard_monitor: bool = False,
+    title_prefix: str = "",
+    title_prefix_enabled: bool = False,
 ) -> dict:
     prefs = {
         "quality": quality if quality in VALID_QUALITIES else DEFAULT_DOWNLOAD_PREFS["quality"],
@@ -559,6 +569,8 @@ def set_download_prefs(
         "auto_m3u_retry": bool(auto_m3u_retry),
         "auto_confirm_titles": bool(auto_confirm_titles),
         "clipboard_monitor": bool(clipboard_monitor),
+        "title_prefix": title_prefix or "",
+        "title_prefix_enabled": bool(title_prefix_enabled),
     }
     data = _load()
     data[DOWNLOAD_PREFS_KEY] = prefs

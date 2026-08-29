@@ -165,6 +165,8 @@ class DownloadPrefsRequest(BaseModel):
     auto_m3u_retry: bool = True
     auto_confirm_titles: bool = False
     clipboard_monitor: bool = False
+    title_prefix: str = ""
+    title_prefix_enabled: bool = False
 
 
 class PlaylistProbeRequest(BaseModel):
@@ -403,8 +405,21 @@ async def api_get_download_prefs():
 @app.post("/api/download-prefs")
 async def api_set_download_prefs(req: DownloadPrefsRequest):
     return set_download_prefs(
-        req.quality, req.tag_domain, req.m3u_sniffer, req.auto_m3u_retry, req.auto_confirm_titles, req.clipboard_monitor
+        req.quality, req.tag_domain, req.m3u_sniffer, req.auto_m3u_retry, req.auto_confirm_titles,
+        req.clipboard_monitor, req.title_prefix, req.title_prefix_enabled,
     )
+
+
+def _apply_title_prefix(title: str) -> str:
+    """Prepends the saved title prefix, if the toggle is on and there's
+    actually a prefix to add. Applied at the same three spots tag_domain
+    already is (fetch-title, find-link, playlist probe), so a prefix
+    shows up consistently everywhere a title gets generated, not just
+    the single-download review box."""
+    prefs = get_download_prefs()
+    if prefs.get("title_prefix_enabled") and prefs.get("title_prefix"):
+        return prefs["title_prefix"] + title
+    return title
 
 
 @app.get("/api/ytdlp-args")
@@ -747,7 +762,7 @@ async def api_fetch_title(req: FetchTitleRequest):
         domain = get_domain(req.url)
         if domain:
             tag = f" [{domain}]"
-    return {"title": clean_filename(title) + tag, "raw_title": title}
+    return {"title": _apply_title_prefix(clean_filename(title) + tag), "raw_title": title}
 
 
 @app.post("/api/find-link")
@@ -769,7 +784,7 @@ async def api_find_link(req: FindLinkRequest):
 
     return {
         "stream_url": stream_url,
-        "suggested_title": clean_filename(page_title) + tag,
+        "suggested_title": _apply_title_prefix(clean_filename(page_title) + tag),
     }
 
 
@@ -790,7 +805,7 @@ async def api_probe_playlist(req: PlaylistProbeRequest):
             tag = f" [{domain}]"
 
     entries = [
-        {"url": e["url"], "title": clean_filename(e["title"]) + tag}
+        {"url": e["url"], "title": _apply_title_prefix(clean_filename(e["title"]) + tag)}
         for e in result["entries"]
     ]
     return {

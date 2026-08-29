@@ -41,6 +41,8 @@ const state = {
   autoM3uRetry: true,
   autoConfirmTitles: false,
   clipboardMonitor: false,
+  titlePrefix: "",
+  titlePrefixEnabled: false,
   ytdlpDefaultArgs: "",
   ytdlpDomainArgs: {},
   jobs: new Map(),
@@ -81,6 +83,7 @@ const historyModeBtn = el("history-mode-btn");
 const encodeModeBtn = el("encode-mode-btn");
 const modeContainer = el("mode-container");
 const resDropdown = el("res-dropdown");
+const titlePrefixInput = el("title-prefix-input");
 const ctxVersion = el("ctx-version");
 const ctxSaveDir = el("ctx-save-dir");
 const ctxChangeFolder = el("ctx-change-folder");
@@ -534,6 +537,8 @@ async function refreshDownloadPrefs() {
     state.autoM3uRetry = data.auto_m3u_retry !== false;
     state.autoConfirmTitles = !!data.auto_confirm_titles;
     state.clipboardMonitor = !!data.clipboard_monitor;
+    state.titlePrefix = data.title_prefix || "";
+    state.titlePrefixEnabled = !!data.title_prefix_enabled;
   } catch (e) {
     // Backend unreachable at boot - just keep the hard-coded defaults
     // already baked into the HTML/state.
@@ -543,6 +548,8 @@ async function refreshDownloadPrefs() {
   el("ctx-auto-m3u-retry-toggle").querySelector(".ctx-check").textContent = state.autoM3uRetry ? "✓" : "";
   el("ctx-auto-confirm-titles-toggle").querySelector(".ctx-check").textContent = state.autoConfirmTitles ? "✓" : "";
   el("ctx-clipboard-monitor-toggle").querySelector(".ctx-check").textContent = state.clipboardMonitor ? "✓" : "";
+  el("ctx-title-prefix-toggle").querySelector(".ctx-check").textContent = state.titlePrefixEnabled ? "✓" : "";
+  titlePrefixInput.value = state.titlePrefix;
 }
 
 async function refreshYtdlpArgs() {
@@ -803,6 +810,8 @@ function saveDownloadPrefs() {
       auto_m3u_retry: state.autoM3uRetry,
       auto_confirm_titles: state.autoConfirmTitles,
       clipboard_monitor: state.clipboardMonitor,
+      title_prefix: state.titlePrefix,
+      title_prefix_enabled: state.titlePrefixEnabled,
     }),
   }).catch((e) => { /* best-effort - not worth surfacing a UI error over */ });
 }
@@ -3400,6 +3409,23 @@ el("ctx-clipboard-monitor-toggle").addEventListener("click", () => {
   saveDownloadPrefs();
   flashStatus(state.clipboardMonitor ? "Clipboard monitoring enabled." : "Clipboard monitoring disabled.");
 });
+
+el("ctx-title-prefix-toggle").addEventListener("click", () => {
+  state.titlePrefixEnabled = !state.titlePrefixEnabled;
+  el("ctx-title-prefix-toggle").querySelector(".ctx-check").textContent = state.titlePrefixEnabled ? "✓" : "";
+  saveDownloadPrefs();
+});
+
+// "change" (fires on blur/Enter, not every keystroke) rather than
+// "input" - this only needs to persist once the person's done typing,
+// same as every other settings field in this flyout.
+titlePrefixInput.addEventListener("change", () => {
+  state.titlePrefix = titlePrefixInput.value;
+  saveDownloadPrefs();
+});
+// Typing a space or hitting Enter inside the settings flyout shouldn't
+// fall through to any global keyboard shortcuts bound on the document.
+titlePrefixInput.addEventListener("keydown", (e) => e.stopPropagation());
 
 el("ctx-restart-app").addEventListener("click", async () => {
   closeMenus();

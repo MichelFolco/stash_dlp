@@ -876,6 +876,18 @@ html, body {
   font-size: 12px;
 }
 
+.ctx-text-input {
+  background: var(--panel);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 4px 6px;
+  font-size: 12px;
+  flex: 1;
+  min-width: 0;
+}
+.ctx-text-input:focus { outline: 1px solid var(--teal); }
+
 .folder-quickmenu { max-width: 320px; }
 .folder-quickmenu .ctx-item {
   overflow: hidden;
