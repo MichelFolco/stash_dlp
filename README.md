@@ -5,6 +5,7 @@ A self-hosted, browser-based front end for [yt-dlp](https://github.com/yt-dlp/yt
 * [DESCRIPTION](#description)
 * [FEATURES](#features)
 * [INSTALLATION](#installation)
+* [SCREENSHOTS](#screenshots)
 * [USAGE](#usage)
   * [Downloading](#downloading)
   * [Playlists](#playlists)
@@ -22,8 +23,7 @@ A self-hosted, browser-based front end for [yt-dlp](https://github.com/yt-dlp/yt
 
 StashDLP wraps yt-dlp in a lightweight web UI so you can queue downloads, track their progress, and manage the resulting files without touching a terminal. It runs as a small FastAPI server (`backend/main.py`) that serves a static frontend and talks to yt-dlp/ffmpeg on your behalf, pushing live status over a websocket so the page updates itself as jobs progress.
 
-It's designed to run locally or on a LAN box you leave on — point it at a download folder, paste links into it from any device on the network, and let it work through the queue.
-
+It is designed to run locally or on a LAN box you leave on — point it at a download folder, paste links into it from any device on the network, and let it work through the queue.
 # FEATURES
 
 * **Paste-to-download** — drop a URL into the input field; the title is fetched automatically for review before the download starts (or immediately, if Auto-Confirm Titles is enabled).
@@ -33,9 +33,9 @@ It's designed to run locally or on a LAN box you leave on — point it at a down
 * **Re-encoding queue** — send any completed file to a separate encode queue (resolution/quality/container controls, size estimate before you commit) without blocking new downloads.
 * **Audio sync tool** — a clip-based workflow for correcting out-of-sync audio: preview a short clip at a chosen delay, iterate, then render the full file once you're happy with it.
 * **Clipboard monitoring** (Windows) — optionally watch the clipboard for HTTP(S) URLs and kick off a download automatically the moment one is copied, regardless of which window is focused.
-* **M3U8 stream detection** — pages that don't expose a direct video URL are sniffed for an underlying `.m3u8` playlist.
+* **M3U8 stream detection** — Sites that are not supported by yt-dlp can sometimes be processes to download videos by sniffed for an underlying `.m3u8` playlist.  Toggle for auto fallback on fail in settings.
 * **Per-domain yt-dlp arguments** — set default yt-dlp arguments globally or override them per domain (useful for things like `--impersonate chrome` on sites that block the default client).
-* **External "open with" programs** — register your own editors/players and send a completed file to them straight from its card.
+* **External "open with" programs** — register your own editors/players and send a downloaded file to them straight from its card.
 * **History log & search** — every completed/renamed download is logged, searchable later to recover the original URL for a file you already have.
 * **Compact, resizable UI** — a narrow, dark desktop-style layout that scales down to a quarter-mobile-screen "ultra-narrow" mode showing just the essentials (URL box, transfer arrow, thumbnails, progress).
 
@@ -68,6 +68,24 @@ STASH_DLP_HOST=0.0.0.0 python backend/main.py
 `STASH_DLP_PORT` can be set the same way to change the port.
 
 > **Note:** if you have more than one yt-dlp install on your system (e.g. a standalone binary alongside a pip-installed copy), invoking it as `python -m yt_dlp` is more reliable than a bare `yt-dlp` on your `PATH`, since it guarantees you're calling the same interpreter's copy the rest of the app is using.
+
+# SCREENSHOTS
+
+## Main UI
+![[UI Screenshot.png](.screenshots/UI Screenshot.png)]]
+1. Logo.  Click to display current version.
+2. Input box for download URLs
+3. Button to start download (keybind: Enter)
+4. Hamburger to show/hide settings
+5. UI Tabs
+6. yt-DLP arguments options and Settings
+7. Download folder picker/selector
+8. Target folder picker/selector
+9. Audio files filter
+10. Sorting categories
+11. Sorting direction, refresh queue, move all downloads to target folder, multi-select options
+12. Ledger statistics.
+
 
 # USAGE
 
