@@ -1,3 +1,15 @@
+## v1.29 - UI pass: less clutter, more at-a-glance info
+- **Ledger card badges**: RE-ENCODED/SYNCHRONIZED/HAS TWIN/Stash-file pills replaced with a compact row of icons (hover for the same info) so a card with several flags doesn't crowd out its own title. AUDIO, the Stash tag name, and WATCHED/LISTENED stay as text pills.
+- **Ledger stats bar**: now shows a live queued/downloading/error breakdown alongside the file count and total size, not just the total.
+- **Status filter chips**: one-tap Queued/Downloading/Done/Error toggles under the toolbar, in addition to the existing name filter - multiple can be active at once.
+- **Toolbar decluttered**: sort field and direction merged into one dropdown ("Date Added (Newest)" etc.) in both the Downloads and Encode Queue toolbars; Refresh and Move All to Target moved into a new "⋯" overflow menu.
+- **Settings flyout** now grouped under Download Behavior / Automation / Advanced section labels instead of one long flat list.
+- **Nested folder dropdown** (from v1.27) now has a "‹ Back" row at the top of every level below the root list.
+- Small polish: thumbnails pulse while loading instead of sitting blank, and a card fades in when it's newly added or its status changes.
+
+## v1.28.1 - Icon-only tab bar
+- Removed the "Downloads" / "Encoding Queue" / "History" text captions from the top tab bar - icons only now (tooltips on hover still show the name). Matches what the mobile layout already did at narrow widths; now applied at every size.
+
 ## v1.28 - Title prefix
 - Added a "Title Prefix" text field + "Apply Title Prefix" toggle to the settings flyout. When on, the saved text is prepended to every generated title - single downloads, M3U8 stream sniffs, and playlist entries alike (the same three places the existing [domain] tag already applies to) - so it shows up already in place during the title review/edit step.
 - The prefix text and its on/off toggle are stored separately, so turning it off doesn't erase what you typed - flip it back on later and it's still there.

@@ -54,6 +54,7 @@ const state = {
   externalPrograms: [],
   filterText: "",
   audioOnlyFilter: false,
+  statusFilters: new Set(),
   sortField: "added",
   sortDir: "desc",
   selectionMode: false,
@@ -1120,6 +1121,10 @@ function getFilteredSortedJobs() {
     filtered = filtered.filter(({ job }) => job.is_audio);
   }
 
+  if (state.statusFilters.size > 0) {
+    filtered = filtered.filter(({ job }) => state.statusFilters.has(job.status));
+  }
+
   if (state.hideCompletedFilter) {
     filtered = filtered.filter(({ job }) => job.status !== "DONE");
   }
@@ -1186,6 +1191,7 @@ function renderLedger() {
     let card = state.renderedCards.get(job.filename);
     if (!card || state.renderedCardSigs.get(job.filename) !== sig) {
       card = buildJobCard(job);
+      card.classList.add("job-card-enter");
       state.renderedCards.set(job.filename, card);
       state.renderedCardSigs.set(job.filename, sig);
     }
@@ -1220,21 +1226,41 @@ function jobCardSignature(job) {
 }
 
 // Thin summary row under the toolbar: count + total size of whatever's
-// currently visible in the ledger, so it stays honest against the
-// active filter/audio-only/hide-completed state instead of always
-// reflecting the full queue.
+// currently visible in the ledger, plus a per-status breakdown (queued/
+// downloading/error - "done" is left out since it's normally the
+// majority and implied by the total) so a mid-batch playlist download
+// is readable at a glance without scrolling the list. Stays honest
+// against the active filter/audio-only/status-chip state instead of
+// always reflecting the full queue.
 function renderLedgerStatsBar(jobs) {
-  if (jobs.length === 0) {
-    ledgerStatsBar.textContent = "";
-    return;
-  }
+  ledgerStatsBar.innerHTML = "";
+  if (jobs.length === 0) return;
+
   let totalBytes = 0;
+  const counts = { QUEUED: 0, DOWNLOADING: 0, ERROR: 0 };
   for (const job of jobs) {
     const bytes = parseSizeToBytes(job.file_size);
     if (bytes > 0) totalBytes += bytes;
+    if (job.status in counts) counts[job.status]++;
   }
+
   const fileLabel = jobs.length === 1 ? "1 file" : `${jobs.length} files`;
-  ledgerStatsBar.textContent = totalBytes > 0 ? `${fileLabel} \u00b7 ${formatBytes(totalBytes)}` : fileLabel;
+  const summary = document.createElement("span");
+  summary.textContent = totalBytes > 0 ? `${fileLabel} \u00b7 ${formatBytes(totalBytes)}` : fileLabel;
+  ledgerStatsBar.appendChild(summary);
+
+  const chipDefs = [
+    ["QUEUED", "stat-queued", "queued"],
+    ["DOWNLOADING", "stat-downloading", "downloading"],
+    ["ERROR", "stat-error", "error"],
+  ];
+  for (const [status, cls, label] of chipDefs) {
+    if (counts[status] === 0) continue;
+    const chip = document.createElement("span");
+    chip.className = `stat-chip ${cls}`;
+    chip.textContent = `${counts[status]} ${label}`;
+    ledgerStatsBar.appendChild(chip);
+  }
 }
 
 function renderHistoryLedger() {
@@ -1348,7 +1374,9 @@ function playCompletionPing() {
 const ledgerFilterInput = el("ledger-filter");
 const ledgerAudioFilterBtn = el("ledger-audio-filter-btn");
 const ledgerSortSelect = el("ledger-sort");
-const ledgerSortDirBtn = el("ledger-sort-dir");
+const ledgerMoreBtn = el("ledger-more-btn");
+const ledgerMoreMenu = el("ledger-more-menu");
+const ledgerStatusFilterRow = el("ledger-status-filter-row");
 const ledgerStatsBar = el("ledger-stats-bar");
 
 // ── Navigation tray toggle ──────────────────────────────────
@@ -1370,16 +1398,41 @@ ledgerAudioFilterBtn.addEventListener("click", () => {
   renderLedger();
 });
 
+// Sort field and direction used to be two separate controls; combined
+// into one dropdown ("Date Added (Newest)" etc.) so the toolbar doesn't
+// need a second icon button just for direction.
 ledgerSortSelect.addEventListener("change", () => {
-  state.sortField = ledgerSortSelect.value;
+  const [field, dir] = ledgerSortSelect.value.split("_");
+  state.sortField = field;
+  state.sortDir = dir;
   renderLedger();
 });
 
-ledgerSortDirBtn.addEventListener("click", () => {
-  state.sortDir = state.sortDir === "asc" ? "desc" : "asc";
-  ledgerSortDirBtn.textContent = state.sortDir === "asc" ? "↑" : "↓";
-  renderLedger();
+ledgerMoreBtn.addEventListener("click", (e) => {
+  e.stopPropagation();
+  closeOtherFlyouts(ledgerMoreMenu);
+  ledgerMoreMenu.classList.toggle("hidden");
+  if (!ledgerMoreMenu.classList.contains("hidden")) {
+    positionDropdownBelow(ledgerMoreMenu, ledgerMoreBtn);
+  }
 });
+
+// ── Status filter chips (Queued/Downloading/Done/Error) ─────
+// Multiple can be active at once (shows the union); none active means
+// "show everything", same behavior as before these chips existed.
+const statusChips = Array.from(document.querySelectorAll(".status-chip"));
+for (const chip of statusChips) {
+  chip.addEventListener("click", () => {
+    const status = chip.dataset.status;
+    if (state.statusFilters.has(status)) {
+      state.statusFilters.delete(status);
+    } else {
+      state.statusFilters.add(status);
+    }
+    chip.classList.toggle("active", state.statusFilters.has(status));
+    renderLedger();
+  });
+}
 
 // ── Multi-select ──────────────────────────────────────────────
 // Selection lives as a Set of filenames on state, independent of any
@@ -1652,11 +1705,16 @@ function buildJobCard(job) {
     placeholder.textContent = "🎵";
     thumb.appendChild(placeholder);
   } else {
+    thumb.classList.add("loading");
     const thumbImg = document.createElement("img");
     thumbImg.loading = "lazy";
     thumbImg.alt = "";
     thumbImg.src = `/api/jobs/thumbnail?filename=${encodeURIComponent(job.filename)}`;
+    thumbImg.addEventListener("load", () => {
+      thumb.classList.remove("loading");
+    }, { once: true });
     thumbImg.addEventListener("error", () => {
+      thumb.classList.remove("loading");
       thumbImg.remove();
       const placeholder = document.createElement("span");
       placeholder.className = "job-thumb-placeholder";
@@ -1703,37 +1761,45 @@ function buildJobCard(job) {
     badge.textContent = "AUDIO";
     titleRow.appendChild(badge);
   }
+
+  // Compact icon cluster for informational (non-urgent) status flags -
+  // full-text pills for all of these at once could crowd out the title
+  // itself on a card that's re-encoded AND synced AND a Stash import.
+  // Each icon keeps its meaning as a hover tooltip instead.
+  const statusIcons = document.createElement("span");
+  statusIcons.className = "job-status-icons";
   if (job.status === "DONE" && isReencoded(job.filename)) {
-    const pill = document.createElement("span");
-    pill.className = "reencoded-badge";
-    pill.textContent = "RE-ENCODED";
-    titleRow.appendChild(pill);
+    const icon = document.createElement("i");
+    icon.className = "ti ti-recycle job-status-icon-reencoded";
+    icon.title = "Re-encoded: a converted twin exists in Converted/.";
+    statusIcons.appendChild(icon);
   }
   if (job.status === "DONE" && job.synchronized) {
-    const pill = document.createElement("span");
-    pill.className = "synchronized-badge";
-    pill.textContent = "SYNCHRONIZED";
-    titleRow.appendChild(pill);
+    const icon = document.createElement("i");
+    icon.className = "ti ti-adjustments job-status-icon-synchronized";
+    icon.title = "Audio synchronized.";
+    statusIcons.appendChild(icon);
   }
   // Direct filesystem check (done server-side on every Refresh, see
   // job_manager.seed_from_filesystem) for a twin sitting in Converted/.
   // Only surfaced when RE-ENCODED/SYNCHRONIZED aren't already showing,
   // since those already say "there's a twin" more specifically - this
-  // pill exists to catch the cases those miss, e.g. a twin left over
+  // icon exists to catch the cases those miss, e.g. a twin left over
   // from before a server restart (Encode Manager history is in-memory).
   if (job.status === "DONE" && job.has_twin && !isReencoded(job.filename) && !job.synchronized) {
-    const pill = document.createElement("span");
-    pill.className = "has-twin-badge";
-    pill.textContent = "HAS TWIN";
-    pill.title = "A file already exists for this download in Converted/. Press Refresh if this seems out of date.";
-    titleRow.appendChild(pill);
+    const icon = document.createElement("i");
+    icon.className = "ti ti-copy job-status-icon-has-twin";
+    icon.title = "A file already exists for this download in Converted/. Press Refresh if this seems out of date.";
+    statusIcons.appendChild(icon);
   }
   if (job.source_type === "stash" && !job.is_audio) {
-    const pill = document.createElement("span");
-    pill.className = "stash-badge";
-    pill.textContent = "Stash file";
-    titleRow.appendChild(pill);
+    const icon = document.createElement("i");
+    icon.className = "ti ti-database job-status-icon-stash";
+    icon.title = "Stash file";
+    statusIcons.appendChild(icon);
   }
+  if (statusIcons.children.length > 0) titleRow.appendChild(statusIcons);
+
   if (job.stash_tag_name) {
     const pill = document.createElement("span");
     pill.className = "stash-tag-badge";
@@ -2047,7 +2113,7 @@ function cssEscape(s) {
 // Every submenu flyout in the app - Copy/File (job menu) and
 // Folders/Settings (logo menu) all share this one open/close/position
 // mechanism, so anything that resets menu state just walks this list.
-const ALL_FLYOUTS = [openWithFlyout, copyFlyout, fileFlyout, foldersFlyout, settingsFlyout, dlFolderQuickMenu, targetFolderQuickMenu, urlArgsFlyout, stashMenuFlyout];
+const ALL_FLYOUTS = [openWithFlyout, copyFlyout, fileFlyout, foldersFlyout, settingsFlyout, dlFolderQuickMenu, targetFolderQuickMenu, urlArgsFlyout, stashMenuFlyout, ledgerMoreMenu];
 
 function hideAllFlyouts() {
   for (const flyout of ALL_FLYOUTS) flyout.classList.add("hidden");
@@ -3871,31 +3937,36 @@ function updateModeButtons() {
 }
 
 // Search History Mode reuses the same ledger toolbar (filter + sort),
-// but "Move All"/"Refresh" and the audio-only filter don't
-// apply to history records, and there's no file size to sort by.
+// but "Move All"/"Refresh", the audio-only filter, and the status
+// filter chips don't apply to history records, and there's no file
+// size to sort by.
 function enterHistoryModeUI() {
-  // Remove or comment out the old control bar references
-  // el("control-bar").classList.add("hidden");
   ledgerAudioFilterBtn.classList.add("hidden");
-  // Remove the hide-completed reference
-  // ledgerHideCompletedBtn.classList.add("hidden");
+  ledgerMoreBtn.classList.add("hidden");
+  ledgerStatusFilterRow.classList.add("hidden");
   selectModeBtn.classList.add("hidden");
-  // Disable the size sort option
-  const sizeOption = ledgerSortSelect.querySelector('option[value="size"]');
-  if (sizeOption) sizeOption.disabled = true;
+  // Disable the two size_* sort options - not meaningful for history
+  // entries (no file-size info is logged there).
+  for (const value of ["size_desc", "size_asc"]) {
+    const opt = ledgerSortSelect.querySelector(`option[value="${value}"]`);
+    if (opt) opt.disabled = true;
+  }
   if (state.sortField === "size") {
     state.sortField = "added";
-    ledgerSortSelect.value = "added";
+    state.sortDir = "desc";
+    ledgerSortSelect.value = "added_desc";
   }
 }
 
 function exitHistoryModeUI() {
-  // el("control-bar").classList.remove("hidden");
   ledgerAudioFilterBtn.classList.remove("hidden");
-  // ledgerHideCompletedBtn.classList.remove("hidden");
+  ledgerMoreBtn.classList.remove("hidden");
+  ledgerStatusFilterRow.classList.remove("hidden");
   selectModeBtn.classList.remove("hidden");
-  const sizeOption = ledgerSortSelect.querySelector('option[value="size"]');
-  if (sizeOption) sizeOption.disabled = false;
+  for (const value of ["size_desc", "size_asc"]) {
+    const opt = ledgerSortSelect.querySelector(`option[value="${value}"]`);
+    if (opt) opt.disabled = false;
+  }
 }
 
 downloadSubmitBtn.addEventListener("click", () => {
@@ -3982,6 +4053,25 @@ function closeAllTreeFlyouts() {
 // flyout) and drops anything deeper than it.
 function renderTreeLevel(nodes, container, { depth, current, applyPath, closeDropdown }) {
   container.innerHTML = "";
+
+  // Depth 0 is the dropdown's own root list - closing it just closes
+  // the whole dropdown, no "back" needed. Anything deeper is one of
+  // the dynamically-created flyouts, so give it a way back up besides
+  // re-clicking the chevron that opened it or clicking away entirely.
+  if (depth > 0) {
+    const back = document.createElement("div");
+    back.className = "ctx-item";
+    back.innerHTML = '<i class="ti ti-arrow-left" aria-hidden="true"></i> Back';
+    back.addEventListener("click", (e) => {
+      e.stopPropagation();
+      closeTreeFlyoutsFrom(depth);
+    });
+    container.appendChild(back);
+    const sep = document.createElement("div");
+    sep.className = "ctx-separator";
+    container.appendChild(sep);
+  }
+
   for (const node of nodes) {
     const row = document.createElement("div");
     row.className = "ctx-item ctx-item-tree";
@@ -4132,7 +4222,10 @@ async function refreshDownloadLedger() {
   }
 }
 
-el("refresh-btn").addEventListener("click", refreshDownloadLedger);
+el("refresh-btn").addEventListener("click", () => {
+  ledgerMoreMenu.classList.add("hidden");
+  refreshDownloadLedger();
+});
 
 // Keeps the queue (and in particular the has_twin/HAS TWIN pill, which
 // only gets recomputed server-side on a scan) current without the user
@@ -4154,6 +4247,7 @@ setInterval(() => {
 
 
 el("move-all-btn").addEventListener("click", async () => {
+  ledgerMoreMenu.classList.add("hidden");
   const targetPath = ctxTargetDir.title || "";
   if (!targetPath) {
     window.alert("Set a target folder first (right-click the logo \u2192 Change Target Folder...).");
@@ -4538,7 +4632,6 @@ document.addEventListener("keydown", async (e) => {
 const encodeQueueList = el("encode-queue-list");
 const encodeFilterInput = el("encode-filter");
 const encodeSortSelect = el("encode-sort");
-const encodeSortDirBtn = el("encode-sort-dir");
 const newEncodeJobBtn = el("new-encode-job-btn");
 const openConvertedBtn = el("open-converted-btn");
 const newEncodeJobModal = el("new-encode-job-modal");
@@ -4897,12 +4990,9 @@ encodeFilterInput.addEventListener("input", () => {
   renderEncodeLedger();
 });
 encodeSortSelect.addEventListener("change", () => {
-  state.encodeSortField = encodeSortSelect.value;
-  renderEncodeLedger();
-});
-encodeSortDirBtn.addEventListener("click", () => {
-  state.encodeSortDir = state.encodeSortDir === "asc" ? "desc" : "asc";
-  encodeSortDirBtn.textContent = state.encodeSortDir === "asc" ? "↑" : "↓";
+  const [field, dir] = encodeSortSelect.value.split("_");
+  state.encodeSortField = field;
+  state.encodeSortDir = dir;
   renderEncodeLedger();
 });
 

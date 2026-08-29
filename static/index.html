@@ -33,14 +33,14 @@
     <div id="nav-tray" class="nav-tray hidden">
       <div class="nav-tray-inner">
         <div id="mode-container" class="mode-container" role="tablist" aria-label="StashDLP views">
-          <button id="dl-mode-btn" class="mode-btn mode-btn-left" title="Downloads">
-            <i class="ti ti-download" aria-hidden="true"></i><span>Downloads</span>
+          <button id="dl-mode-btn" class="mode-btn mode-btn-left" title="Downloads" aria-label="Downloads">
+            <i class="ti ti-download" aria-hidden="true"></i>
           </button>
-          <button id="encode-mode-btn" class="mode-btn mode-btn-mid" title="Encoding Queue">
-            <i class="ti ti-player-record" aria-hidden="true"></i><span>Encoding Queue</span>
+          <button id="encode-mode-btn" class="mode-btn mode-btn-mid" title="Encoding Queue" aria-label="Encoding Queue">
+            <i class="ti ti-player-record" aria-hidden="true"></i>
           </button>
-          <button id="history-mode-btn" class="mode-btn mode-btn-right" title="History">
-            <i class="ti ti-history" aria-hidden="true"></i><span>History</span>
+          <button id="history-mode-btn" class="mode-btn mode-btn-right" title="History" aria-label="History">
+            <i class="ti ti-history" aria-hidden="true"></i>
           </button>
         </div>
 
@@ -70,7 +70,7 @@
   </div>
 
   <div id="download-view">
-    <!-- Ledger toolbar: filter, audio, sort, sort-dir, refresh, move-all, select -->
+    <!-- Ledger toolbar: filter, audio, sort+direction, overflow (refresh/move-all), select -->
     <div id="ledger-toolbar" class="ledger-toolbar">
       <input id="ledger-filter" class="ledger-filter-input" type="text"
              placeholder="Filter by name..." autocomplete="off" spellcheck="false">
@@ -78,22 +78,28 @@
         <i class="ti ti-music" aria-hidden="true"></i>
       </button>
       <select id="ledger-sort" class="ledger-sort-select">
-        <option value="added">Date Added</option>
-        <option value="size">File Size</option>
-        <option value="name">Filename</option>
+        <option value="added_desc">Date Added (Newest)</option>
+        <option value="added_asc">Date Added (Oldest)</option>
+        <option value="size_desc">File Size (Largest)</option>
+        <option value="size_asc">File Size (Smallest)</option>
+        <option value="name_asc">Filename (A-Z)</option>
+        <option value="name_desc">Filename (Z-A)</option>
       </select>
-      <button id="ledger-sort-dir" class="icon-btn" title="Toggle sort direction">
-        <i class="ti ti-arrow-down" aria-hidden="true"></i>
-      </button>
-      <button id="refresh-btn" class="icon-btn" title="Refresh">
-        <i class="ti ti-refresh" aria-hidden="true"></i>
-      </button>
-      <button id="move-all-btn" class="icon-btn" title="Move all completed to target">
-        <i class="ti ti-arrow-right" aria-hidden="true"></i>
+      <button id="ledger-more-btn" class="icon-btn" title="More actions">
+        <i class="ti ti-dots-vertical" aria-hidden="true"></i>
       </button>
       <button id="select-mode-btn" class="icon-btn" title="Select">
         <i class="ti ti-checkbox" aria-hidden="true"></i>
       </button>
+    </div>
+
+    <!-- One-tap status filter chips - multiple can be active at once;
+         none active means "show everything" (same as before this existed). -->
+    <div id="ledger-status-filter-row" class="status-filter-row">
+      <button class="status-chip" data-status="QUEUED">Queued</button>
+      <button class="status-chip" data-status="DOWNLOADING">Downloading</button>
+      <button class="status-chip" data-status="DONE">Done</button>
+      <button class="status-chip" data-status="ERROR">Error</button>
     </div>
 
     <div id="selection-action-bar" class="selection-action-bar hidden">
@@ -120,13 +126,13 @@
       <input id="encode-filter" class="ledger-filter-input" type="text"
              placeholder="Filter by name..." autocomplete="off" spellcheck="false">
       <select id="encode-sort" class="ledger-sort-select">
-        <option value="added">Date Added</option>
-        <option value="size">Original Size</option>
-        <option value="savings">Savings %</option>
+        <option value="added_desc">Date Added (Newest)</option>
+        <option value="added_asc">Date Added (Oldest)</option>
+        <option value="size_desc">Original Size (Largest)</option>
+        <option value="size_asc">Original Size (Smallest)</option>
+        <option value="savings_desc">Savings % (Highest)</option>
+        <option value="savings_asc">Savings % (Lowest)</option>
       </select>
-      <button id="encode-sort-dir" class="icon-btn" title="Toggle sort direction">
-        <i class="ti ti-arrow-down" aria-hidden="true"></i>
-      </button>
     </div>
 
     <div id="encode-queue-list" class="queue-list"></div>
@@ -187,7 +193,13 @@
 </div>
 
 <!-- Settings flyout: Max Res + toggles -->
+<div id="ledger-more-menu" class="ctx-menu hidden">
+  <div id="refresh-btn" class="ctx-item"><i class="ti ti-refresh" aria-hidden="true"></i> Refresh</div>
+  <div id="move-all-btn" class="ctx-item"><i class="ti ti-arrow-right" aria-hidden="true"></i> Move All to Target</div>
+</div>
+
 <div id="settings-flyout" class="ctx-menu hidden">
+  <div class="ctx-section-label">Download Behavior</div>
   <div class="ctx-item ctx-row">
     <span class="ctx-label">Max Res:</span>
     <select id="res-dropdown" class="res-dropdown">
@@ -197,7 +209,6 @@
       <option value="Audio Only">Audio Only</option>
     </select>
   </div>
-  <div class="ctx-separator"></div>
   <div id="ctx-tag-toggle" class="ctx-item ctx-checkable">
     <span class="ctx-check">✓</span> Tag File [Domain]
   </div>
@@ -207,13 +218,14 @@
   <div id="ctx-auto-m3u-retry-toggle" class="ctx-item ctx-checkable">
     <span class="ctx-check">✓</span> Auto-Retry Failed Downloads via M3U
   </div>
+  <div class="ctx-separator"></div>
+  <div class="ctx-section-label">Automation</div>
   <div id="ctx-auto-confirm-titles-toggle" class="ctx-item ctx-checkable">
     <span class="ctx-check"></span> Auto-Confirm Titles (skip edit step)
   </div>
   <div id="ctx-clipboard-monitor-toggle" class="ctx-item ctx-checkable">
     <span class="ctx-check"></span> Clipboard Monitoring (auto-download URLs)
   </div>
-  <div class="ctx-separator"></div>
   <div class="ctx-item ctx-row">
     <span class="ctx-label">Title Prefix:</span>
     <input type="text" id="title-prefix-input" class="ctx-text-input" placeholder="e.g. [MyChannel] ">
@@ -222,6 +234,7 @@
     <span class="ctx-check"></span> Apply Title Prefix
   </div>
   <div class="ctx-separator"></div>
+  <div class="ctx-section-label">Advanced</div>
   <div id="ctx-manage-ytdlp-args" class="ctx-item">Manage yt-dlp Arguments...</div>
 </div>
 
