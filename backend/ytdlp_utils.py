@@ -168,6 +168,43 @@ def has_converted_twin(filename: str, converted_stems: set) -> bool:
     return any(stem.startswith(suffix_prefix) for stem in converted_stems)
 
 
+def list_converted_entries() -> dict:
+    """Returns {stem: full_path} for every file currently in Converted/,
+    listing the folder exactly once. A superset of list_converted_stems()
+    (its keys are the same stem set) for callers that also need the
+    actual path - e.g. to stat/probe a twin's size and resolution -
+    without paying for a second os.listdir()."""
+    converted_dir = get_converted_dir()
+    try:
+        entries = os.listdir(converted_dir)
+    except OSError:
+        return {}
+    result = {}
+    for fname in entries:
+        full_path = os.path.join(converted_dir, fname)
+        if os.path.isfile(full_path):
+            result[os.path.splitext(fname)[0]] = full_path
+    return result
+
+
+def find_converted_twin_path(filename: str, converted_entries: dict):
+    """Given the {stem: path} map from list_converted_entries(), returns
+    the full path of filename's twin, or None. Mirrors
+    find_converted_file()'s matching (exact stem first, then the newest
+    ' (' suffix match) purely in-memory - no disk access."""
+    if filename in converted_entries:
+        return converted_entries[filename]
+    suffix_prefix = filename + " ("
+    candidates = [
+        (stem, path) for stem, path in converted_entries.items()
+        if stem.startswith(suffix_prefix)
+    ]
+    if candidates:
+        candidates.sort(key=lambda sp: os.path.getmtime(sp[1]), reverse=True)
+        return candidates[0][1]
+    return None
+
+
 def get_downloaded_file_size(filename: str, save_dir: str | None = None):
     path = find_media_file(filename, save_dir)
     if path is None:

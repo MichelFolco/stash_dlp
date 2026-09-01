@@ -24,7 +24,8 @@ from ytdlp_utils import (
     get_downloaded_file_size,
     find_media_file,
     find_converted_file,
-    list_converted_stems,
+    list_converted_entries,
+    find_converted_twin_path,
     has_converted_twin,
     is_audio_file,
     get_domain,
@@ -122,7 +123,7 @@ class JobManager:
         # auto-refresh poll), so turning that into N listdirs per tick
         # would scale badly with queue size, and worse on a networked
         # Converted/ path.
-        converted_stems = list_converted_stems()
+        converted_entries = list_converted_entries()
 
         for job in done_jobs:
             filename = job["filename"]
@@ -197,6 +198,48 @@ class JobManager:
                         disk_queue[filename]["ext"] = ext
                         queue_dirty = True
 
+            has_twin = has_converted_twin(filename, converted_entries)
+            twin_size = 0
+            twin_size_label = ""
+            twin_width = 0
+            twin_height = 0
+            if has_twin:
+                twin_path = find_converted_twin_path(filename, converted_entries)
+                if twin_path:
+                    try:
+                        twin_stat = os.stat(twin_path)
+                        twin_size = twin_stat.st_size
+                        twin_size_label = format_file_size(twin_size)
+                        # Resolution is the only part of this that needs
+                        # ffprobe (size is a free stat()), and this loop
+                        # runs on every refresh poll - so cache it in
+                        # disk_queue keyed off the twin's own mtime+size,
+                        # reprobing only when the twin file has actually
+                        # changed (e.g. a fresh re-encode replaced it).
+                        cached_twin = disk_queue.get(filename, {}).get("twin_cache")
+                        if (
+                            cached_twin
+                            and cached_twin.get("mtime") == twin_stat.st_mtime
+                            and cached_twin.get("size") == twin_size
+                        ):
+                            twin_width = cached_twin.get("width", 0)
+                            twin_height = cached_twin.get("height", 0)
+                        else:
+                            try:
+                                probed_twin = await probe_basic_info(twin_path)
+                            except Exception:
+                                probed_twin = {"width": 0, "height": 0}
+                            twin_width = probed_twin.get("width", 0)
+                            twin_height = probed_twin.get("height", 0)
+                            if filename in disk_queue:
+                                disk_queue[filename]["twin_cache"] = {
+                                    "mtime": twin_stat.st_mtime, "size": twin_size,
+                                    "width": twin_width, "height": twin_height,
+                                }
+                                queue_dirty = True
+                    except OSError:
+                        pass
+
             self.jobs[filename] = {
                 "filename": filename,
                 "url": job["url"],
@@ -232,7 +275,11 @@ class JobManager:
                 # (or one dropped into Converted/ by hand). Checked
                 # against the single listing above, not a fresh listdir
                 # per job.
-                "has_twin": has_converted_twin(filename, converted_stems),
+                "has_twin": has_twin,
+                "twin_size": twin_size,
+                "twin_size_label": twin_size_label,
+                "twin_width": twin_width,
+                "twin_height": twin_height,
                 "save_dir": disk_queue.get(filename, {}).get("save_dir", get_save_dir()),
             }
 
@@ -273,6 +320,10 @@ class JobManager:
             "synchronized": False,
             "audio_delay_ms": 0,
             "has_twin": False,  # nothing in Converted/ yet - a download just started
+            "twin_size": 0,
+            "twin_size_label": "",
+            "twin_width": 0,
+            "twin_height": 0,
             "save_dir": get_save_dir(),
         }
         self.jobs[filename] = job
@@ -366,6 +417,10 @@ class JobManager:
             "synchronized": False,
             "audio_delay_ms": 0,
             "has_twin": False,
+            "twin_size": 0,
+            "twin_size_label": "",
+            "twin_width": 0,
+            "twin_height": 0,
             "save_dir": save_dir,
         }
         self.jobs[filename] = job
@@ -968,6 +1023,10 @@ class JobManager:
         job["video_codec"] = probed.get("video_codec", job.get("video_codec", ""))
         job["audio_codec"] = probed.get("audio_codec", job.get("audio_codec", ""))
         job["has_twin"] = False
+        job["twin_size"] = 0
+        job["twin_size_label"] = ""
+        job["twin_width"] = 0
+        job["twin_height"] = 0
 
         if filename in self.saved_queue:
             self.saved_queue[filename]["file_size"] = job["file_size"]

@@ -1,3 +1,33 @@
+## v1.30.4 - Resolution/M3U/Clipboard moved to icon tray
+- Moved the Max Res combobox, M3U Sniffer Mode toggle, and Clipboard Monitoring toggle out of the gear (Settings) flyout and into the icon tray next to the History icon, so they're reachable without opening a menu.
+- M3U Sniffer and Clipboard Monitoring are now plain icon toggle buttons (radar and clipboard icons) that highlight teal when active, matching the existing audio-filter toggle pattern - no more text captions or checkmarks for these two.
+- Max Res keeps its combobox behavior but is now a compact icon-prefixed control in the tray instead of a labeled row in the Settings flyout.
+
+## v1.30.3 - Twin size/resolution on cards, streamlined encode UI, menu fix
+- Renamed the card menu item to "Promote Twin" (was briefly just "Promote" in 1.30.2).
+- Encode modal streamlined for mobile width: single-column, top-to-bottom order is now Size reduction estimate → Resolution cap → Deinterlace → Auto-crop black bars → Light denoise → Force aspect ratio, with the Quality section (mode toggle, codec, encoder, CRF/target size, preset) below that. Removed the manual Target width/height fields (aspect-ratio presets still compute them internally) and the whole Advanced section - Audio/Container/Subtitles/oversized-behavior now just use their previous defaults (Copy audio, codec's default container, copy subtitles, flag-if-oversized) rather than being exposed as controls.
+- A card whose file has a twin in Converted/ (re-encoded, synced, or dropped in by hand) now shows the twin's size and resolution plus what percent of the source's size that is, right under the source file's own size line. Updates immediately when a matching encode job finishes, no refresh needed.
+- The ledger's stats bar now also shows an alternate total size for whatever's currently visible, using each twin's size in place of its source's where one exists.
+- HAS TWIN no longer gets suppressed by RE-ENCODED/SYNCHRONIZED - it now shows or hides purely based on whether a twin file exists in Converted/, and stacks with any other status icon.
+- Added "Encoding" and "Encoded" status filter chips alongside the existing Queued/Downloading/Done/Error ones - "Encoding" matches a card with an active (queued/in-progress) encode job, "Encoded" matches a card that's been re-encoded.
+
+## v1.30.2 - Queue filter/menu tweaks
+- Added "Encoding" and "Encoded" status filter chips alongside the existing Queued/Downloading/Done/Error ones - "Encoding" matches a card with an active (queued/in-progress) encode job, "Encoded" matches a card that's been re-encoded.
+- Renamed the card menu item "Replace with Twin" to "Promote".
+
+## v1.30.1 - Folder quick-menu fixes and polish
+- Fixed the "‹ Back" row in a nested folder submenu doing nothing - it was closing flyouts starting one level too deep, so it never actually closed the level you were looking at.
+- The DL:/Target: quick-select dropdown (and its nested subfolder flyouts) now scrolls instead of running off the bottom of the screen for a root with lots of subfolders.
+- Added a Recent/A–Z sort toggle to the dropdown's root-folder list, applied recursively as you expand nested folders. Preference is remembered between sessions.
+- Saved root folders can now be removed directly from the dropdown (a small framed "−" button on the row) instead of only through the Change Folder modal - click it for an inline "Remove this folder?" confirmation before it's unlisted. This removes it from the saved-roots list only, it does not delete anything from disk.
+
+## v1.30 - Encode Queue merged into the download ledger
+- Removed the dedicated Encoding Queue tab entirely. Encoding status now shows directly on its source file's download card: a live progress bar with a cancel button while queued/encoding, and the existing RE-ENCODED icon (now with real savings numbers in its tooltip) once done. A failed encode shows a new error icon with the failure message.
+- Starting an encode now happens from a card's own "..." menu ("Re-encode...") instead of a separate "+ New Encode Job" button with a source-file dropdown - the source is already known, so the modal opens straight to its settings.
+- "Open 'Converted' Folder" moved into the ledger's "⋯" overflow menu.
+- Dropped the "Browse for a file not in the ledger" option - encoding now only ever starts from something already in your download ledger. If you relied on encoding arbitrary files outside the ledger, this is a real capability change, not just a UI move.
+- Backend: `/api/encode/sources` and `/api/encode/browse-source` removed; the encode probe/estimate/enqueue endpoints now take a required ledger `filename` instead of an optional `filename`-or-`path`.
+
 ## v1.29 - UI pass: less clutter, more at-a-glance info
 - **Ledger card badges**: RE-ENCODED/SYNCHRONIZED/HAS TWIN/Stash-file pills replaced with a compact row of icons (hover for the same info) so a card with several flags doesn't crowd out its own title. AUDIO, the Stash tag name, and WATCHED/LISTENED stay as text pills.
 - **Ledger stats bar**: now shows a live queued/downloading/error breakdown alongside the file count and total size, not just the total.

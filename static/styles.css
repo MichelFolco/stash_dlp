@@ -289,6 +289,36 @@ html, body {
 }
 .icon-btn.hidden { display: none; }
 
+.res-tray-item {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  height: 34px;
+  padding: 0 6px 0 8px;
+  border-radius: var(--radius);
+  color: var(--text-muted);
+  transition: color 0.2s, background 0.2s;
+}
+.res-tray-item:hover {
+  color: var(--text-secondary);
+  background: var(--panel-2);
+}
+.res-tray-item .ti {
+  font-size: 15px;
+  flex-shrink: 0;
+}
+.res-dropdown-tray {
+  background: transparent;
+  border: none;
+  color: inherit;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  padding: 0;
+  max-width: 64px;
+}
+.res-dropdown-tray:focus { outline: none; }
+
 /* ── Folder status row (single line, icons only) ──────────── */
 .folder-status-row {
   display: flex;
@@ -329,8 +359,8 @@ html, body {
   min-width: 0;
 }
 
-/* ── Download/Encode views ─────────────────────────────────── */
-#download-view, #encode-view {
+/* ── Download view ──────────────────────────────────────────── */
+#download-view {
   display: flex;
   flex-direction: column;
   flex: 1;
@@ -338,7 +368,6 @@ html, body {
   gap: 6px;
   overflow: hidden;
 }
-#download-view.hidden, #encode-view.hidden { display: none; }
 
 /* ── Ledger toolbar (single line) ─────────────────────────── */
 .ledger-toolbar {
@@ -734,6 +763,18 @@ html, body {
 .job-size .arrow { color: var(--text-muted); margin: 0 2px; }
 .job-size .saved { color: var(--done-text); font-weight: 600; }
 
+.job-twin-size {
+  color: var(--done-text);
+  font-size: 11px;
+  margin-top: 1px;
+}
+.job-twin-size.hidden { display: none; }
+
+.stat-twin-total {
+  color: var(--done-text);
+  border-color: var(--done-text);
+}
+
 .job-stats {
   color: var(--text-muted);
   font-size: 11px;
@@ -801,43 +842,53 @@ html, body {
   background: var(--done-text);
 }
 
-/* ── Encode Manager ────────────────────────────────────────── */
-.job-settings-line {
-  color: var(--text-muted);
-  font-size: 11px;
-}
-
-.job-res-line {
-  color: var(--text-muted);
-  font-size: 11px;
+/* ── Encode Manager: live progress inline on a download's own ledger
+   card (see buildJobCard/findEncodeJobFor) - no dedicated queue view. */
+.job-encode-row {
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: 6px;
+  margin-top: 4px;
 }
-.job-res-line .res-target { color: var(--teal); font-weight: 600; }
-.job-res-line .res-arrow { color: var(--text-muted); }
-
-.status-pill {
+.job-encode-track {
+  flex: 1;
+  height: 4px;
+  background: var(--border);
+  border-radius: 2px;
+  overflow: hidden;
+}
+.job-encode-fill {
+  height: 100%;
+  background: #b39ce8;
+  border-radius: 2px;
+  width: 0%;
+  transition: width 0.3s ease;
+}
+.job-encode-label {
+  font-size: 10px;
+  font-weight: 600;
+  color: #b39ce8;
   flex: 0 0 auto;
-  font-size: 9px;
-  font-weight: 700;
-  letter-spacing: 0.04em;
+  min-width: 34px;
+  text-align: right;
+}
+.job-encode-cancel {
+  flex: 0 0 auto;
+  width: 18px;
+  height: 18px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
   border-radius: 4px;
-  padding: 1px 7px;
+  cursor: pointer;
 }
-.status-pill.queued { color: #7aa0e0; background: #16203a; border: 1px solid #2a3d6e; }
-.status-pill.pct { color: var(--teal); background: none; border: none; }
+.job-encode-cancel:hover { color: var(--error-text); background: var(--error-bg); }
+.job-encode-cancel .ti { font-size: 12px; }
 
-.job-card-actions {
-  display: flex;
-  gap: 2px;
-  flex-shrink: 0;
-  align-self: center;
-  opacity: 0;
-  transition: opacity 0.2s;
-}
-.job-card:hover .job-card-actions { opacity: 1; }
-.job-card-actions .job-mini-btn { width: 26px; height: 26px; }
+.job-status-icon-error { color: var(--error-text); background: var(--error-bg); }
 
 /* ── History card ──────────────────────────────────────────── */
 .history-empty {
@@ -939,15 +990,6 @@ html, body {
   margin-top: 2px;
 }
 
-.res-dropdown {
-  background: var(--panel);
-  color: var(--text);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  padding: 4px 6px;
-  font-size: 12px;
-}
-
 .ctx-text-input {
   background: var(--panel);
   color: var(--text);
@@ -988,6 +1030,118 @@ html, body {
   border-radius: var(--radius-sm);
 }
 .ctx-item-tree .ctx-chevron:hover { background: var(--panel); }
+
+/* Root-level "remove saved folder" button - a small framed minus so it
+   reads as a deliberate, deletion-flavored action rather than a plain
+   link, without being as loud as a full trash icon. */
+.ctx-tree-remove {
+  flex: 0 0 auto;
+  width: 18px;
+  height: 18px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 12px;
+  line-height: 1;
+  padding: 0;
+}
+.ctx-tree-remove:hover {
+  background: var(--error-bg);
+  border-color: var(--error-text);
+  color: var(--error-text);
+}
+
+/* Inline "remove this folder?" confirmation that replaces a row's
+   normal contents in place, rather than a browser confirm() popup. */
+.ctx-tree-confirm {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+}
+.ctx-tree-confirm-msg {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-muted);
+  font-size: 11px;
+}
+.ctx-tree-confirm-btn {
+  flex: 0 0 auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  padding: 3px 8px;
+  font-size: 11px;
+  cursor: pointer;
+  color: var(--text-secondary);
+}
+.ctx-tree-confirm-yes:hover {
+  background: var(--error-bg);
+  border-color: var(--error-text);
+  color: var(--error-text);
+}
+.ctx-tree-confirm-no:hover {
+  background: var(--panel);
+  color: var(--teal);
+}
+
+/* Sort toggle pinned above the (scrollable) folder tree list. */
+.folder-sort-bar {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 4px 6px;
+  margin-bottom: 4px;
+  border-bottom: 1px solid var(--border);
+}
+.folder-sort-label {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-disabled);
+  margin-right: 2px;
+}
+.folder-sort-btn {
+  flex: 0 0 auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  padding: 3px 8px;
+  font-size: 11px;
+  cursor: pointer;
+  color: var(--text-muted);
+}
+.folder-sort-btn:hover { color: var(--teal); }
+.folder-sort-btn.active {
+  color: var(--teal);
+  border-color: var(--teal-dim);
+  background: var(--panel);
+}
+
+/* Long subfolder listings (a deep video library) scroll instead of
+   running off the bottom of the viewport. Sort bar and the trailing
+   Browse/set-custom-folder item stay pinned outside this area - see
+   openFolderQuickDropdown(). */
+.folder-tree-scroll {
+  overflow-y: auto;
+  max-height: 45vh;
+}
+
+/* Nested subfolder flyouts (see renderTreeLevel) get the same
+   treatment applied to the whole flyout, Back button included. */
+.tree-flyout {
+  overflow-y: auto;
+  max-height: 45vh;
+}
 
 /* ── Modals ─────────────────────────────────────────────────── */
 .modal-overlay {
@@ -1247,6 +1401,12 @@ html, body {
   font-size: 10px;
   margin-top: 2px;
 }
+.encode-source-display {
+  color: var(--text-secondary);
+  font-size: 13px;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
 .form-field select, .form-field input[type="text"], .form-field input[type="number"] {
   width: 100%;
   background: var(--bg);
@@ -1422,6 +1582,9 @@ html, body {
   .nav-toggle-btn { flex: 0 0 34px; width: 34px; height: 34px; font-size: 18px; }
   .url-input-wrap .input-field { height: 34px; font-size: 13px; }
   .icon-btn { width: 30px; height: 30px; font-size: 15px; }
+  .res-tray-item { height: 30px; padding: 0 4px 0 6px; }
+  .res-tray-item .ti { font-size: 13px; }
+  .res-dropdown-tray { font-size: 10px; max-width: 52px; }
   .ledger-toolbar .icon-btn { width: 28px; height: 28px; font-size: 13px; }
   .ledger-filter-input { height: 28px; font-size: 11px; }
   .ledger-sort-select { height: 28px; font-size: 11px; padding: 0 4px; }
@@ -1438,9 +1601,7 @@ html, body {
 .ledger-toolbar,
 .ledger-toolbar > *,
 #download-view,
-#encode-view,
-#queue-list,
-#encode-queue-list {
+#queue-list {
   min-width: 0;
 }
 

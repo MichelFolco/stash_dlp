@@ -253,19 +253,16 @@ class EncodeOptionsRequest(BaseModel):
 
 
 class EncodeSourceRequest(BaseModel):
-    filename: Optional[str] = None          # a ledger entry, resolved via find_media_file
-    path: Optional[str] = None              # or an arbitrary absolute path (from Browse...)
+    filename: str          # a ledger entry, resolved via find_media_file
 
 
 class EncodeEstimateRequest(BaseModel):
-    filename: Optional[str] = None
-    path: Optional[str] = None
+    filename: str
     options: EncodeOptionsRequest
 
 
 class EnqueueEncodeRequest(BaseModel):
-    filename: Optional[str] = None
-    path: Optional[str] = None
+    filename: str
     options: EncodeOptionsRequest
 
 
@@ -1222,18 +1219,14 @@ async def api_refresh():
 
 
 # ── Encode Manager ────────────────────────────────────────────────
-def _resolve_source_path(filename: Optional[str], path: Optional[str]) -> str:
-    """Resolves an encode job's intended source to an actual path on disk -
-    either a ledger entry (looked up by filename) or an arbitrary path from
-    the Browse... option. Raises ValueError if neither resolves."""
-    if path:
-        return os.path.abspath(os.path.expanduser(path))
-    if filename:
-        media_path = find_media_file(filename)
-        if not media_path:
-            raise ValueError(f"Couldn't find '{filename}' in the current download folder.")
-        return media_path
-    raise ValueError("No source file specified.")
+def _resolve_source_path(filename: str) -> str:
+    """Resolves an encode job's source filename to an actual path on
+    disk via the download ledger. Raises ValueError if it can't be
+    found - e.g. the folder changed since the card was last rendered."""
+    media_path = find_media_file(filename)
+    if not media_path:
+        raise ValueError(f"Couldn't find '{filename}' in the current download folder.")
+    return media_path
 
 
 def _is_localhost(request: Request) -> bool:
@@ -1260,41 +1253,10 @@ async def api_get_encode_jobs():
     return encode_manager.snapshot()
 
 
-@app.get("/api/encode/sources")
-async def api_encode_sources():
-    """Candidate source files for the 'New Encode Job' modal's dropdown -
-    completed, non-audio ledger entries. Arbitrary files are still
-    reachable via the Browse... option (see /api/encode/browse-source)."""
-    return {
-        "sources": [
-            {"filename": j["filename"], "file_size": j.get("file_size", "")}
-            for j in job_manager.snapshot()
-            if j.get("status") == "DONE" and not j.get("is_audio")
-        ]
-    }
-
-
-@app.post("/api/encode/browse-source")
-async def api_encode_browse_source(request: Request):
-    """Native file-picker for choosing a source file that isn't in the
-    ledger. Same localhost gating as the download folder's Browse... -
-    see api_browse_folder for why."""
-    if not _is_localhost(request):
-        return JSONResponse(
-            status_code=400,
-            content={"error": "Browse only works when the browser is on the same machine as the server."},
-        )
-    try:
-        path = await ask_file_path(get_save_dir())
-    except Exception as e:
-        return JSONResponse(status_code=500, content={"error": str(e)})
-    return {"path": path}
-
-
 @app.post("/api/encode/probe")
 async def api_encode_probe(req: EncodeSourceRequest):
     try:
-        source_path = _resolve_source_path(req.filename, req.path)
+        source_path = _resolve_source_path(req.filename)
         info = await encode_manager.probe_source(source_path)
     except (ValueError, RuntimeError) as e:
         return JSONResponse(status_code=400, content={"error": str(e)})
@@ -1305,7 +1267,7 @@ async def api_encode_probe(req: EncodeSourceRequest):
 @app.post("/api/encode/estimate")
 async def api_encode_estimate(req: EncodeEstimateRequest):
     try:
-        source_path = _resolve_source_path(req.filename, req.path)
+        source_path = _resolve_source_path(req.filename)
         source_info = await encode_manager.probe_source(source_path)
     except (ValueError, RuntimeError) as e:
         return JSONResponse(status_code=400, content={"error": str(e)})
@@ -1324,12 +1286,12 @@ async def api_encode_estimate(req: EncodeEstimateRequest):
 
 @app.post("/api/encode/jobs")
 async def api_enqueue_encode_job(req: EnqueueEncodeRequest):
-    if req.filename and job_manager.jobs.get(req.filename, {}).get("synchronized"):
+    if job_manager.jobs.get(req.filename, {}).get("synchronized"):
         return JSONResponse(status_code=400, content={
             "error": "This file already has a synchronized-audio version - remove it before re-encoding.",
         })
     try:
-        source_path = _resolve_source_path(req.filename, req.path)
+        source_path = _resolve_source_path(req.filename)
         job = await encode_manager.enqueue(source_path, req.options.dict())
     except (ValueError, RuntimeError) as e:
         return JSONResponse(status_code=400, content={"error": str(e)})

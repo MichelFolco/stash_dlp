@@ -32,7 +32,7 @@ const REMOTE_ONLY_TOOLTIP = "Only available when browsing from the same machine 
 
 const state = {
   appMode: "DOWNLOAD",
-  currentView: "downloads",
+  encodeModalFilename: null,
   current: "READY",
   targetUrl: "",
   stagedUrl: "",
@@ -63,10 +63,6 @@ const state = {
   renderedCardSigs: new Map(),
   encodeJobs: new Map(),
   encodeCapabilities: null,
-  encodeSources: [],
-  encodeFilterText: "",
-  encodeSortField: "added",
-  encodeSortDir: "desc",
   encodeSourceInfo: null,
   encodeEstimateSeq: 0,
   encodeProbeSeq: 0,
@@ -81,7 +77,6 @@ const gearBtn = el("gear-btn");
 const logoImg = el("logo");
 const dlModeBtn = el("dl-mode-btn");
 const historyModeBtn = el("history-mode-btn");
-const encodeModeBtn = el("encode-mode-btn");
 const modeContainer = el("mode-container");
 const resDropdown = el("res-dropdown");
 const titlePrefixInput = el("title-prefix-input");
@@ -545,10 +540,10 @@ async function refreshDownloadPrefs() {
     // already baked into the HTML/state.
   }
   el("ctx-tag-toggle").querySelector(".ctx-check").textContent = state.tagDomain ? "✓" : "";
-  el("ctx-m3u-toggle").querySelector(".ctx-check").textContent = state.m3uSniffer ? "✓" : "";
+  el("ctx-m3u-toggle").classList.toggle("active", state.m3uSniffer);
   el("ctx-auto-m3u-retry-toggle").querySelector(".ctx-check").textContent = state.autoM3uRetry ? "✓" : "";
   el("ctx-auto-confirm-titles-toggle").querySelector(".ctx-check").textContent = state.autoConfirmTitles ? "✓" : "";
-  el("ctx-clipboard-monitor-toggle").querySelector(".ctx-check").textContent = state.clipboardMonitor ? "✓" : "";
+  el("ctx-clipboard-monitor-toggle").classList.toggle("active", state.clipboardMonitor);
   el("ctx-title-prefix-toggle").querySelector(".ctx-check").textContent = state.titlePrefixEnabled ? "✓" : "";
   titlePrefixInput.value = state.titlePrefix;
 }
@@ -1058,19 +1053,16 @@ function connectWebSocket() {
       renderLedger();
     } else if (msg.type === "encode_job_added") {
       state.encodeJobs.set(msg.job.id, msg.job);
-      renderEncodeLedger();
-    } else if (msg.type === "encode_job_progress" || msg.type === "encode_job_updated") {
+      renderLedger();
+    } else if (msg.type === "encode_job_progress") {
       state.encodeJobs.set(msg.job.id, msg.job);
-      updateEncodeJobCard(msg.job);
-      // A status flip (e.g. into/out of DONE) can change whether a
-      // download's RE-ENCODED pill should show, so keep it in sync.
-      if (msg.type === "encode_job_updated") {
-        renderLedger();
-        if (msg.job.status === "DONE") playCompletionPing();
-      }
+      updateJobCardEncodeProgress(msg.job);
+    } else if (msg.type === "encode_job_updated") {
+      state.encodeJobs.set(msg.job.id, msg.job);
+      renderLedger();
+      if (msg.job.status === "DONE") playCompletionPing();
     } else if (msg.type === "encode_job_deleted") {
       state.encodeJobs.delete(msg.job_id);
-      renderEncodeLedger();
       renderLedger();
     } else if (msg.type === "history_entry_deleted") {
       state.historyEntries = state.historyEntries.filter(
@@ -1122,7 +1114,19 @@ function getFilteredSortedJobs() {
   }
 
   if (state.statusFilters.size > 0) {
-    filtered = filtered.filter(({ job }) => state.statusFilters.has(job.status));
+    filtered = filtered.filter(({ job }) => {
+      for (const status of state.statusFilters) {
+        if (status === "ENCODING") {
+          const encodeJob = findEncodeJobFor(job.filename);
+          if (encodeJob && (encodeJob.status === "QUEUED" || encodeJob.status === "ENCODING")) return true;
+        } else if (status === "ENCODED") {
+          if (isReencoded(job.filename)) return true;
+        } else if (job.status === status) {
+          return true;
+        }
+      }
+      return false;
+    });
   }
 
   if (state.hideCompletedFilter) {
@@ -1214,6 +1218,7 @@ function renderLedger() {
 // out of the per-field list below so a folder change doesn't need its
 // own special case.
 function jobCardSignature(job) {
+  const encodeJob = findEncodeJobFor(job.filename);
   return [
     state.saveDirPath,
     job.status, job.pct, job.total, job.speed, job.eta,
@@ -1222,6 +1227,7 @@ function jobCardSignature(job) {
     job.url, job.source_type, job.source_path,
     job.stash_tag_name, job.stash_scene_id,
     job.synchronized, job.has_twin, job.playback_position, job.fully_played,
+    encodeJob ? encodeJob.id : "", encodeJob ? encodeJob.status : "", encodeJob ? encodeJob.pct : "",
   ].join("\u0001");
 }
 
@@ -1237,10 +1243,19 @@ function renderLedgerStatsBar(jobs) {
   if (jobs.length === 0) return;
 
   let totalBytes = 0;
+  let altTotalBytes = 0; // same total, but using each twin's size in place of its source's, when one exists
+  let hasAnyTwin = false;
   const counts = { QUEUED: 0, DOWNLOADING: 0, ERROR: 0 };
   for (const job of jobs) {
     const bytes = parseSizeToBytes(job.file_size);
     if (bytes > 0) totalBytes += bytes;
+    const twinInfo = getTwinDisplayInfo(job);
+    if (twinInfo && twinInfo.sizeBytes) {
+      hasAnyTwin = true;
+      altTotalBytes += twinInfo.sizeBytes;
+    } else if (bytes > 0) {
+      altTotalBytes += bytes;
+    }
     if (job.status in counts) counts[job.status]++;
   }
 
@@ -1248,6 +1263,17 @@ function renderLedgerStatsBar(jobs) {
   const summary = document.createElement("span");
   summary.textContent = totalBytes > 0 ? `${fileLabel} \u00b7 ${formatBytes(totalBytes)}` : fileLabel;
   ledgerStatsBar.appendChild(summary);
+
+  // Alternate total using twin (re-encoded) sizes where available -
+  // only worth showing once at least one card actually has a twin,
+  // otherwise it would just repeat the total above.
+  if (hasAnyTwin && altTotalBytes > 0) {
+    const altSummary = document.createElement("span");
+    altSummary.className = "stat-chip stat-twin-total";
+    altSummary.title = "Total size if every twin available were used in place of its source file.";
+    altSummary.textContent = `${formatBytes(altTotalBytes)} using twins`;
+    ledgerStatsBar.appendChild(altSummary);
+  }
 
   const chipDefs = [
     ["QUEUED", "stat-queued", "queued"],
@@ -1325,17 +1351,70 @@ function stemOf(filename) {
   return idx > 0 ? filename.slice(0, idx) : filename;
 }
 
-// A download is considered re-encoded if a completed Encode Manager job's
-// source file traces back to it - i.e. its source_filename's stem matches
-// this job's filename. Encode jobs are kept in sync client-side (see the
-// websocket handler and loadEncodeJobsSnapshot), so this is just a lookup.
-function isReencoded(filename) {
-  for (const encodeJob of state.encodeJobs.values()) {
-    if (encodeJob.status === "DONE" && stemOf(encodeJob.source_filename || "") === filename) {
-      return true;
-    }
+// Picks the single most relevant Encode Manager job whose source traces
+// back to this download (matched by filename stem - see enqueueing
+// code). An active (queued/encoding) job always wins over a stale
+// done/error one from an earlier encode of the same source; among
+// same-priority matches, the most recently added one wins (Map
+// iteration order = insertion order).
+function findEncodeJobFor(filename) {
+  const activeStatuses = new Set(["QUEUED", "ENCODING"]);
+  let found = null;
+  for (const job of state.encodeJobs.values()) {
+    if (stemOf(job.source_filename || "") !== filename) continue;
+    if (!found) { found = job; continue; }
+    const jobActive = activeStatuses.has(job.status);
+    const foundActive = activeStatuses.has(found.status);
+    if (jobActive || !foundActive) found = job;
   }
-  return false;
+  return found;
+}
+
+// A download is considered re-encoded if its most relevant Encode
+// Manager job (see findEncodeJobFor) has finished.
+function isReencoded(filename) {
+  const job = findEncodeJobFor(filename);
+  return !!(job && job.status === "DONE");
+}
+
+function encodeSavingsLabel(encodeJob) {
+  if (!encodeJob.source_size || !encodeJob.final_bytes) return null;
+  const pct = Math.round((1 - encodeJob.final_bytes / encodeJob.source_size) * 100);
+  return `${encodeJob.source_size_label} \u2192 ${encodeJob.final_size_label} (${pct >= 0 ? "-" : "+"}${Math.abs(pct)}%)`;
+}
+
+// Twin size/resolution for card display. Prefers a completed Encode
+// Manager job's own numbers (precise final_bytes/output_width/height,
+// available the instant that job finishes) and falls back to the
+// backend's direct Converted/ probe (job.twin_*, see
+// job_manager.seed_from_filesystem) for a twin with no matching
+// in-memory encode job - e.g. one dropped in by hand, or left over
+// from before a server restart. Returns null when neither has a twin.
+function getTwinDisplayInfo(job) {
+  const encodeJob = findEncodeJobFor(job.filename);
+  if (encodeJob && encodeJob.status === "DONE" && encodeJob.final_bytes) {
+    const sourceBytes = encodeJob.source_size || parseSizeToBytes(job.file_size);
+    const pct = sourceBytes ? Math.round((encodeJob.final_bytes / sourceBytes) * 100) : null;
+    return {
+      sizeBytes: encodeJob.final_bytes,
+      sizeLabel: encodeJob.final_size_label || formatBytes(encodeJob.final_bytes),
+      width: encodeJob.output_width || 0,
+      height: encodeJob.output_height || 0,
+      pct,
+    };
+  }
+  if (job.has_twin && job.twin_size) {
+    const sourceBytes = parseSizeToBytes(job.file_size);
+    const pct = sourceBytes ? Math.round((job.twin_size / sourceBytes) * 100) : null;
+    return {
+      sizeBytes: job.twin_size,
+      sizeLabel: job.twin_size_label || formatBytes(job.twin_size),
+      width: job.twin_width || 0,
+      height: job.twin_height || 0,
+      pct,
+    };
+  }
+  return null;
 }
 
 // A download is synchronized once its Synchronize Audio twin in
@@ -1771,8 +1850,20 @@ function buildJobCard(job) {
   if (job.status === "DONE" && isReencoded(job.filename)) {
     const icon = document.createElement("i");
     icon.className = "ti ti-recycle job-status-icon-reencoded";
-    icon.title = "Re-encoded: a converted twin exists in Converted/.";
+    const encodeJob = findEncodeJobFor(job.filename);
+    icon.title = (encodeJob && encodeSavingsLabel(encodeJob))
+      ? `Re-encoded: ${encodeSavingsLabel(encodeJob)}`
+      : "Re-encoded: a converted twin exists in Converted/.";
     statusIcons.appendChild(icon);
+  }
+  {
+    const encodeJob = findEncodeJobFor(job.filename);
+    if (encodeJob && encodeJob.status === "ERROR") {
+      const icon = document.createElement("i");
+      icon.className = "ti ti-alert-triangle job-status-icon-error";
+      icon.title = `Encoding failed: ${encodeJob.error_message || "Unknown error"}`;
+      statusIcons.appendChild(icon);
+    }
   }
   if (job.status === "DONE" && job.synchronized) {
     const icon = document.createElement("i");
@@ -1782,11 +1873,12 @@ function buildJobCard(job) {
   }
   // Direct filesystem check (done server-side on every Refresh, see
   // job_manager.seed_from_filesystem) for a twin sitting in Converted/.
-  // Only surfaced when RE-ENCODED/SYNCHRONIZED aren't already showing,
-  // since those already say "there's a twin" more specifically - this
-  // icon exists to catch the cases those miss, e.g. a twin left over
-  // from before a server restart (Encode Manager history is in-memory).
-  if (job.status === "DONE" && job.has_twin && !isReencoded(job.filename) && !job.synchronized) {
+  // Shown/hidden purely on that check - stacks with RE-ENCODED/
+  // SYNCHRONIZED rather than being suppressed by them, since this is
+  // the more general "there's a file in Converted/" signal (also
+  // catches a twin left over from before a server restart, since
+  // Encode Manager history is in-memory).
+  if (job.status === "DONE" && job.has_twin) {
     const icon = document.createElement("i");
     icon.className = "ti ti-copy job-status-icon-has-twin";
     icon.title = "A file already exists for this download in Converted/. Press Refresh if this seems out of date.";
@@ -1931,6 +2023,27 @@ function buildJobCard(job) {
         footer.appendChild(meta);
       }
 
+      // Twin (re-encoded or otherwise) size/resolution, shown as its
+      // own line right under the source file's own meta line so the
+      // two are easy to compare at a glance. Carries a data attribute
+      // so updateJobCardEncodeProgress() can refresh it in place the
+      // instant a matching encode job completes, without a full
+      // re-render of the card.
+      const twinInfo = getTwinDisplayInfo(job);
+      const twinMeta = document.createElement("div");
+      twinMeta.className = "job-twin-size";
+      twinMeta.dataset.role = "twin-meta";
+      if (twinInfo) {
+        const twinParts = [];
+        if (twinInfo.width && twinInfo.height) twinParts.push(`${twinInfo.width}\u00d7${twinInfo.height}`);
+        if (twinInfo.sizeLabel) twinParts.push(twinInfo.sizeLabel);
+        if (twinInfo.pct !== null) twinParts.push(`${twinInfo.pct}% of source`);
+        twinMeta.textContent = `Twin: ${twinParts.join("  •  ")}`;
+      } else {
+        twinMeta.classList.add("hidden");
+      }
+      footer.appendChild(twinMeta);
+
       // Playback progress - shown for every completed file (not just
       // ones with a saved position) so scanning the ledger tells you
       // at a glance what you've started vs. never touched. A file
@@ -1963,6 +2076,45 @@ function buildJobCard(job) {
           : `${formatDuration(job.playback_position)} / ${formatDuration(job.duration)}`;
         track.appendChild(fill);
         titlePathCol.appendChild(track);
+      }
+
+      // Live encode progress, if this file currently has an active
+      // Encode Manager job (queued or actively encoding) - see
+      // findEncodeJobFor(). Independent of the playback bar above; a
+      // file can be re-encoded while its original still tracks its own
+      // watch position.
+      const encodeJob = findEncodeJobFor(job.filename);
+      if (encodeJob && (encodeJob.status === "QUEUED" || encodeJob.status === "ENCODING")) {
+        const row = document.createElement("div");
+        row.className = "job-encode-row";
+        row.dataset.encodeJobId = encodeJob.id;
+
+        const track = document.createElement("div");
+        track.className = "job-encode-track";
+        const fill = document.createElement("div");
+        fill.className = "job-encode-fill";
+        const pct = encodeJob.status === "ENCODING" ? Math.max(0, Math.min(100, parseFloat(encodeJob.pct) || 0)) : 0;
+        fill.style.width = `${pct}%`;
+        track.title = encodeJob.status === "QUEUED" ? "Queued for encoding..." : `Encoding: ${pct}%`;
+        track.appendChild(fill);
+        row.appendChild(track);
+
+        const label = document.createElement("span");
+        label.className = "job-encode-label";
+        label.textContent = encodeJob.status === "QUEUED" ? "Queued" : `${pct}%`;
+        row.appendChild(label);
+
+        const cancelBtn = document.createElement("button");
+        cancelBtn.className = "job-encode-cancel";
+        cancelBtn.title = "Cancel encoding";
+        cancelBtn.innerHTML = '<i class="ti ti-x" aria-hidden="true"></i>';
+        cancelBtn.addEventListener("click", async (e) => {
+          e.stopPropagation();
+          await cancelEncodeJob(encodeJob.id);
+        });
+        row.appendChild(cancelBtn);
+
+        titlePathCol.appendChild(row);
       }
     }
     footer.appendChild(cardIcons);
@@ -2110,6 +2262,30 @@ function cssEscape(s) {
   return s.replace(/["\\]/g, "\\$&");
 }
 
+// Targeted DOM patch for a throttled encode-progress tick, mirroring
+// updateJobCardProgress()/updateProgressDOM() above for the same
+// reason: rebuilding the whole card on every tick (via renderLedger's
+// signature diffing) would replay the .job-card-enter fade-in
+// constantly and is needless work besides. If the row isn't in the DOM
+// yet (job just started, card not yet rebuilt to show it), this is a
+// harmless no-op - the next structural event (encode_job_added/updated)
+// triggers a real renderLedger() that adds it.
+function updateJobCardEncodeProgress(encodeJob) {
+  const filename = stemOf(encodeJob.source_filename || "");
+  const card = queueList.querySelector(`.job-card[data-filename="${cssEscape(filename)}"]`);
+  if (!card) return;
+  const row = card.querySelector(`.job-encode-row[data-encode-job-id="${cssEscape(encodeJob.id)}"]`);
+  if (!row) return;
+  const fill = row.querySelector(".job-encode-fill");
+  const label = row.querySelector(".job-encode-label");
+  const track = row.querySelector(".job-encode-track");
+  if (!fill || !label) return;
+  const pct = Math.max(0, Math.min(100, parseFloat(encodeJob.pct) || 0));
+  fill.style.width = `${pct}%`;
+  label.textContent = `${pct}%`;
+  if (track) track.title = `Encoding: ${pct}%`;
+}
+
 // Every submenu flyout in the app - Copy/File (job menu) and
 // Folders/Settings (logo menu) all share this one open/close/position
 // mechanism, so anything that resets menu state just walks this list.
@@ -2159,8 +2335,13 @@ function openJobMenu(x, y, job) {
   // non-audio download since that's all the encoder can take as input
   // (mirrors the /api/encode/sources gating). Hidden if the file is
   // already synchronized, since a re-encode twin and a sync twin would
-  // both want the same Converted/<stem> slot (see isSynchronized).
-  el("ctx-reencode-file").classList.toggle("hidden", !isVideo || isSynchronized(job.filename));
+  // both want the same Converted/<stem> slot (see isSynchronized), or
+  // if an encode job for this file is already queued/running (its live
+  // progress already shows right on the card - starting a second one
+  // for the same source would just confuse the single progress slot).
+  const activeEncode = findEncodeJobFor(job.filename);
+  const isEncodingNow = activeEncode && (activeEncode.status === "QUEUED" || activeEncode.status === "ENCODING");
+  el("ctx-reencode-file").classList.toggle("hidden", !isVideo || isSynchronized(job.filename) || isEncodingNow);
   // Same twin-slot logic in reverse: only offered for a completed video
   // with an audio track, and only if there isn't already a re-encode
   // twin sitting in Converted/ for this file.
@@ -2294,7 +2475,6 @@ el("ctx-extract-audio").addEventListener("click", async () => {
 el("ctx-reencode-file").addEventListener("click", () => {
   const filename = jobMenu.dataset.filename;
   closeMenus();
-  setAppModeEncode();
   openNewEncodeJobModal(filename);
 });
 
@@ -3450,7 +3630,7 @@ el("ctx-tag-toggle").addEventListener("click", () => {
 
 el("ctx-m3u-toggle").addEventListener("click", () => {
   state.m3uSniffer = !state.m3uSniffer;
-  el("ctx-m3u-toggle").querySelector(".ctx-check").textContent = state.m3uSniffer ? "✓" : "";
+  el("ctx-m3u-toggle").classList.toggle("active", state.m3uSniffer);
   if (state.m3uSniffer) {
     inputField.placeholder = "Paste a link, then press ENTER...";
   }
@@ -3471,7 +3651,7 @@ el("ctx-auto-confirm-titles-toggle").addEventListener("click", () => {
 
 el("ctx-clipboard-monitor-toggle").addEventListener("click", () => {
   state.clipboardMonitor = !state.clipboardMonitor;
-  el("ctx-clipboard-monitor-toggle").querySelector(".ctx-check").textContent = state.clipboardMonitor ? "✓" : "";
+  el("ctx-clipboard-monitor-toggle").classList.toggle("active", state.clipboardMonitor);
   saveDownloadPrefs();
   flashStatus(state.clipboardMonitor ? "Clipboard monitoring enabled." : "Clipboard monitoring disabled.");
 });
@@ -3877,15 +4057,14 @@ const targetFolderModal = createFolderModalController({
 resDropdown.addEventListener("click", (e) => e.stopPropagation());
 resDropdown.addEventListener("change", saveDownloadPrefs);
 
-// ── Mode buttons (Download / Search History / Encode) ───────────
+// ── Mode buttons (Download / Search History) ───────────
 function setAppModeDownload() {
-  setView("downloads");
+  inputField.disabled = false;
   resetToReady();
   updateModeButtons();
 }
 
 function setAppModeSearchHistory() {
-  setView("downloads");
   exitSelectionMode();
   state.appMode = "SEARCH_HISTORY";
   inputField.disabled = false;
@@ -3897,43 +4076,13 @@ function setAppModeSearchHistory() {
   refreshSearchHistory();
 }
 
-function setView(view) {
-  if (state.currentView === view) return;
-  state.currentView = view;
-  const isEncode = view === "encode";
-  if (isEncode) exitSelectionMode();
-  el("download-view").classList.toggle("hidden", isEncode);
-  el("encode-view").classList.toggle("hidden", !isEncode);
-  if (isEncode) {
-    inputField.disabled = true;
-    inputField.value = "";
-    inputField.placeholder = "Switch to Download or Search History mode to paste a URL";
-    // Always rescan the download folder when showing the Encode Manager,
-    // not just when the source list happens to be empty - otherwise a
-    // file pasted in manually while looking at another view stays
-    // invisible (and un-probed) until "New Encode Job" is opened, which
-    // separately does this same refresh.
-    refreshDownloadLedger().then(refreshEncodeSources);
-  } else {
-    inputField.disabled = false;
-  }
-}
-
-function setAppModeEncode() {
-  setView("encode");
-  updateModeButtons();
-}
-
 function updateModeButtons() {
-  const isEncode = state.currentView === "encode";
-  const isDl = !isEncode && state.appMode === "DOWNLOAD";
-  const isHistory = !isEncode && state.appMode === "SEARCH_HISTORY";
+  const isDl = state.appMode === "DOWNLOAD";
+  const isHistory = state.appMode === "SEARCH_HISTORY";
   dlModeBtn.classList.toggle("active", isDl);
   historyModeBtn.classList.toggle("active", isHistory);
-  encodeModeBtn.classList.toggle("active", isEncode);
   dlModeBtn.title = isDl ? "Download Mode Active" : "Switch to Download Mode (Ctrl+D)";
   historyModeBtn.title = isHistory ? "Search History Mode Active" : "Switch to Search History Mode (Ctrl+F)";
-  encodeModeBtn.title = isEncode ? "Encode Manager Active" : "Switch to Encode Manager";
 }
 
 // Search History Mode reuses the same ledger toolbar (filter + sort),
@@ -3971,11 +4120,6 @@ function exitHistoryModeUI() {
 
 downloadSubmitBtn.addEventListener("click", () => {
   const currentValue = inputField.value.trim();
-  if (state.currentView === "encode") {
-    setAppModeDownload();
-    if (currentValue) setTimeout(() => handleEnterPipeline(), 0);
-    return;
-  }
   if (state.appMode === "SEARCH_HISTORY") {
     state.appMode = "DOWNLOAD";
     exitHistoryModeUI();
@@ -3986,10 +4130,6 @@ downloadSubmitBtn.addEventListener("click", () => {
 });
 
 dlModeBtn.addEventListener("click", () => {
-  if (state.currentView === "encode") {
-    setAppModeDownload();
-    return;
-  }
   if (state.current === "EDITING") {
     handleEnterPipeline(); // proceed with the download using the current input as the title
     return;
@@ -4009,7 +4149,6 @@ dlModeBtn.addEventListener("click", () => {
     setAppModeDownload();
   }
 });
-encodeModeBtn.addEventListener("click", setAppModeEncode);
 historyModeBtn.addEventListener("click", setAppModeSearchHistory);
 
 // ── Gear button (opens the options/logo menu; this menu is no longer
@@ -4035,6 +4174,38 @@ gearBtn.addEventListener("click", (e) => {
 // mechanism the Copy/File submenus already use.
 let openTreeFlyouts = [];
 
+// Sort mode for the folder tree - "recent" mirrors the backend's
+// default (most-recently-used first, from dir_last_used), "alpha" is
+// a plain client-side re-sort by name. Persisted so a preference
+// sticks across page reloads. Applied recursively so nested levels
+// (expanded later, on demand) come pre-sorted the same way.
+let folderSortMode = "recent";
+try {
+  folderSortMode = localStorage.getItem("stashdlp_folder_sort") || "recent";
+} catch (e) {
+  // localStorage unavailable (e.g. privacy mode) - fall back to default
+}
+
+function sortTreeNodes(nodes) {
+  const sorted = nodes.slice();
+  if (folderSortMode === "alpha") {
+    sorted.sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: "base" }));
+  } else {
+    sorted.sort((a, b) => {
+      const at = a.last_used || 0;
+      const bt = b.last_used || 0;
+      if (at !== bt) return bt - at; // most-recent first
+      return a.name.localeCompare(b.name, undefined, { sensitivity: "base" });
+    });
+  }
+  for (const node of sorted) {
+    if (node.children && node.children.length > 1) {
+      node.children = sortTreeNodes(node.children);
+    }
+  }
+  return sorted;
+}
+
 function closeTreeFlyoutsFrom(depth) {
   for (let i = depth; i < openTreeFlyouts.length; i++) {
     openTreeFlyouts[i].remove();
@@ -4051,20 +4222,26 @@ function closeAllTreeFlyouts() {
 // openTreeFlyouts - a chevron click at this depth replaces whatever
 // was already open at that depth (a sibling's previously expanded
 // flyout) and drops anything deeper than it.
-function renderTreeLevel(nodes, container, { depth, current, applyPath, closeDropdown }) {
+function renderTreeLevel(nodes, container, { depth, current, applyPath, closeDropdown, onRemoveRoot }) {
   container.innerHTML = "";
 
   // Depth 0 is the dropdown's own root list - closing it just closes
   // the whole dropdown, no "back" needed. Anything deeper is one of
   // the dynamically-created flyouts, so give it a way back up besides
   // re-clicking the chevron that opened it or clicking away entirely.
+  //
+  // A flyout opened from a row at this level (see toggleChildren below)
+  // is stored at openTreeFlyouts[depth] and rendered with depth + 1, so
+  // *this* container - if depth > 0 - lives at openTreeFlyouts[depth - 1].
+  // Back needs to drop from there (inclusive) to close itself and
+  // anything opened deeper than it, not from `depth` itself.
   if (depth > 0) {
     const back = document.createElement("div");
     back.className = "ctx-item";
     back.innerHTML = '<i class="ti ti-arrow-left" aria-hidden="true"></i> Back';
     back.addEventListener("click", (e) => {
       e.stopPropagation();
-      closeTreeFlyoutsFrom(depth);
+      closeTreeFlyoutsFrom(depth - 1);
     });
     container.appendChild(back);
     const sep = document.createElement("div");
@@ -4108,17 +4285,60 @@ function renderTreeLevel(nodes, container, { depth, current, applyPath, closeDro
         flyout.dataset.forPath = node.path;
         document.body.appendChild(flyout);
         openTreeFlyouts[depth] = flyout;
-        renderTreeLevel(node.children, flyout, { depth: depth + 1, current, applyPath, closeDropdown });
+        renderTreeLevel(node.children, flyout, { depth: depth + 1, current, applyPath, closeDropdown, onRemoveRoot });
         positionFlyoutNextTo(flyout, row);
       };
       chevron.addEventListener("click", toggleChildren);
+    }
+
+    // Only root-level entries (depth 0) are "saved" folders that can be
+    // unlisted - everything below that is just a live subfolder found
+    // on disk, with nothing persisted to remove. Skip for the
+    // already-active folder too; removing your current folder out from
+    // under yourself is more confusing than useful here.
+    if (depth === 0 && onRemoveRoot && node.path !== current) {
+      const removeBtn = document.createElement("button");
+      removeBtn.className = "ctx-tree-remove";
+      removeBtn.textContent = "\u2212"; // minus sign, framed by the button's own border
+      removeBtn.title = "Remove this saved folder";
+      removeBtn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        // Swap the row's contents for an inline confirm instead of a
+        // separate popup, so it's obvious exactly which folder is
+        // about to be removed.
+        row.innerHTML = "";
+        row.classList.add("ctx-tree-confirm");
+
+        const msg = document.createElement("span");
+        msg.className = "ctx-tree-confirm-msg";
+        msg.textContent = `Remove "${node.name}"?`;
+
+        const yesBtn = document.createElement("button");
+        yesBtn.className = "ctx-tree-confirm-btn ctx-tree-confirm-yes";
+        yesBtn.textContent = "Remove";
+        yesBtn.addEventListener("click", (ev) => {
+          ev.stopPropagation();
+          onRemoveRoot(node.path);
+        });
+
+        const noBtn = document.createElement("button");
+        noBtn.className = "ctx-tree-confirm-btn ctx-tree-confirm-no";
+        noBtn.textContent = "Cancel";
+        noBtn.addEventListener("click", (ev) => {
+          ev.stopPropagation();
+          renderTreeLevel(nodes, container, { depth, current, applyPath, closeDropdown, onRemoveRoot });
+        });
+
+        row.append(msg, yesBtn, noBtn);
+      });
+      row.appendChild(removeBtn);
     }
 
     container.appendChild(row);
   }
 }
 
-async function openFolderQuickDropdown({ dropdownEl, listEl, anchorEl, treeEndpoint, getCurrentPath, applyPath, openAdvanced, noneLabel }) {
+async function openFolderQuickDropdown({ dropdownEl, listEl, anchorEl, treeEndpoint, removeEndpoint, getCurrentPath, applyPath, openAdvanced, noneLabel }) {
   closeOtherFlyouts(dropdownEl); // also tears down any tree flyouts from a previous open
   listEl.innerHTML = "";
   const loading = document.createElement("div");
@@ -4147,15 +4367,76 @@ async function openFolderQuickDropdown({ dropdownEl, listEl, anchorEl, treeEndpo
   // user with stale content.
   if (dropdownEl.classList.contains("hidden")) return;
 
+  roots = sortTreeNodes(roots);
+
   listEl.innerHTML = "";
-  if (roots.length === 0) {
-    const empty = document.createElement("div");
-    empty.className = "ctx-item ctx-disabled";
-    empty.textContent = noneLabel;
-    listEl.appendChild(empty);
-  } else {
-    renderTreeLevel(roots, listEl, { depth: 0, current, applyPath, closeDropdown });
+
+  // Sort toggle, pinned above the scrollable tree area below.
+  const sortBar = document.createElement("div");
+  sortBar.className = "folder-sort-bar";
+  const sortLabel = document.createElement("span");
+  sortLabel.className = "folder-sort-label";
+  sortLabel.textContent = "Sort";
+  sortBar.appendChild(sortLabel);
+
+  const treeScroll = document.createElement("div");
+  treeScroll.className = "folder-tree-scroll";
+
+  const renderRootLevel = () => {
+    if (roots.length === 0) {
+      treeScroll.innerHTML = "";
+      const empty = document.createElement("div");
+      empty.className = "ctx-item ctx-disabled";
+      empty.textContent = noneLabel;
+      treeScroll.appendChild(empty);
+      return;
+    }
+    renderTreeLevel(roots, treeScroll, { depth: 0, current, applyPath, closeDropdown, onRemoveRoot });
+  };
+
+  async function onRemoveRoot(path) {
+    try {
+      const res = await fetch(removeEndpoint, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ path }),
+      });
+      if (res.ok) {
+        roots = roots.filter((n) => n.path !== path);
+        renderRootLevel();
+      }
+    } catch (e) {
+      // best-effort - if this fails the entry just stays in the list, no harm done
+    }
+    positionDropdownBelow(dropdownEl, anchorEl);
   }
+
+  const modeButtons = [
+    { mode: "recent", label: "Recent" },
+    { mode: "alpha", label: "A\u2013Z" },
+  ];
+  for (const { mode, label } of modeButtons) {
+    const btn = document.createElement("button");
+    btn.className = "folder-sort-btn";
+    btn.textContent = label;
+    btn.classList.toggle("active", folderSortMode === mode);
+    btn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      if (folderSortMode === mode) return;
+      folderSortMode = mode;
+      try { localStorage.setItem("stashdlp_folder_sort", mode); } catch (err) { /* ignore */ }
+      for (const b of sortBar.querySelectorAll(".folder-sort-btn")) b.classList.remove("active");
+      btn.classList.add("active");
+      roots = sortTreeNodes(roots);
+      closeAllTreeFlyouts(); // nested flyouts held stale-ordered node refs
+      renderRootLevel();
+      positionDropdownBelow(dropdownEl, anchorEl);
+    });
+    sortBar.appendChild(btn);
+  }
+  listEl.appendChild(sortBar);
+
+  renderRootLevel();
+  listEl.appendChild(treeScroll);
 
   const sep = document.createElement("div");
   sep.className = "ctx-separator";
@@ -4181,6 +4462,7 @@ folderStatusSave.addEventListener("click", (e) => {
   openFolderQuickDropdown({
     dropdownEl: dlFolderQuickMenu, listEl: dlFolderQuickList, anchorEl: folderStatusSave,
     treeEndpoint: "/api/settings/roots/tree",
+    removeEndpoint: "/api/settings/roots/remove",
     getCurrentPath: () => ctxSaveDir.title || "",
     applyPath: downloadFolderModal.applyPath,
     openAdvanced: () => downloadFolderModal.open(),
@@ -4196,6 +4478,7 @@ folderStatusTarget.addEventListener("click", (e) => {
   openFolderQuickDropdown({
     dropdownEl: targetFolderQuickMenu, listEl: targetFolderQuickList, anchorEl: folderStatusTarget,
     treeEndpoint: "/api/target-settings/roots/tree",
+    removeEndpoint: "/api/target-settings/roots/remove",
     getCurrentPath: () => ctxTargetDir.title || "",
     applyPath: targetFolderModal.applyPath,
     openAdvanced: () => targetFolderModal.open(),
@@ -4628,20 +4911,15 @@ document.addEventListener("keydown", async (e) => {
   }
 });
 
-// ── Encode Manager ──────────────────────────────────────────────
-const encodeQueueList = el("encode-queue-list");
-const encodeFilterInput = el("encode-filter");
-const encodeSortSelect = el("encode-sort");
-const newEncodeJobBtn = el("new-encode-job-btn");
+// ── Encode Manager (settings modal only - no dedicated queue view;
+// encode progress/status now shows inline on the source download's
+// ledger card, see buildJobCard/findEncodeJobFor) ────────────────
 const openConvertedBtn = el("open-converted-btn");
 const newEncodeJobModal = el("new-encode-job-modal");
 const closeEncodeJobModalBtn = el("close-encode-job-modal");
 const cancelEncodeJobModalBtn = el("cancel-encode-job-modal");
 const addEncodeJobBtn = el("add-encode-job-btn");
-const encodeSourceSelect = el("encode-source-select");
-const encodeSourceBrowseRow = el("encode-source-browse-row");
-const encodeSourceBrowsePath = el("encode-source-browse-path");
-const encodeSourceBrowseBtn = el("encode-source-browse-btn");
+const encodeSourceDisplay = el("encode-source-display");
 const encodeSourceInfo = el("encode-source-info");
 const encodeModeCrfBtn = el("encode-mode-crf-btn");
 const encodeModeSizeBtn = el("encode-mode-size-btn");
@@ -4657,15 +4935,11 @@ const encodeTargetSizeInput = el("encode-target-size-input");
 const encodeResolutionSelect = el("encode-resolution-select");
 const encodeResolutionLabel = el("encode-resolution-label");
 const encodeForceArCheck = el("encode-force-ar-check");
-const encodeForceArFields = el("encode-force-ar-fields");
 const encodeAspectQuickRow = el("encode-aspect-quick-row");
 const encodeArWidthInput = el("encode-ar-width-input");
 const encodeArHeightInput = el("encode-ar-height-input");
 const encodeDeinterlaceCheck = el("encode-deinterlace-check");
 const encodeAutocropCheck = el("encode-autocrop-check");
-const encodeAdvancedToggle = el("encode-advanced-toggle");
-const encodeAdvancedBody = el("encode-advanced-body");
-const encodeAdvancedCaret = el("encode-advanced-caret");
 const encodeAudioSelect = el("encode-audio-select");
 const encodeContainerSelect = el("encode-container-select");
 const encodeDenoiseCheck = el("encode-denoise-check");
@@ -4687,81 +4961,16 @@ async function loadEncodeCapabilities() {
   }
 }
 
-async function refreshEncodeSources() {
-  try {
-    const res = await fetch("/api/encode/sources");
-    const data = await res.json();
-    state.encodeSources = data.sources || [];
-  } catch (e) {
-    state.encodeSources = [];
-  }
-}
-
 async function loadEncodeJobsSnapshot() {
   try {
     const res = await fetch("/api/encode/jobs");
     const jobs = await res.json();
     state.encodeJobs.clear();
     for (const job of jobs) state.encodeJobs.set(job.id, job);
-    renderEncodeLedger();
     renderLedger();
   } catch (e) {
     // backend not reachable yet; ignore
   }
-}
-
-function savingsPct(job) {
-  const finalSize = job.final_bytes || job.estimated_bytes;
-  if (!finalSize || !job.source_size) return 0;
-  return (1 - finalSize / job.source_size) * 100;
-}
-
-function getFilteredSortedEncodeJobs() {
-  const jobs = Array.from(state.encodeJobs.values());
-  const query = state.encodeFilterText.trim().toLowerCase();
-  const filtered = query ? jobs.filter((j) => j.source_filename.toLowerCase().includes(query)) : jobs;
-
-  if (state.encodeSortField === "added") {
-    // The server already orders this list correctly (active/pending in
-    // real run order, then finished jobs newest-first) - respect sort
-    // direction rather than re-deriving an "added" order client-side,
-    // which would fight with move-up reordering.
-    return state.encodeSortDir === "desc" ? filtered : [...filtered].reverse();
-  }
-
-  const dirMul = state.encodeSortDir === "asc" ? 1 : -1;
-  const sorted = [...filtered];
-  sorted.sort((a, b) => {
-    const cmp = state.encodeSortField === "size"
-      ? (a.source_size || 0) - (b.source_size || 0)
-      : savingsPct(a) - savingsPct(b);
-    return cmp * dirMul;
-  });
-  return sorted;
-}
-
-function renderEncodeLedger() {
-  encodeQueueList.innerHTML = "";
-  for (const job of getFilteredSortedEncodeJobs()) {
-    encodeQueueList.appendChild(buildEncodeJobCard(job));
-  }
-}
-
-function updateEncodeJobCard(job) {
-  const card = encodeQueueList.querySelector(`.job-card[data-job-id="${cssEscape(job.id)}"]`);
-  if (!card) { renderEncodeLedger(); return; }
-  // Encode cards change shape enough between states (badges, action
-  // buttons, progress bar) that a full rebuild-and-swap is simpler and
-  // plenty fast for the handful of cards a personal queue will ever show.
-  card.replaceWith(buildEncodeJobCard(job));
-}
-
-function formatEta(seconds) {
-  if (seconds == null) return "?";
-  const s = Math.max(0, Math.round(seconds));
-  const m = Math.floor(s / 60);
-  const rem = s % 60;
-  return `${m}:${String(rem).padStart(2, "0")}`;
 }
 
 function formatDuration(seconds) {
@@ -4775,227 +4984,11 @@ function formatDuration(seconds) {
     : `${m}:${String(rem).padStart(2, "0")}`;
 }
 
-function resolutionTargetLabel(job) {
-  if (!job.output_width || !job.output_height) return "";
-  if (job.resolution_cap && job.resolution_cap !== "source" && !job.force_ar) {
-    return job.resolution_cap;
-  }
-  return `${job.output_width}×${job.output_height}`;
-}
 
-function buildEncodeSettingsSummary(job) {
-  const parts = [job.resolution_cap && job.resolution_cap !== "source" ? job.resolution_cap : "Source res"];
-  if (job.deinterlace) parts.push("deinterlace on");
-  if (job.auto_crop) parts.push("auto-crop");
-  if (job.denoise) parts.push("denoise on");
-  if (job.audio_mode !== "copy") parts.push(`audio ${job.audio_mode}`);
-  if (job.status === "DONE") {
-    parts.push("saved to Converted/");
-    if (job.elapsed_seconds) parts.push(`took ${formatEta(job.elapsed_seconds)}`);
-  }
-  return parts.join(" · ");
-}
-
-function buildEncodeJobCard(job) {
-  const card = document.createElement("div");
-  card.className = "job-card";
-  card.dataset.jobId = job.id;
-
-  const statusClass = job.status === "DONE" ? "done"
-    : job.status === "ERROR" ? "error"
-    : job.status === "CANCELLED" ? "cancelled"
-    : job.status === "QUEUED" ? "queued"
-    : "";
-  if (statusClass) card.classList.add(statusClass);
-
-  const thumb = document.createElement("div");
-  thumb.className = "job-thumb";
-  const placeholder = document.createElement("span");
-  placeholder.className = "job-thumb-placeholder";
-  placeholder.textContent = job.status === "DONE" ? "▶" : job.status === "ERROR" ? "!" : "▤";
-  thumb.appendChild(placeholder);
-  card.appendChild(thumb);
-
-  const body = document.createElement("div");
-  body.className = "job-card-body";
-
-  const titleRow = document.createElement("div");
-  titleRow.className = "job-title-row";
-  const title = document.createElement("div");
-  title.className = "job-title";
-  title.textContent = job.source_filename;
-  title.title = job.source_path;
-  titleRow.appendChild(title);
-
-  if (job.status === "ENCODING" || job.status === "QUEUED") {
-    const codecBadge = document.createElement("span");
-    codecBadge.className = "codec-badge";
-    const shortCodec = (job.codec_label || "").split(" ")[0];
-    codecBadge.textContent = job.mode === "size" ? shortCodec : `${shortCodec} · CRF${job.crf}`;
-    titleRow.appendChild(codecBadge);
-
-    if (job.encoder_backend && job.encoder_backend !== "software") {
-      const fastBadge = document.createElement("span");
-      fastBadge.className = "fast-badge";
-      fastBadge.textContent = job.encoder_backend.toUpperCase();
-      titleRow.appendChild(fastBadge);
-    }
-  }
-
-  if (job.oversized) {
-    const oversizedBadge = document.createElement("span");
-    oversizedBadge.className = "oversized-badge";
-    oversizedBadge.textContent = "OVERSIZED";
-    titleRow.appendChild(oversizedBadge);
-  }
-
-  const statusPill = document.createElement("span");
-  if (job.status === "ENCODING") {
-    statusPill.className = "status-pill pct";
-    statusPill.textContent = `${job.pct}%`;
-  } else if (job.status === "QUEUED") {
-    statusPill.className = "status-pill queued";
-    statusPill.textContent = "QUEUED";
-  } else {
-    statusPill.className = `status-pill ${statusClass}`;
-    statusPill.textContent = job.status;
-  }
-  titleRow.appendChild(statusPill);
-  body.appendChild(titleRow);
-
-  if (job.status === "DONE") {
-    const size = document.createElement("div");
-    size.className = "job-size";
-    const pct = job.source_size && job.final_bytes ? Math.round((1 - job.final_bytes / job.source_size) * 100) : null;
-    size.innerHTML = `${job.source_size_label} <span class="arrow">→</span> ${job.final_size_label}`
-      + (pct !== null ? ` <span class="saved">(${pct >= 0 ? "-" : "+"}${Math.abs(pct)}%)</span>` : "");
-    body.appendChild(size);
-  } else if (job.status === "ERROR") {
-    const stats = document.createElement("div");
-    stats.className = "job-stats";
-    stats.style.color = "var(--error-text)";
-    stats.textContent = job.error_message || "Encoding failed.";
-    body.appendChild(stats);
-  } else if (job.status === "CANCELLED") {
-    const size = document.createElement("div");
-    size.className = "job-size";
-    size.textContent = job.source_size_label;
-    body.appendChild(size);
-  } else {
-    const size = document.createElement("div");
-    size.className = "job-size";
-    const estClass = job.estimate_kind === "live" ? "est" : `est ${job.estimate_kind}`;
-    const estLabel = !job.estimated_size_label ? "-"
-      : job.estimate_kind === "target" ? job.estimated_size_label
-      : `~${job.estimated_size_label}`;
-    size.innerHTML = `${job.source_size_label} <span class="arrow">→ est.</span> <span class="${estClass}">${estLabel}</span>`;
-    body.appendChild(size);
-  }
-
-  if (job.source_width && job.source_height) {
-    const resLine = document.createElement("div");
-    resLine.className = "job-res-line";
-    const sourceRes = `${job.source_width}×${job.source_height}`;
-    const targetLabel = (job.status === "CANCELLED" || job.status === "ERROR") ? "" : resolutionTargetLabel(job);
-    if (targetLabel && targetLabel !== sourceRes) {
-      resLine.innerHTML = `<span class="res-icon">▦</span> ${sourceRes} <span class="res-arrow">→</span> <span class="res-target">${targetLabel}</span>`
-        + (job.force_ar ? ` <span class="res-tag">AR fix</span>` : "");
-    } else {
-      resLine.innerHTML = `<span class="res-icon">▦</span> ${sourceRes}`;
-    }
-    body.appendChild(resLine);
-  }
-
-  if (job.status === "ENCODING") {
-    const track = document.createElement("div");
-    track.className = "job-progress-track";
-    const fill = document.createElement("div");
-    fill.className = "job-progress-fill";
-    fill.style.width = `${job.pct || 0}%`;
-    track.appendChild(fill);
-    body.appendChild(track);
-
-    const stats = document.createElement("div");
-    stats.className = "job-stats";
-    const parts = [];
-    if (job.speed) parts.push(`${job.speed} speed`);
-    if (job.eta_seconds != null) parts.push(`ETA ${formatEta(job.eta_seconds)}`);
-    stats.textContent = parts.join(" · ") || "Starting...";
-    body.appendChild(stats);
-  }
-
-  const settingsLine = document.createElement("div");
-  settingsLine.className = "job-settings-line";
-  settingsLine.textContent = buildEncodeSettingsSummary(job);
-  body.appendChild(settingsLine);
-
-  card.appendChild(body);
-
-  const actions = document.createElement("div");
-  actions.className = "job-card-actions";
-  if (job.status === "QUEUED") {
-    const upBtn = document.createElement("button");
-    upBtn.className = "job-mini-btn";
-    upBtn.title = "Move up";
-    upBtn.textContent = "↑";
-    upBtn.addEventListener("click", (e) => { e.stopPropagation(); moveUpEncodeJob(job.id); });
-    actions.appendChild(upBtn);
-
-    const cancelBtn = document.createElement("button");
-    cancelBtn.className = "job-mini-btn";
-    cancelBtn.title = "Cancel";
-    cancelBtn.textContent = "✕";
-    cancelBtn.addEventListener("click", (e) => { e.stopPropagation(); cancelEncodeJob(job.id); });
-    actions.appendChild(cancelBtn);
-  } else if (job.status === "ENCODING") {
-    const cancelBtn = document.createElement("button");
-    cancelBtn.className = "job-mini-btn";
-    cancelBtn.title = "Cancel";
-    cancelBtn.textContent = "✕";
-    cancelBtn.addEventListener("click", (e) => { e.stopPropagation(); cancelEncodeJob(job.id); });
-    actions.appendChild(cancelBtn);
-  } else if (job.status === "ERROR" || job.status === "CANCELLED") {
-    const retryBtn = document.createElement("button");
-    retryBtn.className = "job-mini-btn";
-    retryBtn.title = "Retry";
-    retryBtn.textContent = "↻";
-    retryBtn.addEventListener("click", (e) => { e.stopPropagation(); retryEncodeJob(job.id); });
-    actions.appendChild(retryBtn);
-
-    const deleteBtn = document.createElement("button");
-    deleteBtn.className = "job-mini-btn";
-    deleteBtn.title = "Remove from list";
-    deleteBtn.textContent = "🗑";
-    deleteBtn.addEventListener("click", (e) => { e.stopPropagation(); deleteEncodeJob(job.id); });
-    actions.appendChild(deleteBtn);
-  } else if (job.status === "DONE") {
-    const deleteBtn = document.createElement("button");
-    deleteBtn.className = "job-mini-btn";
-    deleteBtn.title = "Remove from list (keeps the encoded file)";
-    deleteBtn.textContent = "🗑";
-    deleteBtn.addEventListener("click", (e) => { e.stopPropagation(); deleteEncodeJob(job.id); });
-    actions.appendChild(deleteBtn);
-  }
-  card.appendChild(actions);
-
-  if (job.status === "DONE") {
-    card.addEventListener("click", () => openEncodeJobFolder(job.id));
-  }
-
-  return card;
-}
-
-encodeFilterInput.addEventListener("input", () => {
-  state.encodeFilterText = encodeFilterInput.value;
-  renderEncodeLedger();
-});
-encodeSortSelect.addEventListener("change", () => {
-  const [field, dir] = encodeSortSelect.value.split("_");
-  state.encodeSortField = field;
-  state.encodeSortDir = dir;
-  renderEncodeLedger();
-});
-
+// Reused by the inline cancel button on a card's live encode-progress
+// row (see buildJobCard) - the actual UI removal/rebuild happens when
+// the resulting "encode_job_updated" (status -> CANCELLED) broadcasts
+// back and renderLedger() picks it up, same as every other job update.
 async function cancelEncodeJob(id) {
   await fetch("/api/encode/jobs/cancel", {
     method: "POST", headers: { "Content-Type": "application/json" },
@@ -5003,64 +4996,8 @@ async function cancelEncodeJob(id) {
   });
 }
 
-async function retryEncodeJob(id) {
-  try {
-    const res = await fetch("/api/encode/jobs/retry", {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ job_id: id }),
-    });
-    const data = await res.json();
-    if (res.ok) { state.encodeJobs.set(data.job.id, data.job); updateEncodeJobCard(data.job); }
-    else flashStatus(data.error || "Couldn't retry that job.");
-  } catch (e) {
-    flashStatus("Couldn't reach the server.");
-  }
-}
-
-async function deleteEncodeJob(id) {
-  try {
-    const res = await fetch("/api/encode/jobs/delete", {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ job_id: id, delete_output: false }),
-    });
-    const data = await res.json();
-    if (res.ok) { state.encodeJobs.delete(id); renderEncodeLedger(); }
-    else flashStatus(data.error || "Couldn't remove that job.");
-  } catch (e) {
-    flashStatus("Couldn't reach the server.");
-  }
-}
-
-async function moveUpEncodeJob(id) {
-  try {
-    const res = await fetch("/api/encode/jobs/move-up", {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ job_id: id }),
-    });
-    // No websocket broadcast for a pure reorder (no job's own state
-    // changed) - just re-sync the snapshot to reflect the new order.
-    if (res.ok) await loadEncodeJobsSnapshot();
-  } catch (e) {
-    flashStatus("Couldn't reach the server.");
-  }
-}
-
-async function openEncodeJobFolder(id) {
-  if (!IS_LOCAL) { flashStatus(REMOTE_ONLY_TOOLTIP); return; }
-  try {
-    const res = await fetch("/api/encode/jobs/open-folder", {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ job_id: id }),
-    });
-    const data = await res.json();
-    if (!res.ok) flashStatus(data.error || "Couldn't open that file's folder.");
-  } catch (e) {
-    flashStatus("Couldn't reach the server.");
-  }
-}
-
-newEncodeJobBtn.addEventListener("click", () => openNewEncodeJobModal());
 openConvertedBtn.addEventListener("click", async () => {
+  ledgerMoreMenu.classList.add("hidden");
   try {
     const res = await fetch("/api/encode/open-converted-folder", { method: "POST" });
     const data = await res.json();
@@ -5085,20 +5022,6 @@ function presetOptionsFor(kind) {
     return [["0", "0 (slow, best)"], ["1", "1"], ["2", "2 (balanced)"], ["3", "3"], ["4", "4"], ["5", "5 (fast)"]];
   }
   return [];
-}
-
-function populateEncodeSourceSelect() {
-  encodeSourceSelect.innerHTML = "";
-  for (const src of state.encodeSources) {
-    const opt = document.createElement("option");
-    opt.value = src.filename;
-    opt.textContent = `${src.filename} — ${src.file_size}`;
-    encodeSourceSelect.appendChild(opt);
-  }
-  const browseOpt = document.createElement("option");
-  browseOpt.value = "__browse__";
-  browseOpt.textContent = "Browse for a file not in the ledger...";
-  encodeSourceSelect.appendChild(browseOpt);
 }
 
 function populateEncodeCodecSelect() {
@@ -5151,7 +5074,6 @@ function populateAspectQuickRow() {
       // the user wants it forced - flip the checkbox on to match.
       if (!encodeForceArCheck.checked) {
         encodeForceArCheck.checked = true;
-        encodeForceArFields.classList.remove("disabled-field");
       }
       requestEncodeEstimate();
     });
@@ -5207,7 +5129,6 @@ encodeCrfSlider.addEventListener("input", () => {
 encodeTargetSizeInput.addEventListener("input", requestEncodeEstimate);
 
 encodeForceArCheck.addEventListener("change", () => {
-  encodeForceArFields.classList.toggle("disabled-field", !encodeForceArCheck.checked);
   requestEncodeEstimate();
 });
 
@@ -5221,45 +5142,9 @@ function setEncodeMode(mode) {
   requestEncodeEstimate();
 }
 
-encodeAdvancedToggle.addEventListener("click", () => {
-  const isOpen = encodeAdvancedBody.classList.toggle("open");
-  encodeAdvancedCaret.textContent = isOpen ? "▴" : "▾";
-});
-
 function currentSourceRequestBody() {
-  const val = encodeSourceSelect.value;
-  if (val === "__browse__") {
-    const path = encodeSourceBrowsePath.value.trim();
-    return path ? { path } : null;
-  }
-  return val ? { filename: val } : null;
+  return state.encodeModalFilename ? { filename: state.encodeModalFilename } : null;
 }
-
-async function onEncodeSourceChange() {
-  const val = encodeSourceSelect.value;
-  encodeSourceBrowseRow.classList.toggle("hidden", val !== "__browse__");
-  if (val === "__browse__" && !encodeSourceBrowsePath.value.trim()) {
-    encodeSourceInfo.textContent = "";
-    state.encodeSourceInfo = null;
-    return;
-  }
-  await probeSelectedSource();
-}
-encodeSourceSelect.addEventListener("change", onEncodeSourceChange);
-
-encodeSourceBrowseBtn.addEventListener("click", async () => {
-  try {
-    const res = await fetch("/api/encode/browse-source", { method: "POST" });
-    const data = await res.json();
-    if (data.path) {
-      encodeSourceBrowsePath.value = data.path;
-      await probeSelectedSource();
-    }
-  } catch (e) {
-    flashStatus("Couldn't reach the server.");
-  }
-});
-encodeSourceBrowsePath.addEventListener("change", probeSelectedSource);
 
 async function probeSelectedSource() {
   const body = currentSourceRequestBody();
@@ -5386,34 +5271,22 @@ async function doRequestEncodeEstimate() {
   }
 }
 
-async function openNewEncodeJobModal(preselectFilename) {
+async function openNewEncodeJobModal(filename) {
   encodeJobError.classList.add("hidden");
   if (!state.encodeCapabilities) await loadEncodeCapabilities();
-  // Check the download folder for anything new (manually dropped files,
-  // etc.) before listing candidate sources, same as pressing Refresh.
-  await refreshDownloadLedger();
-  await refreshEncodeSources();
 
-  populateEncodeSourceSelect();
-  // Re-encode... from a ledger card's menu arrives here with that
-  // file's name - select it if it's actually a valid candidate (it
-  // will be, since the gating that shows that menu item matches
-  // /api/encode/sources' own filter).
-  if (preselectFilename && Array.from(encodeSourceSelect.options).some((o) => o.value === preselectFilename)) {
-    encodeSourceSelect.value = preselectFilename;
-  }
+  state.encodeModalFilename = filename;
+  encodeSourceDisplay.textContent = filename;
+
   populateEncodeCodecSelect();
   populateEncodeResolutionSelect();
   populateAspectQuickRow();
 
-  encodeSourceBrowseRow.classList.add("hidden");
-  encodeSourceBrowsePath.value = "";
   encodeEstimateOriginal.textContent = "-";
   encodeEstimateValue.textContent = "-";
   encodeEstimateSavings.textContent = "-";
   encodeEstimateSavings.classList.remove("good", "bad");
   encodeForceArCheck.checked = false;
-  encodeForceArFields.classList.add("disabled-field");
   encodeArWidthInput.value = "";
   encodeArHeightInput.value = "";
   encodeDeinterlaceCheck.checked = false;
@@ -5423,13 +5296,10 @@ async function openNewEncodeJobModal(preselectFilename) {
   encodeSubtitlesSelect.value = "copy";
   encodeOversizedSelect.value = "flag";
   encodeTargetSizeInput.value = "";
-  encodeAdvancedBody.classList.remove("open");
-  encodeAdvancedCaret.textContent = "▾";
   setEncodeMode("crf");
 
   onEncodeCodecChange();
-
-  if (encodeSourceSelect.options.length > 0) await onEncodeSourceChange();
+  await probeSelectedSource();
 
   newEncodeJobModal.classList.remove("hidden");
   const modalBox = newEncodeJobModal.querySelector(".modal-box");
@@ -5472,7 +5342,7 @@ addEncodeJobBtn.addEventListener("click", async () => {
       return;
     }
     state.encodeJobs.set(data.job.id, data.job);
-    renderEncodeLedger();
+    renderLedger();
     closeNewEncodeJobModal();
   } catch (e) {
     encodeJobError.textContent = "Couldn't reach the server.";

@@ -36,15 +36,27 @@
           <button id="dl-mode-btn" class="mode-btn mode-btn-left" title="Downloads" aria-label="Downloads">
             <i class="ti ti-download" aria-hidden="true"></i>
           </button>
-          <button id="encode-mode-btn" class="mode-btn mode-btn-mid" title="Encoding Queue" aria-label="Encoding Queue">
-            <i class="ti ti-player-record" aria-hidden="true"></i>
-          </button>
           <button id="history-mode-btn" class="mode-btn mode-btn-right" title="History" aria-label="History">
             <i class="ti ti-history" aria-hidden="true"></i>
           </button>
         </div>
 
         <div class="navigation-actions">
+          <div id="res-tray-item" class="res-tray-item" title="Max download resolution">
+            <i class="ti ti-resize" aria-hidden="true"></i>
+            <select id="res-dropdown" class="res-dropdown-tray" aria-label="Max download resolution">
+              <option value="Best">Best</option>
+              <option value="720p" selected>720p</option>
+              <option value="480p">480p</option>
+              <option value="Audio Only">Audio Only</option>
+            </select>
+          </div>
+          <button id="ctx-m3u-toggle" class="icon-btn" title="M3U Sniffer Mode">
+            <i class="ti ti-radar" aria-hidden="true"></i>
+          </button>
+          <button id="ctx-clipboard-monitor-toggle" class="icon-btn" title="Clipboard Monitoring (auto-download URLs)">
+            <i class="ti ti-clipboard" aria-hidden="true"></i>
+          </button>
           <button id="stash-status-btn" class="icon-btn hidden" title="Stash (Ctrl+S)">
             <img src="/static/stash_logo.png" alt="Stash" class="stash-status-icon">
           </button>
@@ -100,6 +112,8 @@
       <button class="status-chip" data-status="DOWNLOADING">Downloading</button>
       <button class="status-chip" data-status="DONE">Done</button>
       <button class="status-chip" data-status="ERROR">Error</button>
+      <button class="status-chip" data-status="ENCODING">Encoding</button>
+      <button class="status-chip" data-status="ENCODED">Encoded</button>
     </div>
 
     <div id="selection-action-bar" class="selection-action-bar hidden">
@@ -113,29 +127,6 @@
     <div id="ledger-stats-bar" class="ledger-stats-bar"></div>
 
     <div id="queue-list" class="queue-list"></div>
-  </div>
-
-  <div id="encode-view" class="hidden">
-    <div id="encode-control-bar" class="control-bar">
-      <button id="new-encode-job-btn" class="btn btn-primary">+ New Encode Job</button>
-      <button id="open-converted-btn" class="btn">Open "Converted" Folder</button>
-    </div>
-
-    <!-- Encode toolbar: filter + sort -->
-    <div id="encode-toolbar" class="ledger-toolbar">
-      <input id="encode-filter" class="ledger-filter-input" type="text"
-             placeholder="Filter by name..." autocomplete="off" spellcheck="false">
-      <select id="encode-sort" class="ledger-sort-select">
-        <option value="added_desc">Date Added (Newest)</option>
-        <option value="added_asc">Date Added (Oldest)</option>
-        <option value="size_desc">Original Size (Largest)</option>
-        <option value="size_asc">Original Size (Smallest)</option>
-        <option value="savings_desc">Savings % (Highest)</option>
-        <option value="savings_asc">Savings % (Lowest)</option>
-      </select>
-    </div>
-
-    <div id="encode-queue-list" class="queue-list"></div>
   </div>
 
 </div>
@@ -196,24 +187,14 @@
 <div id="ledger-more-menu" class="ctx-menu hidden">
   <div id="refresh-btn" class="ctx-item"><i class="ti ti-refresh" aria-hidden="true"></i> Refresh</div>
   <div id="move-all-btn" class="ctx-item"><i class="ti ti-arrow-right" aria-hidden="true"></i> Move All to Target</div>
+  <div class="ctx-separator"></div>
+  <div id="open-converted-btn" class="ctx-item"><i class="ti ti-folder-down" aria-hidden="true"></i> Open "Converted" Folder</div>
 </div>
 
 <div id="settings-flyout" class="ctx-menu hidden">
   <div class="ctx-section-label">Download Behavior</div>
-  <div class="ctx-item ctx-row">
-    <span class="ctx-label">Max Res:</span>
-    <select id="res-dropdown" class="res-dropdown">
-      <option value="Best">Best</option>
-      <option value="720p" selected>720p</option>
-      <option value="480p">480p</option>
-      <option value="Audio Only">Audio Only</option>
-    </select>
-  </div>
   <div id="ctx-tag-toggle" class="ctx-item ctx-checkable">
     <span class="ctx-check">✓</span> Tag File [Domain]
-  </div>
-  <div id="ctx-m3u-toggle" class="ctx-item ctx-checkable">
-    <span class="ctx-check"></span> M3U Sniffer Mode
   </div>
   <div id="ctx-auto-m3u-retry-toggle" class="ctx-item ctx-checkable">
     <span class="ctx-check">✓</span> Auto-Retry Failed Downloads via M3U
@@ -222,9 +203,6 @@
   <div class="ctx-section-label">Automation</div>
   <div id="ctx-auto-confirm-titles-toggle" class="ctx-item ctx-checkable">
     <span class="ctx-check"></span> Auto-Confirm Titles (skip edit step)
-  </div>
-  <div id="ctx-clipboard-monitor-toggle" class="ctx-item ctx-checkable">
-    <span class="ctx-check"></span> Clipboard Monitoring (auto-download URLs)
   </div>
   <div class="ctx-item ctx-row">
     <span class="ctx-label">Title Prefix:</span>
@@ -281,7 +259,7 @@
   <div id="ctx-rename-file" class="ctx-item hidden">Rename File</div>
   <div id="ctx-move-to-target" class="ctx-item hidden">Move to Target</div>
   <div id="ctx-replace-source" class="ctx-item hidden">Replace Stash Source</div>
-  <div id="ctx-replace-with-twin" class="ctx-item hidden">Replace with Twin</div>
+  <div id="ctx-replace-with-twin" class="ctx-item hidden">Promote Twin</div>
   <div id="ctx-open-folder" class="ctx-item hidden">Open in Explorer</div>
 </div>
 
@@ -566,13 +544,7 @@
 
     <div class="form-field">
       <label>Source file</label>
-      <select id="encode-source-select"></select>
-    </div>
-    <div id="encode-source-browse-row" class="form-field hidden">
-      <div class="modal-row">
-        <input id="encode-source-browse-path" class="input-field" type="text" placeholder="Full path to the file" spellcheck="false">
-        <button id="encode-source-browse-btn" class="btn modal-browse-btn">Browse...</button>
-      </div>
+      <div id="encode-source-display" class="hint encode-source-display"></div>
     </div>
     <div id="encode-source-info" class="hint"></div>
 
@@ -593,130 +565,77 @@
       <button type="button" id="encode-estimate-refresh-btn" class="est-refresh-btn" title="Recalculate estimate">⟳</button>
     </div>
 
-    <div class="encode-grid-2col">
-      <div>
-        <div class="section-label">Quality</div>
-        <div class="form-field">
-          <div class="pill-toggle-group">
-            <div id="encode-mode-crf-btn" class="pill-toggle active">Quality (CRF)</div>
-            <div id="encode-mode-size-btn" class="pill-toggle">Target Size</div>
-          </div>
-        </div>
+    <div class="form-field">
+      <label id="encode-resolution-label">Resolution cap (downscale only)</label>
+      <select id="encode-resolution-select"></select>
+    </div>
 
-        <div id="encode-crf-fields">
-          <div class="field-grid">
-            <div class="form-field">
-              <label>Codec</label>
-              <select id="encode-codec-select"></select>
-            </div>
-            <div class="form-field">
-              <label>Encoder</label>
-              <select id="encode-backend-select"></select>
-            </div>
-          </div>
-          <div class="form-field">
-            <label>CRF (lower = higher quality, bigger file)</label>
-            <div class="range-row">
-              <input type="range" id="encode-crf-slider">
-              <span class="range-value" id="encode-crf-value"></span>
-            </div>
-            <div class="hint" id="encode-crf-hint"></div>
-          </div>
-          <div class="form-field">
-            <label>Preset (speed vs. compression)</label>
-            <select id="encode-preset-select"></select>
-          </div>
-        </div>
+    <div class="checkbox-row">
+      <input type="checkbox" id="encode-deinterlace-check">
+      <label for="encode-deinterlace-check">Deinterlace (bwdif)</label>
+    </div>
+    <div class="checkbox-row">
+      <input type="checkbox" id="encode-autocrop-check">
+      <label for="encode-autocrop-check">Auto-crop black bars</label>
+    </div>
+    <div class="checkbox-row">
+      <input type="checkbox" id="encode-denoise-check">
+      <label for="encode-denoise-check">Light denoise</label>
+    </div>
 
-        <div id="encode-size-fields" style="display:none;">
-          <div class="form-field">
-            <label>Target output size (MB)</label>
-            <input type="number" id="encode-target-size-input" min="1" step="1" placeholder="e.g. 1500">
-            <div class="hint">Two-pass encode. File size is precise; visual quality will vary depending on how ambitious the target is.</div>
-          </div>
-        </div>
-      </div>
+    <div class="checkbox-row">
+      <input type="checkbox" id="encode-force-ar-check">
+      <label for="encode-force-ar-check">Force aspect ratio</label>
+    </div>
+    <div class="aspect-quick-row" id="encode-aspect-quick-row"></div>
+    <input type="hidden" id="encode-ar-width-input">
+    <input type="hidden" id="encode-ar-height-input">
 
-      <div>
-        <div class="section-label">Resolution &amp; Correction</div>
-        <div class="form-field">
-          <label id="encode-resolution-label">Resolution cap (downscale only)</label>
-          <select id="encode-resolution-select"></select>
-        </div>
-
-        <div class="checkbox-row">
-          <input type="checkbox" id="encode-deinterlace-check">
-          <label for="encode-deinterlace-check">Deinterlace (bwdif)</label>
-        </div>
-        <div class="checkbox-row">
-          <input type="checkbox" id="encode-autocrop-check">
-          <label for="encode-autocrop-check">Auto-crop black bars</label>
-        </div>
-
-        <div class="checkbox-row">
-          <input type="checkbox" id="encode-force-ar-check">
-          <label for="encode-force-ar-check">Force aspect ratio</label>
-        </div>
-        <div class="aspect-quick-row" id="encode-aspect-quick-row"></div>
-        <div class="form-field disabled-field" id="encode-force-ar-fields">
-          <div class="field-grid">
-            <div class="form-field">
-              <label>Target width</label>
-              <input type="number" id="encode-ar-width-input" min="2" step="2">
-            </div>
-            <div class="form-field">
-              <label>Target height</label>
-              <input type="number" id="encode-ar-height-input" min="2" step="2">
-            </div>
-          </div>
-          <div class="hint">Fixes squished/stretched sources - re-scales pixel dimensions to correct proportions.</div>
-        </div>
+    <div class="section-label">Quality</div>
+    <div class="form-field">
+      <div class="pill-toggle-group">
+        <div id="encode-mode-crf-btn" class="pill-toggle active">Quality (CRF)</div>
+        <div id="encode-mode-size-btn" class="pill-toggle">Target Size</div>
       </div>
     </div>
 
-    <div class="advanced-toggle" id="encode-advanced-toggle">
-      <span>Advanced options</span>
-      <span id="encode-advanced-caret">▾</span>
-    </div>
-    <div class="advanced-body" id="encode-advanced-body">
-      <div class="field-grid-3">
+    <div id="encode-crf-fields">
+      <div class="field-grid">
         <div class="form-field">
-          <label>Audio</label>
-          <select id="encode-audio-select">
-            <option value="copy" selected>Copy (no re-encode)</option>
-            <option value="aac128">Re-encode AAC 128k</option>
-            <option value="aac192">Re-encode AAC 192k</option>
-          </select>
+          <label>Codec</label>
+          <select id="encode-codec-select"></select>
         </div>
         <div class="form-field">
-          <label>Container</label>
-          <select id="encode-container-select">
-            <option value="mp4">MP4</option>
-            <option value="mkv">MKV</option>
-          </select>
-        </div>
-        <div class="form-field">
-          <label>Subtitles</label>
-          <select id="encode-subtitles-select">
-            <option value="copy" selected>Copy if present</option>
-            <option value="drop">Drop</option>
-          </select>
+          <label>Encoder</label>
+          <select id="encode-backend-select"></select>
         </div>
       </div>
-      <div class="advanced-inline-row">
-        <div class="checkbox-row advanced-inline-checkbox">
-          <input type="checkbox" id="encode-denoise-check">
-          <label for="encode-denoise-check">Light denoise</label>
+      <div class="form-field">
+        <label>CRF (lower = higher quality, bigger file)</label>
+        <div class="range-row">
+          <input type="range" id="encode-crf-slider">
+          <span class="range-value" id="encode-crf-value"></span>
         </div>
-        <div class="form-field advanced-inline-select">
-          <label>If output ends up larger than source</label>
-          <select id="encode-oversized-select">
-            <option value="flag" selected>Keep both, flag it</option>
-            <option value="discard">Discard the encode</option>
-          </select>
-        </div>
+        <div class="hint" id="encode-crf-hint"></div>
+      </div>
+      <div class="form-field">
+        <label>Preset (speed vs. compression)</label>
+        <select id="encode-preset-select"></select>
       </div>
     </div>
+
+    <div id="encode-size-fields" style="display:none;">
+      <div class="form-field">
+        <label>Target output size (MB)</label>
+        <input type="number" id="encode-target-size-input" min="1" step="1" placeholder="e.g. 1500">
+        <div class="hint">Two-pass encode. File size is precise; visual quality will vary depending on how ambitious the target is.</div>
+      </div>
+    </div>
+
+    <input type="hidden" id="encode-audio-select" value="copy">
+    <input type="hidden" id="encode-container-select" value="mp4">
+    <input type="hidden" id="encode-subtitles-select" value="copy">
+    <input type="hidden" id="encode-oversized-select" value="flag">
 
     <div id="encode-job-error" class="modal-error hidden"></div>
 
