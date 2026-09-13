@@ -15,6 +15,7 @@ from typing import Dict, Optional
 from config import RES_FORMATS, AUDIO_ONLY_KEY
 from ffmpeg_encode import probe_basic_info
 from procflags import NO_CONSOLE_KWARGS
+from fingerprints import load_fingerprint_index, save_fingerprint_index, update_fingerprint, remove_fingerprint
 from settings import get_download_prefs, get_save_dir, get_target_dir, get_ytdlp_args, get_converted_dir
 from storage import load_saved_queue, save_queue_to_disk, write_to_history_log
 from thumbnails import thumbnail_path_for
@@ -621,6 +622,20 @@ class JobManager:
                     pass
             self._relocate_downloaded_thumbnail(filename, job.get("save_dir"))
 
+            # Record a content fingerprint now, while the file still
+            # exists under this name - this is what lets a later
+            # external rename/move be recognized (see
+            # filesystem_scan.py). Cheap (partial-file hash), so no
+            # need to gate this single-file write behind anything but
+            # the same toggle that gates the rest of rename detection.
+            if media_path and get_download_prefs().get("detect_renames", True):
+                try:
+                    index = load_fingerprint_index()
+                    if update_fingerprint(index, filename, media_path):
+                        save_fingerprint_index(index)
+                except Exception:
+                    pass
+
         job["status"] = status
         job["file_size"] = file_size_str
         job["is_audio"] = is_audio
@@ -820,6 +835,14 @@ class JobManager:
         if filename in self.saved_queue:
             del self.saved_queue[filename]
             save_queue_to_disk(self.saved_queue)
+
+        if get_download_prefs().get("detect_renames", True):
+            try:
+                index = load_fingerprint_index()
+                if remove_fingerprint(index, filename):
+                    save_fingerprint_index(index)
+            except Exception:
+                pass
         return True
 
     # ── Renaming a completed job's file ───────────────────────────
@@ -854,6 +877,7 @@ class JobManager:
             if os.path.normcase(os.path.abspath(twin_path)) != os.path.normcase(os.path.abspath(twin_new_path)) and os.path.exists(twin_new_path):
                 raise ValueError(f"A twin named '{new_name}{twin_ext}' already exists in Converted/.")
 
+        new_media_path = None
         if media_path:
             ext = os.path.splitext(media_path)[1]
             new_media_path = os.path.join(save_dir, new_name + ext)
@@ -883,6 +907,17 @@ class JobManager:
 
         job_url = (job or {}).get("url", "") or self.saved_queue.get(new_name, {}).get("url", "")
         write_to_history_log(new_name, job_url, f"RENAMED from {filename}")
+
+        if get_download_prefs().get("detect_renames", True):
+            try:
+                index = load_fingerprint_index()
+                changed = remove_fingerprint(index, filename)
+                if new_media_path and update_fingerprint(index, new_name, new_media_path):
+                    changed = True
+                if changed:
+                    save_fingerprint_index(index)
+            except Exception:
+                pass
 
         return new_name
 

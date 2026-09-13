@@ -63,20 +63,26 @@
           <button id="url-args-btn" class="icon-btn" title="Custom yt-dlp arguments">
             <i class="ti ti-code" aria-hidden="true"></i>
           </button>
+          <button id="folder-controls-toggle-btn" class="icon-btn" title="Keep folder controls visible even when the tray is closed">
+            <i class="ti ti-pin" aria-hidden="true"></i>
+          </button>
           <button id="gear-btn" class="icon-btn" title="Settings">
             <i class="ti ti-settings" aria-hidden="true"></i>
           </button>
         </div>
       </div>
-      <div id="folder-status-row" class="folder-status-row">
-        <div id="folder-status-save" class="folder-status-item" title="Click to choose a download folder">
-          <i class="ti ti-folder-down" aria-hidden="true"></i>
-          <span class="folder-status-path">…</span>
-        </div>
-        <div id="folder-status-target" class="folder-status-item" title="Click to choose a target folder">
-          <i class="ti ti-target" aria-hidden="true"></i>
-          <span class="folder-status-path">…</span>
-        </div>
+    </div>
+
+    <!-- Folder controls: shown whenever the nav tray is open, or always
+         when pinned via the toggle above (independent of tray state). -->
+    <div id="folder-status-row" class="folder-status-row hidden">
+      <div id="folder-status-save" class="folder-status-item" title="Click to choose a download folder">
+        <i class="ti ti-folder-down" aria-hidden="true"></i>
+        <span class="folder-status-path">…</span>
+      </div>
+      <div id="folder-status-target" class="folder-status-item" title="Click to choose a target folder">
+        <i class="ti ti-target" aria-hidden="true"></i>
+        <span class="folder-status-path">…</span>
       </div>
     </div>
   </div>
@@ -203,6 +209,9 @@
   <div class="ctx-section-label">Automation</div>
   <div id="ctx-auto-confirm-titles-toggle" class="ctx-item ctx-checkable">
     <span class="ctx-check"></span> Auto-Confirm Titles (skip edit step)
+  </div>
+  <div id="ctx-detect-renames-toggle" class="ctx-item ctx-checkable" title="Recognize a file renamed or moved outside the app and keep its download history attached to the new name">
+    <span class="ctx-check">✓</span> Detect Renamed Files
   </div>
   <div class="ctx-item ctx-row">
     <span class="ctx-label">Title Prefix:</span>

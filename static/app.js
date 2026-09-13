@@ -18,6 +18,16 @@ function loadJobsIntoMap(jobsArray) {
 const el = (id) => document.getElementById(id);
 const navToggleBtn = el("nav-toggle-btn");
 const navTray = el("nav-tray");
+const folderControlsToggleBtn = el("folder-controls-toggle-btn");
+
+// Folder controls (save/target folder row) are pinned to always show,
+// even with the nav tray closed/hidden, when this is on. Purely a
+// client-side display preference, so it's kept in localStorage rather
+// than synced to the server like the other tray toggles.
+let folderControlsPinned = false;
+try {
+  folderControlsPinned = localStorage.getItem("stashdlp_folder_controls_pinned") === "1";
+} catch (err) { /* localStorage unavailable (e.g. privacy mode) - fall back to default */ }
 
 // "Manage External Programs" and "Open With..." only make sense on the
 // machine actually running the server (that's where the programs and
@@ -41,6 +51,7 @@ const state = {
   autoM3uRetry: true,
   autoConfirmTitles: false,
   clipboardMonitor: false,
+  detectRenames: true,
   titlePrefix: "",
   titlePrefixEnabled: false,
   ytdlpDefaultArgs: "",
@@ -533,17 +544,27 @@ async function refreshDownloadPrefs() {
     state.autoM3uRetry = data.auto_m3u_retry !== false;
     state.autoConfirmTitles = !!data.auto_confirm_titles;
     state.clipboardMonitor = !!data.clipboard_monitor;
+    state.detectRenames = data.detect_renames !== false;
     state.titlePrefix = data.title_prefix || "";
     state.titlePrefixEnabled = !!data.title_prefix_enabled;
   } catch (e) {
     // Backend unreachable at boot - just keep the hard-coded defaults
     // already baked into the HTML/state.
   }
+  // Auto-download (Clipboard Monitoring) is safety-sensitive - it should
+  // never come back on by itself, so every app start forces it off
+  // regardless of what was last saved. If it had been left on, persist
+  // the change too, so a stale saved "on" doesn't reappear next boot.
+  if (state.clipboardMonitor) {
+    state.clipboardMonitor = false;
+    saveDownloadPrefs();
+  }
   el("ctx-tag-toggle").querySelector(".ctx-check").textContent = state.tagDomain ? "✓" : "";
   el("ctx-m3u-toggle").classList.toggle("active", state.m3uSniffer);
   el("ctx-auto-m3u-retry-toggle").querySelector(".ctx-check").textContent = state.autoM3uRetry ? "✓" : "";
   el("ctx-auto-confirm-titles-toggle").querySelector(".ctx-check").textContent = state.autoConfirmTitles ? "✓" : "";
   el("ctx-clipboard-monitor-toggle").classList.toggle("active", state.clipboardMonitor);
+  el("ctx-detect-renames-toggle").querySelector(".ctx-check").textContent = state.detectRenames ? "✓" : "";
   el("ctx-title-prefix-toggle").querySelector(".ctx-check").textContent = state.titlePrefixEnabled ? "✓" : "";
   titlePrefixInput.value = state.titlePrefix;
 }
@@ -806,6 +827,7 @@ function saveDownloadPrefs() {
       auto_m3u_retry: state.autoM3uRetry,
       auto_confirm_titles: state.autoConfirmTitles,
       clipboard_monitor: state.clipboardMonitor,
+      detect_renames: state.detectRenames,
       title_prefix: state.titlePrefix,
       title_prefix_enabled: state.titlePrefixEnabled,
     }),
@@ -1069,6 +1091,13 @@ function connectWebSocket() {
         (e) => !(e.timestamp === msg.timestamp && e.filename === msg.filename && e.url === msg.url)
       );
       if (state.appMode === "SEARCH_HISTORY") renderHistoryLedger();
+    } else if (msg.type === "renames_detected") {
+      const renamed = msg.renamed || [];
+      if (renamed.length === 1) {
+        flashStatus(`Detected rename: "${renamed[0].old}" → "${renamed[0].new}"`);
+      } else if (renamed.length > 1) {
+        flashStatus(`Detected ${renamed.length} renamed files - history kept in sync.`);
+      }
     }
   };
 
@@ -1459,11 +1488,34 @@ const ledgerStatusFilterRow = el("ledger-status-filter-row");
 const ledgerStatsBar = el("ledger-stats-bar");
 
 // ── Navigation tray toggle ──────────────────────────────────
+// Folder controls live outside the tray in the DOM (see index.html) so
+// they can stay visible while the tray itself is closed/hidden; this
+// keeps that row's visibility in sync whenever the tray's open state
+// changes, or the pin toggle is flipped.
+function updateFolderStatusRowVisibility() {
+  const visible = folderControlsPinned || navTray.classList.contains("open");
+  folderStatusRow.classList.toggle("hidden", !visible);
+}
+
 navToggleBtn.addEventListener("click", (e) => {
   e.stopPropagation();
   navTray.classList.remove("hidden");
   navTray.classList.toggle("open");
   navToggleBtn.classList.toggle("active");
+  updateFolderStatusRowVisibility();
+});
+
+folderControlsToggleBtn.classList.toggle("active", folderControlsPinned);
+updateFolderStatusRowVisibility();
+
+folderControlsToggleBtn.addEventListener("click", (e) => {
+  e.stopPropagation();
+  folderControlsPinned = !folderControlsPinned;
+  folderControlsToggleBtn.classList.toggle("active", folderControlsPinned);
+  try {
+    localStorage.setItem("stashdlp_folder_controls_pinned", folderControlsPinned ? "1" : "0");
+  } catch (err) { /* ignore - localStorage unavailable */ }
+  updateFolderStatusRowVisibility();
 });
 
 ledgerFilterInput.addEventListener("input", () => {
@@ -3654,6 +3706,48 @@ el("ctx-clipboard-monitor-toggle").addEventListener("click", () => {
   el("ctx-clipboard-monitor-toggle").classList.toggle("active", state.clipboardMonitor);
   saveDownloadPrefs();
   flashStatus(state.clipboardMonitor ? "Clipboard monitoring enabled." : "Clipboard monitoring disabled.");
+  resetClipboardMonitorIdleTimer();
+});
+
+// ── Auto-download (Clipboard Monitoring) inactivity timeout ────────
+// This toggle is safety-sensitive: leaving it on unattended would mean
+// anything copied to the clipboard gets auto-downloaded. On top of
+// always starting disabled (see refreshDownloadPrefs), it's also
+// switched off automatically after 10 minutes with no user activity
+// in the app, rather than staying on indefinitely for a session left
+// open and unattended.
+const CLIPBOARD_MONITOR_IDLE_MS = 10 * 60 * 1000; // 10 minutes
+
+let clipboardMonitorIdleTimer = null;
+
+function disableClipboardMonitorForInactivity() {
+  if (!state.clipboardMonitor) return;
+  state.clipboardMonitor = false;
+  el("ctx-clipboard-monitor-toggle").classList.toggle("active", false);
+  saveDownloadPrefs();
+  flashStatus("Clipboard monitoring disabled after 10 minutes of inactivity.");
+}
+
+function resetClipboardMonitorIdleTimer() {
+  if (clipboardMonitorIdleTimer) {
+    clearTimeout(clipboardMonitorIdleTimer);
+    clipboardMonitorIdleTimer = null;
+  }
+  if (!state.clipboardMonitor) return;
+  clipboardMonitorIdleTimer = setTimeout(disableClipboardMonitorForInactivity, CLIPBOARD_MONITOR_IDLE_MS);
+}
+
+// Any interaction with the app counts as activity and pushes the
+// timeout back out; this only actually schedules a timer while
+// clipboard monitoring is on (see the early return above).
+for (const evt of ["mousemove", "mousedown", "keydown", "touchstart", "wheel"]) {
+  document.addEventListener(evt, resetClipboardMonitorIdleTimer, { passive: true });
+}
+
+el("ctx-detect-renames-toggle").addEventListener("click", () => {
+  state.detectRenames = !state.detectRenames;
+  el("ctx-detect-renames-toggle").querySelector(".ctx-check").textContent = state.detectRenames ? "✓" : "";
+  saveDownloadPrefs();
 });
 
 el("ctx-title-prefix-toggle").addEventListener("click", () => {
@@ -4062,6 +4156,7 @@ function setAppModeDownload() {
   inputField.disabled = false;
   resetToReady();
   updateModeButtons();
+  inputField.focus();
 }
 
 function setAppModeSearchHistory() {

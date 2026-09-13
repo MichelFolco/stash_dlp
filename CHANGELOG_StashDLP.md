@@ -1,3 +1,25 @@
+## v1.30.9 - Keep card icons on narrow desktop windows
+- The per-card icon row (Copy URL, Copy file name, Rename, etc.) was hiding whenever the window got narrower than 640px, even with a mouse. It now only hides on touch (coarse-pointer) devices, where hover doesn't work anyway - a narrow desktop/mouse window keeps the icons, revealed on hover same as a wide window.
+
+## v1.30.8 - Ctrl+D focuses the URL box
+- Ctrl+D (and clicking the Downloads tab) already switched to the download queue view; it now also puts the cursor in the URL input box, so you can paste and go without an extra click.
+
+## v1.30.7 - Auto-download safety timeout
+- Clipboard Monitoring (auto-download) now always starts off - it no longer stays enabled across an app restart even if it was left on last session.
+- Clipboard Monitoring also switches itself off automatically after 10 minutes with no activity in the app (mouse, keyboard, touch, or scroll), so a session left open and unattended won't keep auto-downloading whatever hits the clipboard.
+- A status message appears when it's auto-disabled for inactivity, same as the existing manual-toggle message.
+
+## v1.30.6 - Pin folder controls visible
+- Added a pin toggle (pin icon) to the icon tray. When on, the folder controls row (download/target folder) stays visible even while the tray itself is closed, instead of only appearing when the tray is opened.
+- The folder controls row moved out of the tray's DOM so it can be shown independently; visually unchanged when the tray is open.
+- The pin state is a local display preference (saved in the browser, not synced to the server) and persists across reloads.
+
+## v1.30.5 - Detect files renamed/moved outside the app
+- Download history now survives a file being renamed or moved in file explorer (or any other program), not just in-app renames. A new content fingerprint (file size + a fast partial hash - no need to read a whole multi-GB video) recognizes "this is the same file under a new name" during the normal filesystem scan.
+- When a rename is detected, the URL/metadata follow the file to its new name and a "RENAMED from ..." line is appended to the history log - same mechanism the in-app rename already used, so history search and the exact-match lookup the Stash DLP History Lookup plugin relies on both keep working under the new filename.
+- Added a "Detect Renamed Files" toggle to Settings (on by default). Fingerprints are recorded when a download completes, moved on in-app rename, and cleaned up on delete; existing files get backfilled the first time this runs, then cost nothing on later scans unless something actually changed.
+- A small toast now appears when a rename is auto-detected.
+
 ## v1.30.4 - Resolution/M3U/Clipboard moved to icon tray
 - Moved the Max Res combobox, M3U Sniffer Mode toggle, and Clipboard Monitoring toggle out of the gear (Settings) flyout and into the icon tray next to the History icon, so they're reachable without opening a menu.
 - M3U Sniffer and Clipboard Monitoring are now plain icon toggle buttons (radar and clipboard icons) that highlight teal when active, matching the existing audio-filter toggle pattern - no more text captions or checkmarks for these two.

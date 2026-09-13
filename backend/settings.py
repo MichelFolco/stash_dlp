@@ -449,6 +449,16 @@ def get_log_file_path() -> str:
     return os.path.join(get_data_dir(), "downloads_history.log")
 
 
+def get_fingerprint_index_path() -> str:
+    """Sidecar content-fingerprint index for the CURRENTLY active download
+    folder, used to recognize a file that's been renamed/moved outside the
+    app (see fingerprints.py). Lives alongside _download_queue.json and
+    downloads_history.log but is deliberately a separate file - it's purely
+    an internal cache this app builds and rebuilds on its own, not part of
+    the plain-text log format shared with the PyQt6 desktop app."""
+    return os.path.join(get_data_dir(), "_file_fingerprints.json")
+
+
 def get_all_history_log_paths() -> list:
     """Every downloads_history.log this app knows about, one per download
     folder that's ever been used - i.e. every hashed subfolder under
@@ -543,6 +553,12 @@ DEFAULT_DOWNLOAD_PREFS = {
     # still there.
     "title_prefix": "",
     "title_prefix_enabled": False,
+    # When on, a file renamed or moved outside the app (file explorer,
+    # another program) is recognized via a content fingerprint and its
+    # download-history entry follows it to the new name, instead of the
+    # old entry being dropped and the new name showing up as an
+    # untracked "Unknown" file. See fingerprints.py / filesystem_scan.py.
+    "detect_renames": True,
 }
 VALID_QUALITIES = {"Best", "720p", "480p", "Audio Only"}
 
@@ -561,6 +577,7 @@ def set_download_prefs(
     clipboard_monitor: bool = False,
     title_prefix: str = "",
     title_prefix_enabled: bool = False,
+    detect_renames: bool = True,
 ) -> dict:
     prefs = {
         "quality": quality if quality in VALID_QUALITIES else DEFAULT_DOWNLOAD_PREFS["quality"],
@@ -571,6 +588,7 @@ def set_download_prefs(
         "clipboard_monitor": bool(clipboard_monitor),
         "title_prefix": title_prefix or "",
         "title_prefix_enabled": bool(title_prefix_enabled),
+        "detect_renames": bool(detect_renames),
     }
     data = _load()
     data[DOWNLOAD_PREFS_KEY] = prefs

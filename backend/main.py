@@ -93,7 +93,7 @@ async def on_startup():
     version_state["version"] = version
     version_state["just_updated"] = just_updated
 
-    done_jobs = scan_filesystem()
+    done_jobs, _renamed_pairs = scan_filesystem()
     await job_manager.seed_from_filesystem(done_jobs)
 
     encode_manager.start()
@@ -167,6 +167,7 @@ class DownloadPrefsRequest(BaseModel):
     clipboard_monitor: bool = False
     title_prefix: str = ""
     title_prefix_enabled: bool = False
+    detect_renames: bool = True
 
 
 class PlaylistProbeRequest(BaseModel):
@@ -352,10 +353,12 @@ async def api_set_settings(req: SaveDirRequest):
         return JSONResponse(status_code=400, content={"error": str(e)})
 
     # The folder changed, so re-scan it and refresh every connected client
-    done_jobs = scan_filesystem()
+    done_jobs, renamed_pairs = scan_filesystem()
     await job_manager.seed_from_filesystem(done_jobs, replace=True)
     snapshot = job_manager.snapshot()
     await job_manager.connections.broadcast({"type": "refresh", "jobs": snapshot})
+    if renamed_pairs:
+        await job_manager.connections.broadcast({"type": "renames_detected", "renamed": renamed_pairs})
     return {
         "save_dir": new_path,
         "roots": get_save_dir_roots(),
@@ -403,7 +406,7 @@ async def api_get_download_prefs():
 async def api_set_download_prefs(req: DownloadPrefsRequest):
     return set_download_prefs(
         req.quality, req.tag_domain, req.m3u_sniffer, req.auto_m3u_retry, req.auto_confirm_titles,
-        req.clipboard_monitor, req.title_prefix, req.title_prefix_enabled,
+        req.clipboard_monitor, req.title_prefix, req.title_prefix_enabled, req.detect_renames,
     )
 
 
@@ -1211,10 +1214,12 @@ async def api_delete_history_entry(req: HistoryDeleteRequest):
 
 @app.post("/api/refresh")
 async def api_refresh():
-    done_jobs = scan_filesystem()
+    done_jobs, renamed_pairs = scan_filesystem()
     await job_manager.seed_from_filesystem(done_jobs, replace=True)
     snapshot = job_manager.snapshot()
     await job_manager.connections.broadcast({"type": "refresh", "jobs": snapshot})
+    if renamed_pairs:
+        await job_manager.connections.broadcast({"type": "renames_detected", "renamed": renamed_pairs})
     return {"jobs": snapshot}
 
 

@@ -320,12 +320,18 @@ html, body {
 .res-dropdown-tray:focus { outline: none; }
 
 /* ── Folder status row (single line, icons only) ──────────── */
+/* Standalone row, sibling of .nav-tray - shown when the tray is open
+   or when pinned via #folder-controls-toggle-btn (see app.js), so it
+   isn't nested inside .nav-tray and isn't hidden along with it. */
 .folder-status-row {
   display: flex;
   gap: 8px;
-  padding: 2px 0;
+  width: 100%;
+  margin: 2px 0 4px 0;
+  padding: 0;
   flex-shrink: 0;
 }
+.folder-status-row.hidden { display: none; }
 
 .folder-status-item {
   display: flex;
@@ -808,6 +814,13 @@ html, body {
   background: var(--panel-2);
 }
 .job-mini-btn i { font-size: 13px; line-height: 1; }
+
+/* Card icons only reveal on hover, which doesn't work on touch - keep
+   hiding them there, but a narrow desktop/mouse window should not
+   hide them (see the responsive block below, which no longer does). */
+@media (pointer: coarse) {
+  .job-card-icons { display: none; }
+}
 
 /* ── Progress bars ─────────────────────────────────────────── */
 .job-progress-track {
@@ -1562,7 +1575,6 @@ html, body {
 @media (max-width: 640px), (pointer: coarse) {
   .job-thumb { width: 96px; height: 54px; }
   .job-path { display: none; }
-  .job-card-icons { display: none; }
   .job-title { font-size: calc(var(--base-font) + 4px); }
 
   .top-row {
@@ -2128,17 +2140,8 @@ html, body {
   .stash-scene-open-btn { flex: 1 1 0; }
 }
 
-/* The folder row now lives inside the open hamburger panel. */
-.nav-tray .folder-status-row {
-  width: 100%;
-  margin-top: 6px;
-  padding: 0;
-}
-
 @media (max-width: 520px) {
   .reencode-choice-cards { grid-template-columns: 1fr; }
   .reencode-choice-actions .btn { flex: 1 1 auto; }
 }
 .nav-tray-inner { flex-wrap: wrap; }
-.nav-tray .folder-status-row { flex: 0 0 100%; }
-.nav-tray.open { max-height: 220px; }
