@@ -158,7 +158,6 @@ const openWithFlyout = el("open-with-flyout");
 const openWithProgramsList = el("open-with-programs-list");
 const copyFlyout = el("copy-flyout");
 const fileFlyout = el("file-flyout");
-const foldersFlyout = el("folders-flyout");
 const settingsFlyout = el("settings-flyout");
 const externalProgramsModal = el("external-programs-modal");
 const externalProgramsList = el("external-programs-list");
@@ -564,7 +563,7 @@ async function refreshDownloadPrefs() {
   }
   el("ctx-tag-toggle").querySelector(".ctx-check").textContent = state.tagDomain ? "✓" : "";
   el("ctx-m3u-toggle").classList.toggle("active", state.m3uSniffer);
-  el("ctx-auto-m3u-retry-toggle").querySelector(".ctx-check").textContent = state.autoM3uRetry ? "✓" : "";
+  el("ctx-auto-m3u-retry-toolbar-toggle").classList.toggle("active", state.autoM3uRetry);
   el("ctx-auto-confirm-titles-toggle").querySelector(".ctx-check").textContent = state.autoConfirmTitles ? "✓" : "";
   el("ctx-clipboard-monitor-toggle").classList.toggle("active", state.clipboardMonitor);
   el("ctx-detect-renames-toggle").querySelector(".ctx-check").textContent = state.detectRenames ? "✓" : "";
@@ -661,11 +660,6 @@ urlArgsQuickInput.addEventListener("keydown", (e) => {
 
 el("url-args-manage-all").addEventListener("click", () => {
   urlArgsFlyout.classList.add("hidden");
-  openYtdlpArgsModal();
-});
-
-el("ctx-manage-ytdlp-args").addEventListener("click", () => {
-  closeMenus();
   openYtdlpArgsModal();
 });
 
@@ -1238,8 +1232,11 @@ function renderLedger() {
     seen.add(job.filename);
     let card = state.renderedCards.get(job.filename);
     if (!card || state.renderedCardSigs.get(job.filename) !== sig) {
+      // Do not animate cards rebuilt by the periodic queue refresh. Dynamic
+      // fields such as progress/speed/ETA can change during a refresh, and
+      // replaying a fade animation here makes the entire ledger appear to
+      // flash even though nothing was actually removed by the user.
       card = buildJobCard(job);
-      card.classList.add("job-card-enter");
       state.renderedCards.set(job.filename, card);
       state.renderedCardSigs.set(job.filename, sig);
     }
@@ -1495,11 +1492,13 @@ function playCompletionPing() {
 }
 
 const ledgerFilterInput = el("ledger-filter");
-const ledgerAudioFilterBtn = el("ledger-audio-filter-btn");
+const ledgerFilterPresetWrap = el("ledger-filter-preset-wrap");
+const ledgerFilterPresetBtn = el("ledger-filter-preset-btn");
+const ledgerFilterPresetLabel = el("ledger-filter-preset-label");
+const ledgerFilterPresetMenu = el("ledger-filter-preset-menu");
 const ledgerSortSelect = el("ledger-sort");
 const ledgerMoreBtn = el("ledger-more-btn");
 const ledgerMoreMenu = el("ledger-more-menu");
-const ledgerStatusFilterRow = el("ledger-status-filter-row");
 const ledgerStatsBar = el("ledger-stats-bar");
 
 // ── Navigation tray toggle ──────────────────────────────────
@@ -1538,10 +1537,82 @@ ledgerFilterInput.addEventListener("input", () => {
   renderLedger();
 });
 
-ledgerAudioFilterBtn.addEventListener("click", () => {
-  state.audioOnlyFilter = !state.audioOnlyFilter;
-  ledgerAudioFilterBtn.classList.toggle("active", state.audioOnlyFilter);
+updateLedgerFilterPresetUI();
+
+function updateLedgerFilterPresetUI() {
+  const activeStatuses = Array.from(state.statusFilters);
+  const activeCount = activeStatuses.length + (state.audioOnlyFilter ? 1 : 0);
+
+  let label = "All";
+  if (activeCount === 1) {
+    if (state.audioOnlyFilter) {
+      label = "Audio";
+    } else {
+      const labels = {
+        QUEUED: "Queued",
+        DOWNLOADING: "Downloading",
+        DONE: "Done",
+        ERROR: "Error",
+        ENCODING: "Encoding",
+        ENCODED: "Encoded",
+      };
+      label = labels[activeStatuses[0]] || "Filter";
+    }
+  } else if (activeCount > 1) {
+    label = `${activeCount} filters`;
+  }
+
+  ledgerFilterPresetLabel.textContent = label;
+  ledgerFilterPresetBtn.classList.toggle("active", activeCount > 0);
+  ledgerFilterPresetBtn.title = activeCount
+    ? `Filters: ${activeCount} active`
+    : "Filter presets";
+
+  ledgerFilterPresetMenu.querySelectorAll(".ctx-filter-preset[data-status]").forEach((item) => {
+    const active = state.statusFilters.has(item.dataset.status);
+    item.classList.toggle("active", active);
+    item.querySelector(".ctx-check").textContent = active ? "✓" : "";
+  });
+  const audioItem = el("ledger-filter-audio");
+  audioItem.classList.toggle("active", state.audioOnlyFilter);
+  audioItem.querySelector(".ctx-check").textContent = state.audioOnlyFilter ? "✓" : "";
+  el("ledger-filter-all").classList.toggle("active", activeCount === 0);
+  el("ledger-filter-all").querySelector(".ctx-check").textContent = activeCount === 0 ? "✓" : "";
+}
+
+ledgerFilterPresetBtn.addEventListener("click", (e) => {
+  e.stopPropagation();
+  closeOtherFlyouts(ledgerFilterPresetMenu);
+  ledgerFilterPresetMenu.classList.toggle("hidden");
+  ledgerFilterPresetBtn.setAttribute("aria-expanded", String(!ledgerFilterPresetMenu.classList.contains("hidden")));
+  if (!ledgerFilterPresetMenu.classList.contains("hidden")) {
+    positionDropdownBelow(ledgerFilterPresetMenu, ledgerFilterPresetBtn);
+  }
+});
+
+el("ledger-filter-all").addEventListener("click", () => {
+  state.audioOnlyFilter = false;
+  state.statusFilters.clear();
+  updateLedgerFilterPresetUI();
+  ledgerFilterPresetMenu.classList.add("hidden");
+  ledgerFilterPresetBtn.setAttribute("aria-expanded", "false");
   renderLedger();
+});
+
+el("ledger-filter-audio").addEventListener("click", () => {
+  state.audioOnlyFilter = !state.audioOnlyFilter;
+  updateLedgerFilterPresetUI();
+  renderLedger();
+});
+
+ledgerFilterPresetMenu.querySelectorAll(".ctx-filter-preset[data-status]").forEach((item) => {
+  item.addEventListener("click", () => {
+    const status = item.dataset.status;
+    if (state.statusFilters.has(status)) state.statusFilters.delete(status);
+    else state.statusFilters.add(status);
+    updateLedgerFilterPresetUI();
+    renderLedger();
+  });
 });
 
 // Sort field and direction used to be two separate controls; combined
@@ -1563,23 +1634,6 @@ ledgerMoreBtn.addEventListener("click", (e) => {
   }
 });
 
-// ── Status filter chips (Queued/Downloading/Done/Error) ─────
-// Multiple can be active at once (shows the union); none active means
-// "show everything", same behavior as before these chips existed.
-const statusChips = Array.from(document.querySelectorAll(".status-chip"));
-for (const chip of statusChips) {
-  chip.addEventListener("click", () => {
-    const status = chip.dataset.status;
-    if (state.statusFilters.has(status)) {
-      state.statusFilters.delete(status);
-    } else {
-      state.statusFilters.add(status);
-    }
-    chip.classList.toggle("active", state.statusFilters.has(status));
-    renderLedger();
-  });
-}
-
 // ── Multi-select ──────────────────────────────────────────────
 // Selection lives as a Set of filenames on state, independent of any
 // particular card's DOM node - buildJobCard just reflects it (checked
@@ -1594,7 +1648,16 @@ const selectionCountLabel = el("selection-count");
 const selectionSelectAllBtn = el("selection-select-all-btn");
 const selectionClearBtn = el("selection-clear-btn");
 const selectionMoveBtn = el("selection-move-btn");
+const selectionEncodeBtn = el("selection-encode-btn");
 const selectionDeleteBtn = el("selection-delete-btn");
+
+const batchEncodeModal = el("batch-encode-modal");
+const batchEncodeCount = el("batch-encode-count");
+const batchEncodePresetSelect = el("batch-encode-preset-select");
+const batchEncodeError = el("batch-encode-error");
+const closeBatchEncodeModalBtn = el("close-batch-encode-modal");
+const cancelBatchEncodeModalBtn = el("cancel-batch-encode-modal");
+const startBatchEncodeBtn = el("start-batch-encode-btn");
 
 function isSelectable(job) {
   // Mirrors the single-item options menu's own gating: deleting or
@@ -1610,6 +1673,7 @@ function updateSelectionBar() {
   const count = state.selectedFilenames.size;
   selectionCountLabel.textContent = count === 1 ? "1 selected" : `${count} selected`;
   selectionMoveBtn.disabled = count === 0;
+  selectionEncodeBtn.disabled = count === 0;
   selectionDeleteBtn.disabled = count === 0;
 }
 
@@ -1673,6 +1737,102 @@ selectionClearBtn.addEventListener("click", () => {
   for (const filename of state.selectedFilenames) setCardSelectedVisual(filename, false);
   state.selectedFilenames.clear();
   updateSelectionBar();
+});
+
+async function openBatchEncodeModal() {
+  const filenames = Array.from(state.selectedFilenames);
+  if (filenames.length === 0) return;
+
+  batchEncodeError.classList.add("hidden");
+  batchEncodeError.textContent = "";
+  batchEncodeCount.textContent = `${filenames.length} file(s) selected. Choose the encoding preset to apply to all of them.`;
+  batchEncodePresetSelect.innerHTML = "";
+
+  try {
+    const res = await fetch("/api/encode/presets");
+    const data = await res.json();
+    encodeSavedPresets = Array.isArray(data.presets) ? data.presets : [];
+  } catch (e) {
+    encodeSavedPresets = [];
+  }
+
+  const placeholder = document.createElement("option");
+  placeholder.value = "";
+  placeholder.textContent = encodeSavedPresets.length ? "Select a preset..." : "No saved presets";
+  batchEncodePresetSelect.appendChild(placeholder);
+  for (const preset of encodeSavedPresets) {
+    const opt = document.createElement("option");
+    opt.value = preset.name;
+    opt.textContent = preset.name;
+    batchEncodePresetSelect.appendChild(opt);
+  }
+
+  batchEncodePresetSelect.value = "";
+  startBatchEncodeBtn.disabled = true;
+  batchEncodeModal.classList.remove("hidden");
+}
+
+function closeBatchEncodeModal() {
+  batchEncodeModal.classList.add("hidden");
+}
+
+batchEncodePresetSelect.addEventListener("change", () => {
+  startBatchEncodeBtn.disabled = !batchEncodePresetSelect.value;
+});
+
+selectionEncodeBtn.addEventListener("click", openBatchEncodeModal);
+closeBatchEncodeModalBtn.addEventListener("click", closeBatchEncodeModal);
+cancelBatchEncodeModalBtn.addEventListener("click", closeBatchEncodeModal);
+batchEncodeModal.addEventListener("click", (e) => {
+  if (e.target === batchEncodeModal) closeBatchEncodeModal();
+});
+
+startBatchEncodeBtn.addEventListener("click", async () => {
+  const filenames = Array.from(state.selectedFilenames);
+  const presetName = batchEncodePresetSelect.value;
+  const preset = encodeSavedPresets.find(p => p.name === presetName);
+  if (!filenames.length || !preset?.options) return;
+
+  batchEncodeError.classList.add("hidden");
+  startBatchEncodeBtn.disabled = true;
+  cancelBatchEncodeModalBtn.disabled = true;
+  closeBatchEncodeModalBtn.disabled = true;
+
+  try {
+    const res = await fetch("/api/encode/jobs/batch", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ filenames, options: preset.options }),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      batchEncodeError.textContent = data.error || "Couldn't queue the selected files.";
+      batchEncodeError.classList.remove("hidden");
+      return;
+    }
+
+    for (const job of data.jobs || []) state.encodeJobs.set(job.id, job);
+    renderLedger();
+    state.selectedFilenames.clear();
+    exitSelectionMode();
+    closeBatchEncodeModal();
+
+    const queued = (data.jobs || []).length;
+    const failed = data.failed || [];
+    let message = `Queued ${queued} file(s) for encoding using "${presetName}".`;
+    if (failed.length) {
+      message += `\n\n${failed.length} file(s) could not be queued:\n` +
+        failed.map(f => `- ${f.filename}: ${f.error}`).join("\n");
+    }
+    window.alert(message);
+  } catch (e) {
+    batchEncodeError.textContent = "Couldn't reach the server.";
+    batchEncodeError.classList.remove("hidden");
+  } finally {
+    startBatchEncodeBtn.disabled = !batchEncodePresetSelect.value;
+    cancelBatchEncodeModalBtn.disabled = false;
+    closeBatchEncodeModalBtn.disabled = false;
+  }
 });
 
 selectionDeleteBtn.addEventListener("click", async () => {
@@ -2364,7 +2524,7 @@ function updateJobCardEncodeProgress(encodeJob) {
 // Every submenu flyout in the app - Copy/File (job menu) and
 // Folders/Settings (logo menu) all share this one open/close/position
 // mechanism, so anything that resets menu state just walks this list.
-const ALL_FLYOUTS = [openWithFlyout, copyFlyout, fileFlyout, foldersFlyout, settingsFlyout, dlFolderQuickMenu, targetFolderQuickMenu, urlArgsFlyout, stashMenuFlyout, ledgerMoreMenu];
+const ALL_FLYOUTS = [openWithFlyout, copyFlyout, fileFlyout, settingsFlyout, dlFolderQuickMenu, targetFolderQuickMenu, urlArgsFlyout, stashMenuFlyout, ledgerMoreMenu, ledgerFilterPresetMenu];
 
 function hideAllFlyouts() {
   for (const flyout of ALL_FLYOUTS) flyout.classList.add("hidden");
@@ -2656,15 +2816,6 @@ el("ctx-file-submenu").addEventListener("click", () => {
   }
   closeOtherFlyouts(fileFlyout);
   positionFlyoutNextTo(fileFlyout, jobMenu);
-});
-
-el("ctx-folders-submenu").addEventListener("click", () => {
-  if (!foldersFlyout.classList.contains("hidden")) {
-    foldersFlyout.classList.add("hidden");
-    return;
-  }
-  closeOtherFlyouts(foldersFlyout);
-  positionFlyoutNextTo(foldersFlyout, logoMenu);
 });
 
 el("ctx-settings-submenu").addEventListener("click", () => {
@@ -3681,6 +3832,8 @@ function positionMenu(menu, x, y) {
 
 function closeMenus() {
   logoMenu.classList.add("hidden");
+  ledgerFilterPresetMenu.classList.add("hidden");
+  ledgerFilterPresetBtn.setAttribute("aria-expanded", "false");
   jobMenu.classList.add("hidden");
   historyMenu.classList.add("hidden");
   hideAllFlyouts();
@@ -3717,9 +3870,9 @@ el("ctx-m3u-toggle").addEventListener("click", () => {
   saveDownloadPrefs();
 });
 
-el("ctx-auto-m3u-retry-toggle").addEventListener("click", () => {
+el("ctx-auto-m3u-retry-toolbar-toggle").addEventListener("click", () => {
   state.autoM3uRetry = !state.autoM3uRetry;
-  el("ctx-auto-m3u-retry-toggle").querySelector(".ctx-check").textContent = state.autoM3uRetry ? "✓" : "";
+  el("ctx-auto-m3u-retry-toolbar-toggle").classList.toggle("active", state.autoM3uRetry);
   saveDownloadPrefs();
 });
 
@@ -3733,7 +3886,9 @@ el("ctx-clipboard-monitor-toggle").addEventListener("click", () => {
   state.clipboardMonitor = !state.clipboardMonitor;
   el("ctx-clipboard-monitor-toggle").classList.toggle("active", state.clipboardMonitor);
   saveDownloadPrefs();
-  flashStatus(state.clipboardMonitor ? "Clipboard monitoring enabled." : "Clipboard monitoring disabled.");
+  flashStatus(state.clipboardMonitor
+    ? "Clipboard monitoring enabled. Feature will turn off after 10 minutes of inactivity."
+    : "Clipboard monitoring disabled.");
   resetClipboardMonitorIdleTimer();
 });
 
@@ -4238,9 +4393,8 @@ function updateModeButtons() {
 // filter chips don't apply to history records, and there's no file
 // size to sort by.
 function enterHistoryModeUI() {
-  ledgerAudioFilterBtn.classList.add("hidden");
+  
   ledgerMoreBtn.classList.add("hidden");
-  ledgerStatusFilterRow.classList.add("hidden");
   selectModeBtn.classList.add("hidden");
   // Disable the two size_* sort options - not meaningful for history
   // entries (no file-size info is logged there).
@@ -4256,9 +4410,8 @@ function enterHistoryModeUI() {
 }
 
 function exitHistoryModeUI() {
-  ledgerAudioFilterBtn.classList.remove("hidden");
+  ledgerFilterPresetWrap.classList.remove("hidden");
   ledgerMoreBtn.classList.remove("hidden");
-  ledgerStatusFilterRow.classList.remove("hidden");
   selectModeBtn.classList.remove("hidden");
   for (const value of ["size_desc", "size_asc"]) {
     const opt = ledgerSortSelect.querySelector(`option[value="${value}"]`);
@@ -5099,6 +5252,11 @@ const encodeEstimateValue = el("encode-estimate-value");
 const encodeEstimateSavings = el("encode-estimate-savings");
 const encodeEstimateRefreshBtn = el("encode-estimate-refresh-btn");
 const encodeJobError = el("encode-job-error");
+const encodeSavedPresetSelect = el("encode-saved-preset-select");
+const encodePresetAddBtn = el("encode-preset-add-btn");
+const encodePresetEditBtn = el("encode-preset-edit-btn");
+const encodePresetDeleteBtn = el("encode-preset-delete-btn");
+let encodeSavedPresets = [];
 
 async function loadEncodeCapabilities() {
   try {
@@ -5156,6 +5314,145 @@ openConvertedBtn.addEventListener("click", async () => {
 });
 
 // ── New Encode Job modal ────────────────────────────────────────
+async function loadEncodePresets(selectedName = "") {
+  try {
+    const res = await fetch("/api/encode/presets");
+    const data = await res.json();
+    encodeSavedPresets = Array.isArray(data.presets) ? data.presets : [];
+  } catch (e) {
+    encodeSavedPresets = [];
+  }
+  encodeSavedPresetSelect.innerHTML = "";
+  const placeholder = document.createElement("option");
+  placeholder.value = "";
+  placeholder.textContent = encodeSavedPresets.length ? "Saved presets" : "No saved presets";
+  encodeSavedPresetSelect.appendChild(placeholder);
+  for (const preset of encodeSavedPresets) {
+    const opt = document.createElement("option");
+    opt.value = preset.name;
+    opt.textContent = preset.name;
+    encodeSavedPresetSelect.appendChild(opt);
+  }
+  encodeSavedPresetSelect.value = selectedName && encodeSavedPresets.some(p => p.name === selectedName) ? selectedName : "";
+  updateEncodePresetButtons();
+}
+
+function updateEncodePresetButtons() {
+  const hasSelection = !!encodeSavedPresetSelect.value;
+  encodePresetEditBtn.disabled = !hasSelection;
+  encodePresetDeleteBtn.disabled = !hasSelection;
+}
+
+function encodePresetOptions() {
+  return { ...collectEncodeOptions() };
+}
+
+async function saveEncodePreset(name, replaceName = null) {
+  name = String(name || "").trim();
+  if (!name) return false;
+  try {
+    const res = await fetch("/api/encode/presets", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name, options: encodePresetOptions() }),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      flashStatus(data.error || "Couldn't save the encoding preset.");
+      return false;
+    }
+    if (replaceName && replaceName !== name) {
+      await fetch("/api/encode/presets/delete", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: replaceName }),
+      });
+    }
+    await loadEncodePresets(name);
+    return true;
+  } catch (e) {
+    flashStatus("Couldn't reach the server.");
+    return false;
+  }
+}
+
+async function applyEncodePreset(name) {
+  const preset = encodeSavedPresets.find(p => p.name === name);
+  if (!preset?.options) return;
+  const o = preset.options;
+
+  if (o.codec) {
+    encodeCodecSelect.value = o.codec;
+    onEncodeCodecChange();
+  }
+  if (o.encoder_backend && [...encodeBackendSelect.options].some(x => x.value === o.encoder_backend)) {
+    encodeBackendSelect.value = o.encoder_backend;
+  }
+  if (o.crf != null) {
+    encodeCrfSlider.value = o.crf;
+    encodeCrfValue.textContent = o.crf;
+  }
+  if (o.preset != null && [...encodePresetSelect.options].some(x => x.value === String(o.preset))) encodePresetSelect.value = o.preset;
+  if (o.resolution_cap) encodeResolutionSelect.value = o.resolution_cap;
+  if (o.audio_mode) encodeAudioSelect.value = o.audio_mode;
+  if (o.subtitles_mode) encodeSubtitlesSelect.value = o.subtitles_mode;
+  if (o.container) encodeContainerSelect.value = o.container;
+  if (o.oversized_behavior) encodeOversizedSelect.value = o.oversized_behavior;
+  if (o.target_size_mb != null) encodeTargetSizeInput.value = o.target_size_mb; else encodeTargetSizeInput.value = "";
+  encodeDeinterlaceCheck.checked = !!o.deinterlace;
+  encodeAutocropCheck.checked = !!o.auto_crop;
+  encodeDenoiseCheck.checked = !!o.denoise;
+  encodeForceArCheck.checked = !!o.force_ar;
+  encodeArWidthInput.value = o.force_ar_width ?? "";
+  encodeArHeightInput.value = o.force_ar_height ?? "";
+
+  encodeAspectQuickRow.querySelectorAll(".aspect-quick-btn").forEach(btn => {
+    btn.classList.toggle("active", !!o.force_ar && btn.dataset.ratio === o.force_ar_label);
+  });
+  if (o.mode === "size") {
+    setEncodeMode("size");
+  } else {
+    setEncodeMode("crf");
+  }
+  requestEncodeEstimate();
+}
+
+encodeSavedPresetSelect.addEventListener("change", () => {
+  updateEncodePresetButtons();
+  if (encodeSavedPresetSelect.value) applyEncodePreset(encodeSavedPresetSelect.value);
+});
+
+encodePresetAddBtn.addEventListener("click", async () => {
+  const name = window.prompt("Preset name:");
+  if (name) await saveEncodePreset(name);
+});
+
+encodePresetEditBtn.addEventListener("click", async () => {
+  const oldName = encodeSavedPresetSelect.value;
+  if (!oldName) return;
+  const name = window.prompt("Preset name:", oldName);
+  if (name) await saveEncodePreset(name, oldName);
+});
+
+encodePresetDeleteBtn.addEventListener("click", async () => {
+  const name = encodeSavedPresetSelect.value;
+  if (!name || !window.confirm(`Delete encoding preset "${name}"?`)) return;
+  try {
+    const res = await fetch("/api/encode/presets/delete", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name }),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      flashStatus(data.error || "Couldn't delete the encoding preset.");
+      return;
+    }
+    encodeSavedPresets = Array.isArray(data.presets) ? data.presets : [];
+    await loadEncodePresets();
+  } catch (e) {
+    flashStatus("Couldn't reach the server.");
+  }
+});
+
 function presetOptionsFor(kind) {
   if (kind === "x26x") {
     return ["ultrafast", "superfast", "veryfast", "faster", "fast", "medium", "slow", "slower", "veryslow"]
@@ -5422,6 +5719,7 @@ async function doRequestEncodeEstimate() {
 async function openNewEncodeJobModal(filename) {
   encodeJobError.classList.add("hidden");
   if (!state.encodeCapabilities) await loadEncodeCapabilities();
+  await loadEncodePresets();
 
   state.encodeModalFilename = filename;
   encodeSourceDisplay.textContent = filename;

@@ -30,6 +30,7 @@ from settings import (
     get_external_programs, get_external_program, add_external_program,
     update_external_program, delete_external_program,
     get_converted_dir, get_download_prefs, set_download_prefs,
+    get_encode_presets, save_encode_preset, delete_encode_preset,
     get_sync_clip_duration, set_sync_clip_duration,
     get_ytdlp_args, set_ytdlp_default_args, set_ytdlp_domain_args, delete_ytdlp_domain_args,
     get_recent_stash_tags, push_recent_stash_tag,
@@ -264,6 +265,11 @@ class EncodeEstimateRequest(BaseModel):
 
 class EnqueueEncodeRequest(BaseModel):
     filename: str
+    options: EncodeOptionsRequest
+
+
+class BatchEncodeRequest(BaseModel):
+    filenames: List[str]
     options: EncodeOptionsRequest
 
 
@@ -1281,6 +1287,33 @@ async def api_get_encode_jobs():
     return encode_manager.snapshot()
 
 
+class EncodePresetRequest(BaseModel):
+    name: str
+    options: dict
+
+
+class EncodePresetDeleteRequest(BaseModel):
+    name: str
+
+
+@app.get("/api/encode/presets")
+async def api_get_encode_presets():
+    return {"presets": get_encode_presets()}
+
+
+@app.post("/api/encode/presets")
+async def api_save_encode_preset(req: EncodePresetRequest):
+    try:
+        return {"presets": save_encode_preset(req.name, req.options)}
+    except ValueError as e:
+        return JSONResponse(status_code=400, content={"error": str(e)})
+
+
+@app.post("/api/encode/presets/delete")
+async def api_delete_encode_preset(req: EncodePresetDeleteRequest):
+    return {"presets": delete_encode_preset(req.name)}
+
+
 @app.post("/api/encode/probe")
 async def api_encode_probe(req: EncodeSourceRequest):
     try:
@@ -1324,6 +1357,25 @@ async def api_enqueue_encode_job(req: EnqueueEncodeRequest):
     except (ValueError, RuntimeError) as e:
         return JSONResponse(status_code=400, content={"error": str(e)})
     return {"ok": True, "job": job}
+
+
+@app.post("/api/encode/jobs/batch")
+async def api_enqueue_encode_jobs_batch(req: BatchEncodeRequest):
+    jobs = []
+    failed = []
+    options = req.options.dict()
+
+    for filename in req.filenames:
+        try:
+            if job_manager.jobs.get(filename, {}).get("synchronized"):
+                raise ValueError("This file already has a synchronized-audio version - remove it before re-encoding.")
+            source_path = _resolve_source_path(filename)
+            job = await encode_manager.enqueue(source_path, options)
+            jobs.append(job)
+        except (ValueError, RuntimeError) as e:
+            failed.append({"filename": filename, "error": str(e)})
+
+    return {"ok": True, "jobs": jobs, "failed": failed}
 
 
 @app.post("/api/encode/jobs/cancel")

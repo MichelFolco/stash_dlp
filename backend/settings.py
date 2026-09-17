@@ -519,6 +519,48 @@ def get_encode_queue_json_path() -> str:
     return os.path.join(get_data_dir(), "_encode_queue.json")
 
 
+
+# ── Persistent encoding presets ───────────────────────────────────────
+ENCODE_PRESETS_KEY = "encode_presets"
+
+
+def get_encode_presets() -> list:
+    stored = _load().get(ENCODE_PRESETS_KEY, {})
+    if not isinstance(stored, dict):
+        return []
+    result = []
+    for name, options in stored.items():
+        if isinstance(name, str) and name.strip() and isinstance(options, dict):
+            result.append({"name": name, "options": dict(options)})
+    return result
+
+
+def save_encode_preset(name: str, options: dict) -> list:
+    name = str(name or "").strip()
+    if not name:
+        raise ValueError("Preset name can't be empty.")
+    if len(name) > 80:
+        raise ValueError("Preset name is too long (80 characters maximum).")
+    if not isinstance(options, dict):
+        raise ValueError("Invalid preset settings.")
+    data = _load()
+    presets = data.setdefault(ENCODE_PRESETS_KEY, {})
+    if not isinstance(presets, dict):
+        presets = {}
+        data[ENCODE_PRESETS_KEY] = presets
+    presets[name] = dict(options)
+    _persist(data)
+    return get_encode_presets()
+
+
+def delete_encode_preset(name: str) -> list:
+    data = _load()
+    presets = data.get(ENCODE_PRESETS_KEY, {})
+    if isinstance(presets, dict):
+        presets.pop(str(name), None)
+        _persist(data)
+    return get_encode_presets()
+
 # ── Download preferences (Max Res / Tag Domain / M3U Sniffer) ─────
 # Small, global UI toggles from the settings flyout that have nothing to
 # do with which download folder is active, so - like target_dir and the

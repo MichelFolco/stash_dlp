@@ -49,11 +49,14 @@
               <option value="1080p">1080p</option>
               <option value="720p" selected>720p</option>
               <option value="480p">480p</option>
-              <option value="Audio Only">Audio Only</option>
+              <option value="Audio Only">Audio</option>
             </select>
           </div>
           <button id="ctx-m3u-toggle" class="icon-btn" title="M3U Sniffer Mode">
             <i class="ti ti-radar" aria-hidden="true"></i>
+          </button>
+          <button id="ctx-auto-m3u-retry-toolbar-toggle" class="icon-btn m3u-auto-btn" title="Auto-Retry Failed Downloads via M3U" aria-label="Auto-Retry Failed Downloads via M3U">
+            <i class="ti ti-radar" aria-hidden="true"></i><sup>AUTO</sup>
           </button>
           <button id="ctx-clipboard-monitor-toggle" class="icon-btn" title="Clipboard Monitoring (auto-download URLs)">
             <i class="ti ti-clipboard" aria-hidden="true"></i>
@@ -93,9 +96,25 @@
     <div id="ledger-toolbar" class="ledger-toolbar">
       <input id="ledger-filter" class="ledger-filter-input" type="text"
              placeholder="Filter by name..." autocomplete="off" spellcheck="false">
-      <button id="ledger-audio-filter-btn" class="icon-btn" title="Show audio-only downloads">
-        <i class="ti ti-music" aria-hidden="true"></i>
-      </button>
+      <div id="ledger-filter-preset-wrap" class="ledger-filter-preset-wrap">
+        <button id="ledger-filter-preset-btn" class="icon-btn ledger-filter-preset-btn" title="Filter presets" aria-haspopup="menu" aria-expanded="false">
+          <i class="ti ti-filter" aria-hidden="true"></i>
+          <span id="ledger-filter-preset-label">All</span>
+          <i class="ti ti-chevron-down filter-preset-chevron" aria-hidden="true"></i>
+        </button>
+        <div id="ledger-filter-preset-menu" class="ctx-menu hidden">
+          <div id="ledger-filter-all" class="ctx-item ctx-filter-preset active"><span class="ctx-check">✓</span> All</div>
+          <div class="ctx-separator"></div>
+          <div id="ledger-filter-audio" class="ctx-item ctx-filter-preset"><span class="ctx-check"></span> Audio</div>
+          <div class="ctx-separator"></div>
+          <div class="ctx-item ctx-filter-preset" data-status="QUEUED"><span class="ctx-check"></span> Queued</div>
+          <div class="ctx-item ctx-filter-preset" data-status="DOWNLOADING"><span class="ctx-check"></span> Downloading</div>
+          <div class="ctx-item ctx-filter-preset" data-status="DONE"><span class="ctx-check"></span> Done</div>
+          <div class="ctx-item ctx-filter-preset" data-status="ERROR"><span class="ctx-check"></span> Error</div>
+          <div class="ctx-item ctx-filter-preset" data-status="ENCODING"><span class="ctx-check"></span> Encoding</div>
+          <div class="ctx-item ctx-filter-preset" data-status="ENCODED"><span class="ctx-check"></span> Encoded</div>
+        </div>
+      </div>
       <select id="ledger-sort" class="ledger-sort-select">
         <option value="added_desc">Date Added (Newest)</option>
         <option value="added_asc">Date Added (Oldest)</option>
@@ -112,22 +131,12 @@
       </button>
     </div>
 
-    <!-- One-tap status filter chips - multiple can be active at once;
-         none active means "show everything" (same as before this existed). -->
-    <div id="ledger-status-filter-row" class="status-filter-row">
-      <button class="status-chip" data-status="QUEUED">Queued</button>
-      <button class="status-chip" data-status="DOWNLOADING">Downloading</button>
-      <button class="status-chip" data-status="DONE">Done</button>
-      <button class="status-chip" data-status="ERROR">Error</button>
-      <button class="status-chip" data-status="ENCODING">Encoding</button>
-      <button class="status-chip" data-status="ENCODED">Encoded</button>
-    </div>
-
     <div id="selection-action-bar" class="selection-action-bar hidden">
       <span id="selection-count" class="selection-count">0 selected</span>
       <button id="selection-select-all-btn" class="btn">Select All</button>
       <button id="selection-clear-btn" class="btn">Clear</button>
       <button id="selection-move-btn" class="btn" disabled>Move to Target</button>
+      <button id="selection-encode-btn" class="btn" disabled>Mass Encode</button>
       <button id="selection-delete-btn" class="btn btn-danger" disabled>Delete</button>
     </div>
 
@@ -143,9 +152,6 @@
   <div id="ctx-version" class="ctx-item ctx-disabled">yt-dlp version unknown</div>
   <div id="ctx-check-ytdlp-update" class="ctx-item">Check for yt-dlp Update</div>
   <div class="ctx-separator"></div>
-  <div id="ctx-folders-submenu" class="ctx-item ctx-item-submenu">
-    <span>Folders</span><span class="ctx-chevron">▸</span>
-  </div>
   <div id="ctx-settings-submenu" class="ctx-item ctx-item-submenu">
     <span>Settings</span><span class="ctx-chevron">▸</span>
   </div>
@@ -203,9 +209,6 @@
   <div id="ctx-tag-toggle" class="ctx-item ctx-checkable">
     <span class="ctx-check">✓</span> Tag File [Domain]
   </div>
-  <div id="ctx-auto-m3u-retry-toggle" class="ctx-item ctx-checkable">
-    <span class="ctx-check">✓</span> Auto-Retry Failed Downloads via M3U
-  </div>
   <div class="ctx-separator"></div>
   <div class="ctx-section-label">Automation</div>
   <div id="ctx-auto-confirm-titles-toggle" class="ctx-item ctx-checkable">
@@ -222,8 +225,6 @@
     <span class="ctx-check"></span> Apply Title Prefix
   </div>
   <div class="ctx-separator"></div>
-  <div class="ctx-section-label">Advanced</div>
-  <div id="ctx-manage-ytdlp-args" class="ctx-item">Manage yt-dlp Arguments...</div>
 </div>
 
 <div id="job-menu" class="ctx-menu hidden">
@@ -545,6 +546,28 @@
   </div>
 </div>
 
+<div id="batch-encode-modal" class="modal-overlay hidden">
+  <div class="modal-box batch-encode-box">
+    <div class="modal-title">
+      <span>Mass Encode</span>
+      <button id="close-batch-encode-modal" class="icon-btn">✕</button>
+    </div>
+    <div id="batch-encode-count" class="hint"></div>
+    <div class="form-field">
+      <label for="batch-encode-preset-select">Encoding preset</label>
+      <select id="batch-encode-preset-select">
+        <option value="">Select a preset...</option>
+      </select>
+      <div class="hint">The selected preset will be used for every selected file.</div>
+    </div>
+    <div id="batch-encode-error" class="modal-error hidden"></div>
+    <div class="modal-actions">
+      <button id="cancel-batch-encode-modal" class="btn">Cancel</button>
+      <button id="start-batch-encode-btn" class="btn btn-primary" disabled>Queue Encodes</button>
+    </div>
+  </div>
+</div>
+
 <div id="new-encode-job-modal" class="modal-overlay hidden">
   <div class="modal-box wide">
     <div class="modal-title">
@@ -557,6 +580,15 @@
       <div id="encode-source-display" class="hint encode-source-display"></div>
     </div>
     <div id="encode-source-info" class="hint"></div>
+
+    <div class="encode-preset-row">
+      <select id="encode-saved-preset-select" title="Saved encoding presets">
+        <option value="">Saved presets</option>
+      </select>
+      <button type="button" id="encode-preset-add-btn" class="encode-preset-btn" title="Save current settings as a new preset">＋</button>
+      <button type="button" id="encode-preset-edit-btn" class="encode-preset-btn" title="Update the selected preset">✎</button>
+      <button type="button" id="encode-preset-delete-btn" class="encode-preset-btn danger" title="Delete the selected preset">×</button>
+    </div>
 
     <div class="est-size-box">
       <div class="est-stat">

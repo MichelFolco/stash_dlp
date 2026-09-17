@@ -1,3 +1,29 @@
+## v1.30.17 - Mass encoding from multi-selection
+
+- Added **Mass Encode** to the multi-selection action bar.
+- Mass Encode prompts for one saved encoding preset and applies it to every selected file.
+- Added a batch encode endpoint that queues all valid selected files and reports any files that could not be queued.
+- Selection is cleared after the batch operation completes.
+
+## v1.30.16 - Persistent encoding presets
+
+- Added persistent encoding presets to the New Encode Job UI.
+- Presets save the complete encoding configuration and can be loaded, updated, renamed, or deleted.
+- Added a compact preset control row directly above the size-saving estimate.
+
+## v1.30.15 - Eliminate queue refresh flashing
+
+- Removed the card fade-in animation from periodic queue refresh rebuilds.
+- Queue cards that are rebuilt because progress/speed/ETA or other dynamic data changed now appear in place without briefly fading in.
+- This prevents the intermittent visual flash caused by the automatic queue refresh.
+
+## v1.30.14 - Filter menu and M3U automation toolbar
+- Clipboard Monitoring now tells the user it will turn off after 10 minutes of inactivity when enabled.
+- Replaced the separate ledger audio filter and status filter buttons with one filter-preset dropdown opened by the existing filter control; the selected filter state is shown in the button caption and remains available in ultra-narrow mode.
+- Moved Auto-Retry Failed Downloads via M3U from Settings to the navigation toolbar, using the M3U radar glyph with an AUTO superscript.
+- Removed the Folders and Manage yt-dlp Arguments entries from the logo/settings menu; folder controls and the quick yt-dlp arguments control remain available elsewhere.
+- Renamed the download-quality "Audio Only" preset to "Audio".
+
 ## v1.30.13 - Resolution safety default and active queue priority
 - Reset the max download resolution to 480p on app boot and after 10 minutes of app inactivity.
 - Added 1080p to the max download resolution presets.

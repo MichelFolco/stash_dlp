@@ -386,6 +386,72 @@ html, body {
   border-bottom: 1px solid var(--border-soft);
 }
 
+.ledger-filter-preset-wrap {
+  position: relative;
+  flex: 0 0 auto;
+  min-width: 0;
+}
+
+.ledger-filter-preset-btn {
+  width: auto !important;
+  min-width: 70px;
+  padding: 0 7px !important;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  white-space: nowrap;
+}
+
+.ledger-filter-preset-btn .ti:first-child {
+  font-size: 14px;
+}
+
+.filter-preset-chevron {
+  font-size: 12px;
+  opacity: .75;
+}
+
+#ledger-filter-preset-menu {
+  min-width: 150px;
+  z-index: 80;
+}
+
+.ctx-filter-preset {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.ctx-filter-preset .ctx-check {
+  width: 12px;
+  display: inline-block;
+  color: var(--teal);
+  font-weight: 700;
+}
+
+.m3u-auto-btn {
+  position: relative;
+}
+
+.m3u-auto-btn sup {
+  position: absolute;
+  top: 1px;
+  right: 1px;
+  font-size: 6px;
+  line-height: 1;
+  font-weight: 800;
+  letter-spacing: -.15px;
+  color: currentColor;
+  pointer-events: none;
+}
+
+.m3u-auto-btn.active {
+  color: var(--teal);
+  border-color: var(--teal-dim);
+  background: var(--teal-glow);
+}
+
 .ledger-filter-input {
   flex: 1 1 auto;
   min-width: 0;
@@ -572,7 +638,7 @@ html, body {
   from { opacity: 0; transform: translateY(-2px); }
   to { opacity: 1; transform: translateY(0); }
 }
-.job-card-enter { animation: jobCardFadeIn 0.25s ease; }
+.job-card-enter { /* retained for compatibility; refreshes no longer apply it */ }
 
 /* ── Thumbnail ─────────────────────────────────────────────── */
 .job-thumb-wrap {
@@ -1516,6 +1582,40 @@ html, body {
   color: var(--text-secondary);
 }
 .disabled-field { opacity: 0.4; pointer-events: none; }
+.encode-preset-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin: 4px 0 6px;
+}
+.encode-preset-row select {
+  flex: 1;
+  min-width: 0;
+  height: 28px;
+  padding: 4px 7px;
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  font-size: 11px;
+}
+.encode-preset-btn {
+  flex: 0 0 28px;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+  color: var(--text-secondary);
+  cursor: pointer;
+  font-size: 15px;
+  line-height: 1;
+}
+.encode-preset-btn:hover:not(:disabled) { border-color: var(--teal); color: var(--teal); }
+.encode-preset-btn.danger:hover:not(:disabled) { border-color: var(--error-text); color: var(--error-text); }
+.encode-preset-btn:disabled { opacity: 0.35; cursor: default; }
+
 .est-size-box {
   background: var(--bg);
   border: 1px solid var(--border);
@@ -1599,6 +1699,10 @@ html, body {
   .res-dropdown-tray { font-size: 10px; max-width: 52px; }
   .ledger-toolbar .icon-btn { width: 28px; height: 28px; font-size: 13px; }
   .ledger-filter-input { height: 28px; font-size: 11px; }
+  .ledger-filter-preset-btn { min-width: 58px; padding: 0 4px !important; }
+  .ledger-filter-preset-btn .ti:first-child { font-size: 12px; }
+  .ledger-filter-preset-btn .filter-preset-chevron { font-size: 10px; }
+  .m3u-auto-btn sup { font-size: 5px; }
   .ledger-sort-select { height: 28px; font-size: 11px; padding: 0 4px; }
   .folder-status-item { padding: 3px 6px; }
   .folder-status-item .ti { font-size: 13px; }
@@ -1691,6 +1795,20 @@ html, body {
 
   #ledger-toolbar > * {
     display: none !important;
+  }
+
+  #ledger-toolbar #ledger-filter-preset-wrap {
+    display: block !important;
+    flex: 0 0 auto;
+  }
+
+  #ledger-toolbar #ledger-filter-preset-btn {
+    display: inline-flex !important;
+  }
+
+  #ledger-toolbar #ledger-filter {
+    display: block !important;
+    flex: 1 1 auto;
   }
 
   #ledger-toolbar #move-all-btn {
@@ -2145,3 +2263,7 @@ html, body {
   .reencode-choice-actions .btn { flex: 1 1 auto; }
 }
 .nav-tray-inner { flex-wrap: wrap; }
+
+/* ── Mass Encode preset picker ─────────────────────────────── */
+.batch-encode-box { max-width: 460px; }
+#batch-encode-preset-select { width: 100%; }
