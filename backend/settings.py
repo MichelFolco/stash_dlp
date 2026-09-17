@@ -560,7 +560,7 @@ DEFAULT_DOWNLOAD_PREFS = {
     # untracked "Unknown" file. See fingerprints.py / filesystem_scan.py.
     "detect_renames": True,
 }
-VALID_QUALITIES = {"Best", "720p", "480p", "Audio Only"}
+VALID_QUALITIES = {"Best", "1080p", "720p", "480p", "Audio Only"}
 
 
 def get_download_prefs() -> dict:

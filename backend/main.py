@@ -34,7 +34,7 @@ from settings import (
     get_ytdlp_args, set_ytdlp_default_args, set_ytdlp_domain_args, delete_ytdlp_domain_args,
     get_recent_stash_tags, push_recent_stash_tag,
 )
-from storage import search_history, get_history_entries, delete_history_entry, lookup_history_in_folder, HistoryLookupError
+from storage import search_history, get_history_entries, delete_history_entry, lookup_history_in_folder, HistoryLookupError, save_queue_to_disk
 from thumbnails import get_thumbnail_path
 import stash_integration
 import audio_sync
@@ -935,6 +935,29 @@ async def api_open_with(req: OpenWithRequest, request: Request):
 
 @app.post("/api/jobs/rename")
 async def api_rename_job(req: RenameRequest):
+    job = job_manager.jobs.get(req.filename)
+    if job and job.get("status") in ("DOWNLOADING", "QUEUED"):
+        # Do not touch the file while yt-dlp owns it. Store the requested
+        # name on the live job and apply it atomically when the download
+        # finishes. The visible ledger key remains stable until then.
+        new_name = clean_filename(req.new_filename)
+        if not new_name:
+            return JSONResponse(status_code=400, content={"error": "New name can't be empty."})
+        if new_name == req.filename:
+            job["pending_filename"] = ""
+        elif new_name in job_manager.jobs and new_name != req.filename:
+            return JSONResponse(status_code=400, content={"error": f"'{new_name}' is already used by another item."})
+        elif job.get("stash_tag_name"):
+            return JSONResponse(status_code=400, content={"error": f"Renaming is disabled for items tagged \"{job['stash_tag_name']}\" from a Stash tag check."})
+        else:
+            job["pending_filename"] = new_name
+        if req.filename in job_manager.saved_queue:
+            job_manager.saved_queue[req.filename]["pending_filename"] = job.get("pending_filename", "")
+            save_queue_to_disk(job_manager.saved_queue)
+        snapshot = job_manager.snapshot()
+        await job_manager.connections.broadcast({"type": "refresh", "jobs": snapshot})
+        return {"ok": True, "pending": True, "new_filename": job.get("pending_filename", ""), "jobs": snapshot}
+
     try:
         new_name = job_manager.rename_job(req.filename, req.new_filename)
     except ValueError as e:

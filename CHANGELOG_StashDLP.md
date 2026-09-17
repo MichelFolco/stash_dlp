@@ -1,3 +1,25 @@
+## v1.30.13 - Resolution safety default and active queue priority
+- Reset the max download resolution to 480p on app boot and after 10 minutes of app inactivity.
+- Added 1080p to the max download resolution presets.
+- Keep currently downloading items at the top of the queue regardless of the selected ledger sort order.
+
+## v1.30.12 - Rename downloads while in progress
+- Enabled the Rename action and rename icon for queued/downloading ledger cards.
+- Renaming an active download now stores the requested name as a pending filename instead of touching the file while yt-dlp is writing it.
+- When the download finishes successfully, the completed file (and cached thumbnail) is renamed to the requested name automatically.
+- Pending rename survives queue persistence and can be changed/cancelled before completion.
+- If the requested name becomes invalid or collides with another item, the completed download safely keeps its original name.
+
+## v1.30.11 - Ctrl+click Copy URL opens source
+- Ctrl+clicking the Copy URL button on a download ledger card now opens the job's source URL in a new browser tab.
+- Normal clicking the Copy URL button keeps the existing copy-to-clipboard behavior.
+
+## v1.30.10 - M3U8 sniffer driver-crash resilience
+- Mitigated `Exception: Connection closed while reading from the driver` from Playwright during M3U8 sniffing. Root cause is Playwright's Node driver process failing to come up cleanly, most often when a second sniff launches while a prior one is still shutting down.
+- `find_m3u8()` now serializes sniff attempts (one Chromium/driver session at a time) and automatically retries once after a short delay on this class of failure, before reporting an error.
+- The browser is now always closed via `finally`, even if a page throws mid-sniff, so a bad page can't leak a lingering Chromium process that makes the next sniff flaky too.
+- If it still fails after a retry, the sniff error is unchanged (`M3u8NotFound`, surfaced the same as before).
+
 ## v1.30.9 - Keep card icons on narrow desktop windows
 - The per-card icon row (Copy URL, Copy file name, Rename, etc.) was hiding whenever the window got narrower than 640px, even with a mouse. It now only hides on touch (coarse-pointer) devices, where hover doesn't work anyway - a narrow desktop/mouse window keeps the icons, revealed on hover same as a wide window.
 
@@ -299,6 +321,7 @@ updating config.py.
 - The value is persisted in app settings and applied to `audio_sync.CLIP_DURATION_S` at runtime.
 
 # Changelog
+1.30.13 Download resolution now resets to 480p on app boot and after 10 minutes of inactivity; added 1080p preset; active downloads are pinned above the rest of the queue regardless of selected sort order.
 0.89 Synchronize Audio UI now fills the screen height (video flexes to fill remaining space, no more internal scrolling) and no longer closes on an outside click - only the X, Cancel, Discard/Accept, etc.
 0.88 reworked Synchronize Audio into a clip-based flow: Create Clip cuts a fast 10s preview from the playback position instead of re-rendering the whole file on every tweak, Apply Sync/Redo Clip iterate on that clip, Confirm Sync renders the full video into a staging file, and Accept Sync/Discard decide whether it becomes the confirmed twin - previously-confirmed twin is never touched until Accept; all sync file writes/deletes now retry through Windows file-in-use sharing violations instead of failing outright
 0.86 added Synchronize Audio: card menu action opens a sync UI (video player, delay input, +/-10/100 dial buttons) to re-render a file with its audio shifted, iterate via Apply, and Confirm to lock in a SYNCHRONIZED twin - mutually exclusive with Re-encode (shared Converted/ twin slot); Transfer Original/Converted prompt now generalized to cover both

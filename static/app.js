@@ -538,7 +538,10 @@ async function refreshDownloadPrefs() {
   try {
     const res = await fetch("/api/download-prefs");
     const data = await res.json();
-    resDropdown.value = data.quality || "720p";
+    // Download resolution is intentionally session-scoped: always start
+    // at the conservative 480p cap, regardless of the previous setting.
+    resDropdown.value = "480p";
+    if (data.quality !== "480p") saveDownloadPrefs();
     state.tagDomain = data.tag_domain !== false;
     state.m3uSniffer = !!data.m3u_sniffer;
     state.autoM3uRetry = data.auto_m3u_retry !== false;
@@ -1043,8 +1046,11 @@ function connectWebSocket() {
         updateJobCardProgress(msg.filename, job);
       }
     } else if (msg.type === "job_finished") {
-      const job = state.jobs.get(msg.filename);
+      const oldFilename = msg.original_filename || msg.filename;
+      const job = state.jobs.get(oldFilename) || state.jobs.get(msg.filename);
       if (job) {
+        if (oldFilename !== msg.filename) state.jobs.delete(oldFilename);
+        job.filename = msg.filename;
         job.status = msg.status;
         job.file_size = msg.file_size;
         job.is_audio = msg.is_audio;
@@ -1054,6 +1060,8 @@ function connectWebSocket() {
         job.ext = msg.ext;
         job.video_codec = msg.video_codec;
         job.audio_codec = msg.audio_codec;
+        job.pending_filename = "";
+        state.jobs.set(msg.filename, job);
         renderLedger();
       }
     } else if (msg.type === "job_status") {
@@ -1163,7 +1171,14 @@ function getFilteredSortedJobs() {
   }
 
   const dirMul = state.sortDir === "asc" ? 1 : -1;
+  // Active downloads always stay at the top of the queue. The selected
+  // sort option still applies within the downloading group and within
+  // the remaining group, so sorting can never bury an in-progress item.
   filtered.sort((a, b) => {
+    const aDownloading = a.job.status === "DOWNLOADING" ? 0 : 1;
+    const bDownloading = b.job.status === "DOWNLOADING" ? 0 : 1;
+    if (aDownloading !== bDownloading) return aDownloading - bDownloading;
+
     let cmp;
     if (state.sortField === "size") {
       cmp = parseSizeToBytes(a.job.file_size) - parseSizeToBytes(b.job.file_size);
@@ -1997,17 +2012,25 @@ function buildJobCard(job) {
     btn.appendChild(icon);
     btn.addEventListener("click", (e) => {
       e.stopPropagation();
-      onClick();
+      onClick(e);
     });
     return btn;
   }
 
   const cardIconBtns = [
-    makeCardIconBtn("external-link", "Copy URL", () => copyJobLink(job.filename, job.url)),
+    makeCardIconBtn("external-link", "Copy URL", (e) => {
+      if (e.ctrlKey && job.url) {
+        // Ctrl+click opens the source URL in a new tab; a normal click
+        // keeps the existing "copy URL" behavior.
+        window.open(job.url, "_blank", "noopener,noreferrer");
+        return;
+      }
+      copyJobLink(job.filename, job.url);
+    }),
     makeCardIconBtn("file-text", "Copy file name", () => copyJobFilename(job.filename)),
   ];
-  if (!isDownloadingCard && !isQueuedCard && !job.stash_tag_name) {
-    cardIconBtns.push(makeCardIconBtn("forms", "Rename", () => renameJobPrompt(job.filename)));
+  if (!job.stash_tag_name) {
+    cardIconBtns.push(makeCardIconBtn("forms", job.pending_filename ? "Rename (pending)" : "Rename", () => renameJobPrompt(job.filename)));
   }
   if (isDoneCard && job.source_type !== "stash") {
     cardIconBtns.push(makeCardIconBtn("arrow-right", "Move to target folder", () => moveJobToTarget(job.filename)));
@@ -2418,7 +2441,8 @@ function openJobMenu(x, y, job) {
   el("ctx-copy-filename").classList.remove("hidden");
   el("ctx-copy-submenu").classList.remove("hidden");
 
-  el("ctx-rename-file").classList.toggle("hidden", isDownloading || isQueued || !!job.stash_tag_name);
+  el("ctx-rename-file").classList.toggle("hidden", !!job.stash_tag_name);
+  el("ctx-rename-file").textContent = job.pending_filename ? "Rename (pending)" : "Rename File";
   el("ctx-move-to-target").classList.toggle("hidden", !isDone || job.source_type === "stash");
   el("ctx-replace-source").classList.toggle("hidden", !isDone || job.source_type !== "stash" || !job.source_path);
   el("ctx-replace-with-twin").classList.toggle("hidden", !isDone || !job.has_twin);
@@ -3254,7 +3278,8 @@ el("ctx-delete-file").addEventListener("click", async () => {
 // The four functions below back both the card's options-menu items and
 // its quick-action icon row, so the two entry points can't drift apart.
 async function renameJobPrompt(filename) {
-  const proposed = window.prompt("Rename to:", filename);
+  const job = state.jobs.get(filename);
+  const proposed = window.prompt("Rename to:", (job && job.pending_filename) || filename);
   if (proposed === null) return;
   const trimmed = proposed.trim();
   if (!trimmed || trimmed === filename) return;
@@ -3271,6 +3296,9 @@ async function renameJobPrompt(filename) {
     }
     loadJobsIntoMap(data.jobs);
     renderLedger();
+    if (data.pending) {
+      flashStatus(`Rename queued: "${data.new_filename}" (applied when download finishes)`);
+    }
   } catch (e) {
     window.alert("Couldn't reach the server to rename that file.");
   }
@@ -3743,6 +3771,31 @@ function resetClipboardMonitorIdleTimer() {
 for (const evt of ["mousemove", "mousedown", "keydown", "touchstart", "wheel"]) {
   document.addEventListener(evt, resetClipboardMonitorIdleTimer, { passive: true });
 }
+
+// ── Download resolution inactivity timeout ───────────────────────
+// Resolution deliberately falls back to 480p after 10 minutes without
+// interaction with the app. This is a safety/convenience default rather
+// than a permanent preference; boot also starts at 480p (see
+// refreshDownloadPrefs above).
+const DOWNLOAD_RES_IDLE_MS = 10 * 60 * 1000;
+let downloadResIdleTimer = null;
+
+function resetDownloadResolutionIdleTimer() {
+  if (downloadResIdleTimer) clearTimeout(downloadResIdleTimer);
+  downloadResIdleTimer = setTimeout(() => {
+    if (resDropdown.value !== "480p") {
+      resDropdown.value = "480p";
+      saveDownloadPrefs();
+      flashStatus("Download resolution reset to 480p after 10 minutes of inactivity.");
+    }
+  }, DOWNLOAD_RES_IDLE_MS);
+}
+
+for (const evt of ["mousemove", "mousedown", "keydown", "touchstart", "wheel"]) {
+  document.addEventListener(evt, resetDownloadResolutionIdleTimer, { passive: true });
+}
+resDropdown.addEventListener("change", resetDownloadResolutionIdleTimer);
+resetDownloadResolutionIdleTimer();
 
 el("ctx-detect-renames-toggle").addEventListener("click", () => {
   state.detectRenames = !state.detectRenames;

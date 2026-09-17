@@ -301,6 +301,7 @@ class JobManager:
 
         job = {
             "filename": filename,
+            "pending_filename": "",
             "url": url,
             "res_cap": res_cap,
             "status": "DOWNLOADING",
@@ -398,6 +399,7 @@ class JobManager:
     async def _enqueue_playlist_item(self, url: str, filename: str, res_cap: str, semaphore: asyncio.Semaphore, save_dir: str) -> None:
         job = {
             "filename": filename,
+            "pending_filename": "",
             "url": url,
             "res_cap": res_cap,
             "status": "QUEUED",
@@ -601,6 +603,24 @@ class JobManager:
 
     async def _finalize_job(self, job: dict, status: str, log_url: str):
         filename = job["filename"]
+        original_filename = filename
+
+        # A rename requested while the file was downloading is stored as a
+        # pending filename.  Do the actual filesystem rename only after
+        # yt-dlp has finished, so yt-dlp is never writing to a file that the
+        # user is simultaneously trying to rename.
+        pending_filename = (job.get("pending_filename") or "").strip()
+        if status == "DONE" and pending_filename and pending_filename != filename:
+            try:
+                filename = self.rename_job(filename, pending_filename, write_history=False)
+            except ValueError:
+                # If the requested name became invalid or collided while the
+                # download was running, keep the completed file at its
+                # original name rather than losing the download.
+                filename = original_filename
+            job["pending_filename"] = ""
+
+        job["filename"] = filename
         file_size_str = ""
         is_audio = job.get("is_audio", False)
         width, height, duration, ext = 0, 0, 0, ""
@@ -648,6 +668,7 @@ class JobManager:
 
         if filename in self.saved_queue:
             self.saved_queue[filename]["status"] = status
+            self.saved_queue[filename]["pending_filename"] = ""
             if file_size_str:
                 self.saved_queue[filename]["file_size"] = file_size_str
             self.saved_queue[filename]["is_audio"] = is_audio
@@ -668,6 +689,7 @@ class JobManager:
         await self.connections.broadcast({
             "type": "job_finished",
             "filename": filename,
+            "original_filename": original_filename,
             "status": status,
             "file_size": file_size_str,
             "is_audio": is_audio,
@@ -846,7 +868,7 @@ class JobManager:
         return True
 
     # ── Renaming a completed job's file ───────────────────────────
-    def rename_job(self, filename: str, new_name_raw: str) -> str:
+    def rename_job(self, filename: str, new_name_raw: str, write_history: bool = True) -> str:
         """Renames the media file (and thumbnail) on disk, and moves the
         job/queue entry to the new key. Returns the final clean name.
         Raises ValueError if the new name is invalid or already taken."""
@@ -864,8 +886,8 @@ class JobManager:
         if new_name in self.jobs:
             raise ValueError(f"'{new_name}' is already used by another item.")
 
-        media_path = find_media_file(filename)
-        save_dir = get_save_dir()
+        save_dir = (existing or {}).get("save_dir") or get_save_dir()
+        media_path = find_media_file(filename, save_dir)
 
         # If this job has a twin in Converted/, keep the twin's stem in sync
         # with the renamed source. Preserve the twin's actual extension.
@@ -906,7 +928,8 @@ class JobManager:
             save_queue_to_disk(self.saved_queue)
 
         job_url = (job or {}).get("url", "") or self.saved_queue.get(new_name, {}).get("url", "")
-        write_to_history_log(new_name, job_url, f"RENAMED from {filename}")
+        if write_history:
+            write_to_history_log(new_name, job_url, f"RENAMED from {filename}")
 
         if get_download_prefs().get("detect_renames", True):
             try:
