@@ -23,6 +23,9 @@
       <button id="download-submit-btn" class="download-submit-btn" title="Start Download">
         <i class="ti ti-download" aria-hidden="true"></i><span>Download</span>
       </button>
+      <button id="cancel-playlist-btn" class="cancel-playlist-btn hidden" title="Cancel playlist downloads" aria-label="Cancel playlist downloads">
+        <i class="ti ti-player-stop" aria-hidden="true"></i>
+      </button>
       <!-- Navigation tray toggle button -->
       <button id="nav-toggle-btn" class="nav-toggle-btn" title="Toggle navigation">
         <i class="ti ti-menu-2" aria-hidden="true"></i>
@@ -137,6 +140,7 @@
       <button id="selection-clear-btn" class="btn">Clear</button>
       <button id="selection-move-btn" class="btn" disabled>Move to Target</button>
       <button id="selection-encode-btn" class="btn" disabled>Mass Encode</button>
+      <button id="selection-stash-btn" class="btn selection-stash-btn hidden" disabled>Stash</button>
       <button id="selection-delete-btn" class="btn btn-danger" disabled>Delete</button>
     </div>
 
@@ -347,6 +351,26 @@
     <div class="modal-actions">
       <button id="replace-source-cancel-btn" class="btn">Cancel</button>
       <button id="replace-source-confirm-btn" class="btn btn-primary">Replace</button>
+    </div>
+  </div>
+</div>
+
+<div id="batch-stash-modal" class="modal-overlay hidden">
+  <div class="modal-box batch-stash-box">
+    <div class="modal-title">
+      <span>Replace Stash Sources</span>
+      <button id="close-batch-stash-modal" class="icon-btn">✕</button>
+    </div>
+    <div id="batch-stash-count" class="batch-stash-count"></div>
+    <div class="batch-stash-summary">
+      <div><strong>Twins only</strong> → replace originals</div>
+      <div>Stash tag removed automatically</div>
+    </div>
+
+    <div id="batch-stash-error" class="modal-error hidden"></div>
+    <div class="modal-actions">
+      <button id="cancel-batch-stash-modal" class="btn">Cancel</button>
+      <button id="start-batch-stash-btn" class="btn btn-primary">Transfer only twins</button>
     </div>
   </div>
 </div>

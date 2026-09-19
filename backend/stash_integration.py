@@ -503,3 +503,77 @@ async def replace_source(
         except Exception as e:
             result["tag_delete_error"] = str(e)
     return result
+
+
+async def batch_replace_sources(
+    manager,
+    filenames: list,
+    transfer_only_twins: bool = True,
+) -> dict:
+    """Batch the normal Replace Stash Source action for selected Stash items.
+
+    When ``transfer_only_twins`` is enabled, every selected item must have a
+    Converted/ twin and that twin is selected directly (``variant="reencoded"``)
+    so the batch never opens the Original/Re-encoded decision prompt.
+
+    The Stash tag recorded by the Stash Check Tag import is removed automatically
+    after a successful replacement. Other scene tags are left untouched.
+
+    Items are processed sequentially so a filesystem or Stash failure on one
+    scene does not prevent the remaining selections from being attempted.
+    """
+    results = []
+    succeeded = []
+    skipped = []
+    failed = []
+
+    for filename in filenames:
+        job = manager.jobs.get(filename)
+        if not job or job.get("source_type") != "stash":
+            failed.append({"filename": filename, "error": "Not a Stash source."})
+            continue
+
+        if transfer_only_twins and not find_converted_file(filename):
+            skipped.append({
+                "filename": filename,
+                "reason": "No twin found in Converted/.",
+            })
+            continue
+
+        delete_tag_ids = [job["stash_tag_id"]] if job.get("stash_tag_id") else []
+
+        try:
+            result = await replace_source(
+                manager,
+                filename,
+                variant="reencoded" if transfer_only_twins else None,
+                delete_tag_ids=delete_tag_ids,
+            )
+            succeeded.append(filename)
+            results.append({
+                "filename": filename,
+                "status": "replaced",
+                **result,
+            })
+            await manager.connections.broadcast({
+                "type": "job_deleted",
+                "filename": filename,
+            })
+        except NeedsDecisionError:
+            # A normal Replace Stash Source call can legitimately need the
+            # Original/Re-encoded choice. A batch operation cannot safely
+            # invent that choice, so report it and continue with the rest.
+            failed.append({
+                "filename": filename,
+                "error": "This item requires an Original/Re-encoded choice; enable 'Transfer only twins' to batch it.",
+            })
+        except Exception as e:
+            failed.append({"filename": filename, "error": str(e)})
+
+    return {
+        "ok": not failed,
+        "succeeded": succeeded,
+        "skipped": skipped,
+        "failed": failed,
+        "results": results,
+    }

@@ -298,6 +298,11 @@ class ReplaceSourceRequest(BaseModel):
     delete_tag_ids: List[str] = []  # any subset of job["stash_tags"] to remove from the scene
 
 
+class BatchStashReplaceRequest(BaseModel):
+    filenames: List[str]
+    transfer_only_twins: bool = True
+
+
 class SyncAudioApplyRequest(BaseModel):
     filename: str
     delay_ms: float
@@ -699,6 +704,22 @@ async def api_replace_source(req: ReplaceSourceRequest):
     return {"ok": True, **tag_result}
 
 
+@app.post("/api/jobs/replace-source/batch")
+async def api_batch_replace_stash_sources(req: BatchStashReplaceRequest):
+    try:
+        result = await stash_integration.batch_replace_sources(
+            job_manager,
+            req.filenames,
+            transfer_only_twins=True,
+        )
+    except Exception as e:
+        return JSONResponse(status_code=400, content={"error": f"Unexpected error: {e}"})
+    return {
+        **result,
+        "jobs": job_manager.snapshot(),
+    }
+
+
 @app.post("/api/jobs/replace-with-twin")
 async def api_replace_with_twin(req: CancelRequest):
     try:
@@ -833,6 +854,16 @@ async def api_queue_playlist(req: PlaylistQueueRequest):
     # Every item in this batch keeps this destination even if the user changes
     # the app folder setting while the playlist is still downloading.
     return await job_manager.start_playlist_batch(entries, req.res_cap, get_save_dir(), req.number_titles)
+
+
+@app.post("/api/playlist/cancel")
+async def api_cancel_playlist(req: BatchFilenamesRequest):
+    """Cancel all currently queued/downloading items belonging to a playlist batch."""
+    cancelled = 0
+    for filename in req.filenames:
+        if await job_manager.cancel_job(filename):
+            cancelled += 1
+    return {"ok": True, "cancelled": cancelled}
 
 
 @app.post("/api/jobs")

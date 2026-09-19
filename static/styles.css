@@ -167,6 +167,29 @@ html, body {
 }
 .download-submit-btn span { display: none; }
 
+.cancel-playlist-btn {
+  flex: 0 0 38px;
+  width: 38px;
+  height: 38px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--panel);
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: border-color 0.2s, color 0.2s, background 0.2s;
+  font-size: 18px;
+}
+.cancel-playlist-btn:hover {
+  border-color: var(--danger, #d9534f);
+  color: var(--danger, #d9534f);
+  background: var(--panel-2);
+}
+.cancel-playlist-btn:active { transform: scale(0.94); }
+.cancel-playlist-btn.hidden { display: none; }
+
 /* ── Navigation toggle button ─────────────────────────────── */
 .nav-toggle-btn {
   flex: 0 0 38px;
@@ -590,6 +613,35 @@ html, body {
   padding: 4px 10px;
 }
 
+.selection-stash-btn {
+  border-color: var(--teal-dim) !important;
+  color: var(--teal) !important;
+}
+.selection-stash-btn:hover {
+  background: var(--teal-glow);
+  border-color: var(--teal) !important;
+}
+.selection-stash-btn.hidden { display: none; }
+
+.batch-stash-box {
+  max-width: 360px;
+  padding: 16px 18px;
+}
+.batch-stash-count {
+  color: var(--text-secondary);
+  font-size: 12px;
+  margin: -4px 0 12px;
+}
+.batch-stash-summary {
+  color: var(--text);
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 9px 11px;
+  font-size: 12px;
+  line-height: 1.55;
+}
+.batch-stash-summary strong { color: var(--text); }
 /* ── Queue list ────────────────────────────────────────────── */
 .queue-list {
   flex: 1;

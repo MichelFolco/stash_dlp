@@ -73,6 +73,7 @@ const state = {
   renderedCards: new Map(),
   renderedCardSigs: new Map(),
   encodeJobs: new Map(),
+  playlistBatchFiles: new Set(),
   encodeCapabilities: null,
   encodeSourceInfo: null,
   encodeEstimateSeq: 0,
@@ -82,6 +83,7 @@ const state = {
 
 const inputField = el("input-field");
 const downloadSubmitBtn = el("download-submit-btn");
+const cancelPlaylistBtn = el("cancel-playlist-btn");
 const app = el("app");
 const queueList = el("queue-list");
 const gearBtn = el("gear-btn");
@@ -1033,6 +1035,7 @@ function connectWebSocket() {
     } else if (msg.type === "job_added") {
       state.jobs.set(msg.job.filename, msg.job);
       renderLedger();
+      updatePlaylistCancelButton();
     } else if (msg.type === "job_progress") {
       const job = state.jobs.get(msg.filename);
       if (job) {
@@ -1057,6 +1060,7 @@ function connectWebSocket() {
         job.pending_filename = "";
         state.jobs.set(msg.filename, job);
         renderLedger();
+        updatePlaylistCancelButton();
       }
     } else if (msg.type === "job_status") {
       // A QUEUED playlist item flipping to DOWNLOADING once its
@@ -1066,6 +1070,7 @@ function connectWebSocket() {
       if (job) {
         job.status = msg.status;
         renderLedger();
+        updatePlaylistCancelButton();
       }
     } else if (msg.type === "job_deleted") {
       state.jobs.delete(msg.filename);
@@ -1649,7 +1654,15 @@ const selectionSelectAllBtn = el("selection-select-all-btn");
 const selectionClearBtn = el("selection-clear-btn");
 const selectionMoveBtn = el("selection-move-btn");
 const selectionEncodeBtn = el("selection-encode-btn");
+const selectionStashBtn = el("selection-stash-btn");
 const selectionDeleteBtn = el("selection-delete-btn");
+
+const batchStashModal = el("batch-stash-modal");
+const batchStashCount = el("batch-stash-count");
+const batchStashError = el("batch-stash-error");
+const closeBatchStashModalBtn = el("close-batch-stash-modal");
+const cancelBatchStashModalBtn = el("cancel-batch-stash-modal");
+const startBatchStashBtn = el("start-batch-stash-btn");
 
 const batchEncodeModal = el("batch-encode-modal");
 const batchEncodeCount = el("batch-encode-count");
@@ -1675,6 +1688,17 @@ function updateSelectionBar() {
   selectionMoveBtn.disabled = count === 0;
   selectionEncodeBtn.disabled = count === 0;
   selectionDeleteBtn.disabled = count === 0;
+
+  // Stash is a batch-only action: it is shown only when every selected
+  // completed item is a Stash import. A mixed selection never exposes it.
+  const selectedJobs = Array.from(state.selectedFilenames)
+    .map((filename) => state.jobs.get(filename))
+    .filter(Boolean);
+  const allStash = count > 0 &&
+    selectedJobs.length === count &&
+    selectedJobs.every((job) => job.status === "DONE" && job.source_type === "stash");
+  selectionStashBtn.classList.toggle("hidden", !allStash);
+  selectionStashBtn.disabled = !allStash;
 }
 
 function setCardSelectedVisual(filename, selected) {
@@ -1832,6 +1856,85 @@ startBatchEncodeBtn.addEventListener("click", async () => {
     startBatchEncodeBtn.disabled = !batchEncodePresetSelect.value;
     cancelBatchEncodeModalBtn.disabled = false;
     closeBatchEncodeModalBtn.disabled = false;
+  }
+});
+
+function openBatchStashModal() {
+  const filenames = Array.from(state.selectedFilenames);
+  if (!filenames.length) return;
+
+  batchStashCount.textContent =
+    `${filenames.length} Stash source${filenames.length === 1 ? "" : "s"} selected.`;
+  batchStashError.classList.add("hidden");
+  batchStashError.textContent = "";
+  batchStashModal.classList.remove("hidden");
+}
+
+function closeBatchStashModal() {
+  batchStashModal.classList.add("hidden");
+}
+
+selectionStashBtn.addEventListener("click", openBatchStashModal);
+closeBatchStashModalBtn.addEventListener("click", closeBatchStashModal);
+cancelBatchStashModalBtn.addEventListener("click", closeBatchStashModal);
+batchStashModal.addEventListener("click", (e) => {
+  if (e.target === batchStashModal) closeBatchStashModal();
+});
+
+startBatchStashBtn.addEventListener("click", async () => {
+  const filenames = Array.from(state.selectedFilenames);
+  if (!filenames.length) return;
+
+  batchStashError.classList.add("hidden");
+  startBatchStashBtn.disabled = true;
+  cancelBatchStashModalBtn.disabled = true;
+  closeBatchStashModalBtn.disabled = true;
+
+  try {
+    const res = await fetch("/api/jobs/replace-source/batch", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        filenames,
+        transfer_only_twins: true,
+      }),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      batchStashError.textContent = data.error || "Couldn't replace the selected Stash sources.";
+      batchStashError.classList.remove("hidden");
+      return;
+    }
+
+    loadJobsIntoMap(data.jobs || []);
+    state.selectedFilenames.clear();
+    renderLedger();
+    updateSelectionBar();
+    closeBatchStashModal();
+
+    const replaced = data.succeeded || [];
+    const skipped = data.skipped || [];
+    const failed = data.failed || [];
+    let message = `Transferred ${replaced.length} Stash source${replaced.length === 1 ? "" : "s"}.`;
+    if (replaced.length) {
+      message += " Stash tags were removed automatically where recorded.";
+    }
+    if (skipped.length) {
+      message += `\n\n${skipped.length} skipped (no twin found):\n` +
+        skipped.map((f) => `- ${f.filename}`).join("\n");
+    }
+    if (failed.length) {
+      message += `\n\n${failed.length} item${failed.length === 1 ? "" : "s"} failed:\n` +
+        failed.map((f) => `- ${f.filename}: ${f.error}`).join("\n");
+    }
+    window.alert(message);
+  } catch (e) {
+    batchStashError.textContent = "Couldn't reach the server to replace the Stash sources.";
+    batchStashError.classList.remove("hidden");
+  } finally {
+    startBatchStashBtn.disabled = false;
+    cancelBatchStashModalBtn.disabled = false;
+    closeBatchStashModalBtn.disabled = false;
   }
 });
 
@@ -4916,16 +5019,48 @@ async function submitDownloadJob(url, filename, resCap, originalPastedUrl) {
   resetToReady();
 }
 
+function updatePlaylistCancelButton() {
+  const active = [...state.playlistBatchFiles].some((filename) => {
+    const job = state.jobs.get(filename);
+    return job && (job.status === "QUEUED" || job.status === "DOWNLOADING");
+  });
+  cancelPlaylistBtn.classList.toggle("hidden", !active);
+}
+
+async function cancelPlaylistBatch() {
+  const filenames = [...state.playlistBatchFiles].filter((filename) => {
+    const job = state.jobs.get(filename);
+    return job && (job.status === "QUEUED" || job.status === "DOWNLOADING");
+  });
+  if (!filenames.length) {
+    updatePlaylistCancelButton();
+    return;
+  }
+  cancelPlaylistBtn.disabled = true;
+  try {
+    await fetch("/api/playlist/cancel", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ filenames }),
+    });
+  } catch (e) {
+    window.alert("Couldn't cancel the playlist downloads.");
+  } finally {
+    cancelPlaylistBtn.disabled = false;
+    updatePlaylistCancelButton();
+  }
+}
+
+cancelPlaylistBtn.addEventListener("click", cancelPlaylistBatch);
+
 async function submitPlaylistBatch(entries, resCap, playlistTitle, autoStart = false) {
   const label = playlistTitle ? `"${playlistTitle}"` : "This playlist";
-  if (!autoStart) {
-    const proceed = window.confirm(
-      `${label} has ${entries.length} videos.\n\nQueue all ${entries.length} for download (max 3 at a time)?`
-    );
-    if (!proceed) {
-      resetToReady();
-      return;
-    }
+  const proceed = window.confirm(
+    `${label} has ${entries.length} videos.\n\nQueue all ${entries.length} for download?`
+  );
+  if (!proceed) {
+    resetToReady();
+    return;
   }
 
   // Ask separately so the choice is explicit and applies to this playlist only.
@@ -4935,10 +5070,14 @@ async function submitPlaylistBatch(entries, resCap, playlistTitle, autoStart = f
   );
 
   try {
-    await fetch("/api/playlist/queue", {
+    const response = await fetch("/api/playlist/queue", {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ entries, res_cap: resCap, number_titles: numberTitles }),
     });
+    if (!response.ok) throw new Error("playlist queue failed");
+    const queuedData = await response.json();
+    state.playlistBatchFiles = new Set(queuedData.queued || []);
+    updatePlaylistCancelButton();
   } catch (e) {
     window.alert("Couldn't reach the server to queue the playlist.");
   }

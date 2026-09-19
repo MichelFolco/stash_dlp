@@ -1,3 +1,20 @@
+## v1.30.21 - Playlist download cancellation
+
+- Added a confirmation step before a detected playlist queues its items.
+- Added a **Stop Playlist** control to cancel the playlist downloads after queuing starts.
+- Cancelling a playlist affects its queued/active playlist items without cancelling unrelated downloads.
+
+## 1.30.20
+- Batch Stash replacement now always transfers only encoded twins and automatically removes the recorded Stash tag after successful replacement. Removed the separate Delete Stash tag option.
+
+## v1.30.18 - Batch Replace Stash Sources
+
+- Added a **Stash** multi-selection action, shown only when every selected item is a completed Stash source.
+- Added batch replacement of selected Stash sources, with **Transfer only twins** enabled by default so each available encoded twin is used directly; selected Stash items without twins are skipped.
+- The recorded **Stash tag** is removed automatically after a successful replacement; there is no separate delete option.
+- Batch processing continues through the selection and reports individual failures instead of stopping the entire batch.
+- Kept Stash-specific batch logic in `backend/stash_integration.py`.
+
 ## v1.30.17 - Mass encoding from multi-selection
 
 - Added **Mass Encode** to the multi-selection action bar.
