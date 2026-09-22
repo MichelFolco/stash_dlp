@@ -1,3 +1,19 @@
+# v1.30.25 - Full-height thumbnails
+
+- Made download/history thumbnails fill the full height of their cards.
+- Kept thumbnail images cropped with `object-fit: cover` so the thumbnail area remains fully filled.
+
+# v1.30.24 - Persistent UI state
+
+- Persisted the Folders display pin state across sessions.
+- Persisted the hamburger/navigation tray expanded or collapsed state across sessions.
+- Made the hamburger outline slightly wider.
+
+# v1.30.23 - Stash scene URL import
+
+- Pasting a Stash scene URL into the main address bar now imports the scene file directly.
+- The imported item uses the existing Stash-source card/pill behavior.
+
 ## v1.30.21 - Playlist download cancellation
 
 - Added a confirmation step before a detected playlist queues its items.

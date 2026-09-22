@@ -198,7 +198,7 @@ html, body {
   display: flex;
   align-items: center;
   justify-content: center;
-  border: 1px solid var(--border);
+  border: 2px solid var(--border);
   border-radius: var(--radius);
   background: var(--panel);
   color: var(--text-secondary);
@@ -660,7 +660,7 @@ html, body {
   padding: 10px 12px;
   display: flex;
   gap: 10px;
-  align-items: flex-start;
+  align-items: stretch;
   transition: border-color 0.2s, background 0.2s, box-shadow 0.2s;
   cursor: default;
   position: relative;
@@ -699,12 +699,15 @@ html, body {
   display: flex;
   flex-direction: column;
   align-items: center;
+  align-self: stretch;
   gap: 2px;
 }
 
 .job-thumb {
   width: 72px;
-  height: 40px;
+  height: auto;
+  min-height: 40px;
+  flex: 1 1 auto;
   border-radius: var(--radius-sm);
   background: var(--bg);
   overflow: hidden;

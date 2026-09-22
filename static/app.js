@@ -25,9 +25,11 @@ const folderControlsToggleBtn = el("folder-controls-toggle-btn");
 // client-side display preference, so it's kept in localStorage rather
 // than synced to the server like the other tray toggles.
 let folderControlsPinned = false;
+let navTrayPersistedOpen = false;
 try {
   folderControlsPinned = localStorage.getItem("stashdlp_folder_controls_pinned") === "1";
-} catch (err) { /* localStorage unavailable (e.g. privacy mode) - fall back to default */ }
+  navTrayPersistedOpen = localStorage.getItem("stashdlp_nav_tray_open") === "1";
+} catch (err) { /* localStorage unavailable (e.g. privacy mode) - fall back to defaults */ }
 
 // "Manage External Programs" and "Open With..." only make sense on the
 // machine actually running the server (that's where the programs and
@@ -434,6 +436,37 @@ async function openStashLargestFiles() {
     );
   } catch (e) {
     flashStatus("Couldn't reach the server.");
+  }
+}
+
+async function importStashSceneFromAddressBar(sceneUrl) {
+  inputField.disabled = true;
+  const previousPlaceholder = inputField.placeholder;
+  inputField.value = "Importing Stash scene...";
+  try {
+    const res = await fetch("/api/import/stash", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ scene: sceneUrl }),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      inputField.value = "";
+      inputField.placeholder = data.error || "Stash import failed.";
+      setTimeout(() => { inputField.placeholder = previousPlaceholder; }, 3000);
+      inputField.disabled = false;
+      inputField.focus();
+      return;
+    }
+    if (data.job) state.jobs.set(data.job.filename, data.job);
+    renderLedger();
+    flashStatus(`Imported from Stash: ${data.job.filename}`);
+    resetToReady();
+  } catch (e) {
+    inputField.value = "";
+    inputField.placeholder = "Couldn't reach Stash.";
+    setTimeout(() => { inputField.placeholder = previousPlaceholder; }, 3000);
+    inputField.disabled = false;
+    inputField.focus();
   }
 }
 
@@ -1519,11 +1552,22 @@ function updateFolderStatusRowVisibility() {
 navToggleBtn.addEventListener("click", (e) => {
   e.stopPropagation();
   navTray.classList.remove("hidden");
-  navTray.classList.toggle("open");
-  navToggleBtn.classList.toggle("active");
+  const isOpen = navTray.classList.toggle("open");
+  navToggleBtn.classList.toggle("active", isOpen);
+  navTrayPersistedOpen = isOpen;
+  try {
+    localStorage.setItem("stashdlp_nav_tray_open", isOpen ? "1" : "0");
+  } catch (err) { /* ignore - localStorage unavailable */ }
   updateFolderStatusRowVisibility();
 });
 
+// Restore the hamburger/tray state from the previous session. This is a
+// display preference only and does not affect any download or server state.
+if (navTrayPersistedOpen) {
+  navTray.classList.remove("hidden");
+  navTray.classList.add("open");
+}
+navToggleBtn.classList.toggle("active", navTrayPersistedOpen);
 folderControlsToggleBtn.classList.toggle("active", folderControlsPinned);
 updateFolderStatusRowVisibility();
 
@@ -5088,7 +5132,11 @@ async function handleEnterPipeline() {
   const typedValue = inputField.value.trim();
 
   if (state.current === "READY") {
-    if (/^https?:\/\//i.test(typedValue)) {
+    // A Stash scene URL in the main address bar uses the same import path
+    // as the explicit Import from Stash action.
+    if (/^https?:\/\/[^\s/]+(?:[:\/][^\s/]*)?\/scenes\/\d+\/?(?:[?#].*)?$/i.test(typedValue)) {
+      await importStashSceneFromAddressBar(typedValue);
+    } else if (/^https?:\/\//i.test(typedValue)) {
       await beginDownloadPipeline(typedValue);
     } else {
       inputField.value = "";

@@ -6,8 +6,7 @@ import asyncio
 import os
 
 try:
-    from playwright.async_api import async_playwright
-
+    from playwright.async_api import async_playwright, TimeoutError as PWTimeout
     PLAYWRIGHT_AVAILABLE = True
 except ImportError:
     PLAYWRIGHT_AVAILABLE = False
@@ -17,29 +16,20 @@ class M3u8NotFound(Exception):
     pass
 
 
-# Only one Playwright/Chromium session runs at a time. Launching the
-# Node driver concurrently is a common trigger for "Connection closed
-# while reading from the driver" on Windows - a second launch can race
-# a previous session's browser/driver process that's still shutting
-# down, and the new driver process fails to come up cleanly.
 _sniff_lock = asyncio.Lock()
-
-# That failure mode is usually a one-off hiccup rather than something
-# permanently wrong, so it's worth one automatic retry (after letting
-# things settle for a moment) before surfacing an error to the user.
 _MAX_ATTEMPTS = 2
 _RETRY_DELAY_SECONDS = 1.5
 
 
 async def find_m3u8(target_url: str):
-    """Returns (stream_url, page_title). Raises M3u8NotFound on failure."""
     if not PLAYWRIGHT_AVAILABLE:
         raise M3u8NotFound("playwright module not installed.")
 
     user_localappdata = os.environ.get("LOCALAPPDATA", "")
     if user_localappdata:
-        os.environ["PLAYWRIGHT_BROWSERS_PATH"] = os.path.join(
-            user_localappdata, "ms-playwright"
+        os.environ.setdefault(
+            "PLAYWRIGHT_BROWSERS_PATH",
+            os.path.join(user_localappdata, "ms-playwright"),
         )
 
     last_error = None
@@ -48,15 +38,13 @@ async def find_m3u8(target_url: str):
             try:
                 return await _sniff_once(target_url)
             except M3u8NotFound:
-                # The page genuinely has no stream on it - retrying
-                # won't change that, so don't waste time on it.
                 raise
             except Exception as e:
                 last_error = e
                 if attempt < _MAX_ATTEMPTS:
                     await asyncio.sleep(_RETRY_DELAY_SECONDS)
 
-    raise M3u8NotFound(str(last_error))
+    raise M3u8NotFound(f"{type(last_error).__name__}: {last_error}")
 
 
 async def _sniff_once(target_url: str):
@@ -64,39 +52,72 @@ async def _sniff_once(target_url: str):
     page_title = ""
 
     async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=True)
+        browser = None
         try:
-            page = await browser.new_page()
+            browser = await p.chromium.launch(
+                headless=True,
+                args=[
+                    "--no-sandbox",
+                    "--disable-dev-shm-usage",
+                    "--disable-gpu",
+                ],
+            )
+            context = await browser.new_context(
+                user_agent=(
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                    "AppleWebKit/537.36 (KHTML, like Gecko) "
+                    "Chrome/124.0.0.0 Safari/537.36"
+                )
+            )
+            page = await context.new_page()
 
             def handle_request(request):
                 nonlocal detected_url
                 url = request.url
-                if ".m3u8" in url.lower() and not detected_url:
+                if not detected_url and ".m3u8" in url.lower():
                     detected_url = url
 
             page.on("request", handle_request)
 
+            # Use "domcontentloaded" - networkidle hangs forever on
+            # pages with heartbeat/polling connections (i.e. every
+            # streaming site). Then just wait a fixed window for the
+            # player to fire its m3u8 request.
             try:
-                await page.goto(target_url, wait_until="networkidle", timeout=15000)
-                page_title = (await page.title()).strip()
+                await page.goto(
+                    target_url,
+                    wait_until="domcontentloaded",
+                    timeout=20000,
+                )
+            except PWTimeout:
+                # Slow page - keep going, we still might see the m3u8.
+                pass
             except Exception:
                 pass
 
-            await asyncio.sleep(3)
+            # Poll for the title / m3u8 instead of a blind sleep, so we
+            # bail out the moment we have what we need.
+            for _ in range(30):  # up to ~15s
+                if detected_url:
+                    break
+                try:
+                    page_title = (await page.title()).strip()
+                except Exception:
+                    pass
+                await asyncio.sleep(0.5)
+
             if not page_title:
                 try:
-                    await page.goto(target_url, wait_until="networkidle", timeout=15000)
                     page_title = (await page.title()).strip()
                 except Exception:
                     page_title = ""
+
         finally:
-            # Always close the browser, even if something above threw,
-            # so a bad page can't leak a chromium process that lingers
-            # and makes the *next* launch flaky too.
-            try:
-                await browser.close()
-            except Exception:
-                pass
+            if browser is not None:
+                try:
+                    await browser.close()
+                except Exception:
+                    pass
 
     if not detected_url:
         raise M3u8NotFound("No m3u8 stream detected on page.")
