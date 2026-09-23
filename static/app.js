@@ -58,6 +58,8 @@ const state = {
   titlePrefixEnabled: false,
   ytdlpDefaultArgs: "",
   ytdlpDomainArgs: {},
+  ytdlpDomainOrder: [],
+  sessionJobFilenames: new Set(),
   jobs: new Map(),
   saveDirPath: "",
   historyEntries: [],
@@ -67,6 +69,7 @@ const state = {
   externalPrograms: [],
   filterText: "",
   audioOnlyFilter: false,
+  sessionOnlyFilter: false,
   statusFilters: new Set(),
   sortField: "added",
   sortDir: "desc",
@@ -612,6 +615,7 @@ async function refreshYtdlpArgs() {
     const data = await res.json();
     state.ytdlpDefaultArgs = data.default_args || "";
     state.ytdlpDomainArgs = data.domain_args || {};
+    state.ytdlpDomainOrder = data.domain_order || Object.keys(state.ytdlpDomainArgs);
   } catch (e) {
     // Backend unreachable at boot - keep empty defaults, not worth
     // surfacing an error over what's a purely optional feature.
@@ -681,6 +685,7 @@ async function saveUrlArgsQuick() {
     if (!res.ok) { flashStatus(data.error || "Couldn't save args."); return; }
     state.ytdlpDefaultArgs = data.default_args || "";
     state.ytdlpDomainArgs = data.domain_args || {};
+    state.ytdlpDomainOrder = data.domain_order || Object.keys(state.ytdlpDomainArgs);
     updateUrlArgsChip();
     urlArgsFlyout.classList.add("hidden");
     flashStatus(`Saved yt-dlp args for "${domain}"`);
@@ -712,7 +717,11 @@ function closeYtdlpArgsModal() {
 
 function renderYtdlpDomainArgsList() {
   ytdlpDomainArgsList.innerHTML = "";
-  const domains = Object.keys(state.ytdlpDomainArgs).sort();
+  const storedOrder = Array.isArray(state.ytdlpDomainOrder) ? state.ytdlpDomainOrder : [];
+  const domains = [
+    ...storedOrder.filter((domain) => Object.prototype.hasOwnProperty.call(state.ytdlpDomainArgs, domain)),
+    ...Object.keys(state.ytdlpDomainArgs).filter((domain) => !storedOrder.includes(domain)),
+  ];
   if (domains.length === 0) {
     const empty = document.createElement("div");
     empty.className = "program-empty-note";
@@ -736,14 +745,55 @@ function renderYtdlpDomainArgsList() {
     info.appendChild(nameEl);
     info.appendChild(argsEl);
 
+    const controls = document.createElement("div");
+    controls.className = "ytdlp-rule-controls";
+
+    const upBtn = document.createElement("button");
+    upBtn.className = "program-edit-btn ytdlp-rule-move";
+    upBtn.textContent = "↑";
+    upBtn.title = "Move up";
+    upBtn.disabled = domains.indexOf(domain) === 0;
+    upBtn.addEventListener("click", () => reorderYtdlpDomainArgs(domain, -1));
+
+    const downBtn = document.createElement("button");
+    downBtn.className = "program-edit-btn ytdlp-rule-move";
+    downBtn.textContent = "↓";
+    downBtn.title = "Move down";
+    downBtn.disabled = domains.indexOf(domain) === domains.length - 1;
+    downBtn.addEventListener("click", () => reorderYtdlpDomainArgs(domain, 1));
+
     const editBtn = document.createElement("button");
     editBtn.className = "program-edit-btn";
     editBtn.textContent = "Edit";
     editBtn.addEventListener("click", () => openYtdlpDomainArgsForm(domain));
 
+    controls.appendChild(upBtn);
+    controls.appendChild(downBtn);
+    controls.appendChild(editBtn);
     row.appendChild(info);
-    row.appendChild(editBtn);
+    row.appendChild(controls);
     ytdlpDomainArgsList.appendChild(row);
+  }
+}
+
+async function reorderYtdlpDomainArgs(domain, direction) {
+  try {
+    const res = await fetch("/api/ytdlp-args/domain/reorder", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ domain, direction }),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      window.alert(data.error || "Couldn't reorder that rule.");
+      return;
+    }
+    state.ytdlpDefaultArgs = data.default_args || "";
+    state.ytdlpDomainArgs = data.domain_args || {};
+    state.ytdlpDomainOrder = data.domain_order || Object.keys(state.ytdlpDomainArgs);
+    renderYtdlpDomainArgsList();
+  } catch (e) {
+    window.alert("Couldn't reach the server to reorder that rule.");
   }
 }
 
@@ -820,6 +870,7 @@ async function saveYtdlpDomainArgsForm() {
     if (!res.ok) { showYtdlpDomainArgsFormError(data.error || "Unknown error"); return; }
     state.ytdlpDefaultArgs = data.default_args || "";
     state.ytdlpDomainArgs = data.domain_args || {};
+    state.ytdlpDomainOrder = data.domain_order || Object.keys(state.ytdlpDomainArgs);
     renderYtdlpDomainArgsList();
     updateUrlArgsChip();
     closeYtdlpDomainArgsForm();
@@ -841,6 +892,7 @@ el("ytdlp-domain-args-delete-btn").addEventListener("click", async () => {
     if (!res.ok) { showYtdlpDomainArgsFormError(data.error || "Unknown error"); return; }
     state.ytdlpDefaultArgs = data.default_args || "";
     state.ytdlpDomainArgs = data.domain_args || {};
+    state.ytdlpDomainOrder = data.domain_order || Object.keys(state.ytdlpDomainArgs);
     renderYtdlpDomainArgsList();
     updateUrlArgsChip();
     closeYtdlpDomainArgsForm();
@@ -1066,6 +1118,7 @@ function connectWebSocket() {
       }
       return;
     } else if (msg.type === "job_added") {
+      state.sessionJobFilenames.add(msg.job.filename);
       state.jobs.set(msg.job.filename, msg.job);
       renderLedger();
       updatePlaylistCancelButton();
@@ -1079,7 +1132,12 @@ function connectWebSocket() {
       const oldFilename = msg.original_filename || msg.filename;
       const job = state.jobs.get(oldFilename) || state.jobs.get(msg.filename);
       if (job) {
-        if (oldFilename !== msg.filename) state.jobs.delete(oldFilename);
+        if (oldFilename !== msg.filename) {
+          state.jobs.delete(oldFilename);
+          if (state.sessionJobFilenames.delete(oldFilename)) {
+            state.sessionJobFilenames.add(msg.filename);
+          }
+        }
         job.filename = msg.filename;
         job.status = msg.status;
         job.file_size = msg.file_size;
@@ -1535,6 +1593,7 @@ const ledgerFilterPresetBtn = el("ledger-filter-preset-btn");
 const ledgerFilterPresetLabel = el("ledger-filter-preset-label");
 const ledgerFilterPresetMenu = el("ledger-filter-preset-menu");
 const ledgerSortSelect = el("ledger-sort");
+const ledgerSortOrderBtn = el("ledger-sort-order-btn");
 const ledgerMoreBtn = el("ledger-more-btn");
 const ledgerMoreMenu = el("ledger-more-menu");
 const ledgerStatsBar = el("ledger-stats-bar");
@@ -1590,12 +1649,14 @@ updateLedgerFilterPresetUI();
 
 function updateLedgerFilterPresetUI() {
   const activeStatuses = Array.from(state.statusFilters);
-  const activeCount = activeStatuses.length + (state.audioOnlyFilter ? 1 : 0);
+  const activeCount = activeStatuses.length + (state.audioOnlyFilter ? 1 : 0) + (state.sessionOnlyFilter ? 1 : 0);
 
   let label = "All";
   if (activeCount === 1) {
     if (state.audioOnlyFilter) {
       label = "Audio";
+    } else if (state.sessionOnlyFilter) {
+      label = "This Session";
     } else {
       const labels = {
         QUEUED: "Queued",
@@ -1625,6 +1686,9 @@ function updateLedgerFilterPresetUI() {
   const audioItem = el("ledger-filter-audio");
   audioItem.classList.toggle("active", state.audioOnlyFilter);
   audioItem.querySelector(".ctx-check").textContent = state.audioOnlyFilter ? "✓" : "";
+  const sessionItem = el("ledger-filter-session");
+  sessionItem.classList.toggle("active", state.sessionOnlyFilter);
+  sessionItem.querySelector(".ctx-check").textContent = state.sessionOnlyFilter ? "✓" : "";
   el("ledger-filter-all").classList.toggle("active", activeCount === 0);
   el("ledger-filter-all").querySelector(".ctx-check").textContent = activeCount === 0 ? "✓" : "";
 }
@@ -1641,6 +1705,7 @@ ledgerFilterPresetBtn.addEventListener("click", (e) => {
 
 el("ledger-filter-all").addEventListener("click", () => {
   state.audioOnlyFilter = false;
+  state.sessionOnlyFilter = false;
   state.statusFilters.clear();
   updateLedgerFilterPresetUI();
   ledgerFilterPresetMenu.classList.add("hidden");
@@ -1650,6 +1715,12 @@ el("ledger-filter-all").addEventListener("click", () => {
 
 el("ledger-filter-audio").addEventListener("click", () => {
   state.audioOnlyFilter = !state.audioOnlyFilter;
+  updateLedgerFilterPresetUI();
+  renderLedger();
+});
+
+el("ledger-filter-session").addEventListener("click", () => {
+  state.sessionOnlyFilter = !state.sessionOnlyFilter;
   updateLedgerFilterPresetUI();
   renderLedger();
 });
@@ -1664,15 +1735,27 @@ ledgerFilterPresetMenu.querySelectorAll(".ctx-filter-preset[data-status]").forEa
   });
 });
 
-// Sort field and direction used to be two separate controls; combined
-// into one dropdown ("Date Added (Newest)" etc.) so the toolbar doesn't
-// need a second icon button just for direction.
+// Sort field and direction are intentionally separate controls:
+// the dropdown chooses what to sort by, while the adjacent button
+// toggles ascending/descending order.
 ledgerSortSelect.addEventListener("change", () => {
-  const [field, dir] = ledgerSortSelect.value.split("_");
-  state.sortField = field;
-  state.sortDir = dir;
+  state.sortField = ledgerSortSelect.value;
   renderLedger();
 });
+
+function updateLedgerSortOrderUI() {
+  const descending = state.sortDir === "desc";
+  ledgerSortOrderBtn.innerHTML = `<i class="ti ${descending ? "ti-sort-descending" : "ti-sort-ascending"}" aria-hidden="true"></i>`;
+  ledgerSortOrderBtn.title = descending ? "Newest / largest / Z-A first" : "Oldest / smallest / A-Z first";
+  ledgerSortOrderBtn.setAttribute("aria-label", ledgerSortOrderBtn.title);
+}
+
+ledgerSortOrderBtn.addEventListener("click", () => {
+  state.sortDir = state.sortDir === "desc" ? "asc" : "desc";
+  updateLedgerSortOrderUI();
+  renderLedger();
+});
+updateLedgerSortOrderUI();
 
 ledgerMoreBtn.addEventListener("click", (e) => {
   e.stopPropagation();
@@ -2754,6 +2837,8 @@ function openJobMenu(x, y, job) {
   el("ctx-replace-source").classList.toggle("hidden", !isDone || job.source_type !== "stash" || !job.source_path);
   el("ctx-replace-with-twin").classList.toggle("hidden", !isDone || !job.has_twin);
   el("ctx-open-folder").classList.toggle("hidden", !isDone);
+  el("ctx-open-twin-folder").classList.toggle("hidden", !isDone || !job.has_twin);
+  el("ctx-delete-twin").classList.toggle("hidden", !isDone || !job.has_twin);
   el("ctx-file-submenu").classList.toggle("hidden", isDownloading || isQueued);
 
   el("ctx-delete-file").classList.toggle("hidden", isDownloading || isQueued);
@@ -3889,6 +3974,46 @@ el("ctx-open-folder").addEventListener("click", async () => {
   }
 });
 
+el("ctx-open-twin-folder").addEventListener("click", async () => {
+  const filename = jobMenu.dataset.filename;
+  closeMenus();
+  try {
+    const res = await fetch("/api/jobs/open-twin-folder", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ filename }),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      window.alert(`Couldn't open the twin folder:\n${data.error || "Twin not found."}`);
+    }
+  } catch (e) {
+    window.alert("Couldn't reach the server to open the twin folder.");
+  }
+});
+
+el("ctx-delete-twin").addEventListener("click", async () => {
+  const filename = jobMenu.dataset.filename;
+  closeMenus();
+  if (!filename) return;
+  if (!window.confirm(`Delete the twin for "${filename}"?\n\nThe original file will not be affected.`)) return;
+  try {
+    const res = await fetch("/api/jobs/delete-twin", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ filename }),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      window.alert(`Couldn't delete the twin:\n${data.error || "Unknown error"}`);
+      return;
+    }
+    loadJobsIntoMap(data.jobs);
+    renderLedger();
+    flashStatus(`Deleted twin: ${filename}`);
+  } catch (e) {
+    window.alert("Couldn't reach the server to delete the twin.");
+  }
+});
+
 // ── Search History Mode's per-entry menu actions ────────────────
 el("ctx-history-copy-link").addEventListener("click", async () => {
   const url = historyMenu.dataset.url || "";
@@ -4552,7 +4677,7 @@ function enterHistoryModeUI() {
   if (state.sortField === "size") {
     state.sortField = "added";
     state.sortDir = "desc";
-    ledgerSortSelect.value = "added_desc";
+    ledgerSortSelect.value = "added";
   }
 }
 

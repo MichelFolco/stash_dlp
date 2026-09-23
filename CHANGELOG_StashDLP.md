@@ -1,3 +1,25 @@
+# v1.30.28 - Queue and yt-dlp manager improvements
+
+- Added a scrollable yt-dlp site-rule list with persistent up/down reorder controls.
+- Lightened context-menu and menu caption text for better dark-mode contrast.
+- Made the main URL input placeholder white.
+- Added **Open Twin Folder** and **Delete Twin** to the file menu.
+- Added a **This Session** queue filter for downloads added during the current UI session.
+- Split queue sorting into a field dropdown and a separate ascending/descending button.
+- Removed the old combined sort-direction presets and shortened sort labels.
+
+# v1.30.27 - Tray launcher startup fix
+
+- Fixed the tray launcher failing to start the web app when launched with `pythonw.exe`.
+- The tray launcher now starts the existing backend with the normal `python.exe` interpreter.
+- Fixed console-window handle lookup to use the Windows `GetConsoleWindow` API correctly.
+
+# v1.30.26 - System tray launcher
+
+- Added a Windows system-tray launcher that starts the existing FastAPI app as a separate subprocess.
+- Added tray controls to open the app, show/hide its console, restart the server, and quit.
+- Added `start_tray.bat` and `start_tray_lan.bat` launchers.
+
 # v1.30.25 - Full-height thumbnails
 
 - Made download/history thumbnails fill the full height of their cards.

@@ -1,4 +1,3 @@
 @echo off
 cd /d "%~dp0"
-set STASH_DLP_HOST=0.0.0.0
 pythonw tray_launcher.py

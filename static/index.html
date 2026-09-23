@@ -109,6 +109,7 @@
           <div id="ledger-filter-all" class="ctx-item ctx-filter-preset active"><span class="ctx-check">✓</span> All</div>
           <div class="ctx-separator"></div>
           <div id="ledger-filter-audio" class="ctx-item ctx-filter-preset"><span class="ctx-check"></span> Audio</div>
+          <div id="ledger-filter-session" class="ctx-item ctx-filter-preset"><span class="ctx-check"></span> This Session</div>
           <div class="ctx-separator"></div>
           <div class="ctx-item ctx-filter-preset" data-status="QUEUED"><span class="ctx-check"></span> Queued</div>
           <div class="ctx-item ctx-filter-preset" data-status="DOWNLOADING"><span class="ctx-check"></span> Downloading</div>
@@ -118,14 +119,14 @@
           <div class="ctx-item ctx-filter-preset" data-status="ENCODED"><span class="ctx-check"></span> Encoded</div>
         </div>
       </div>
-      <select id="ledger-sort" class="ledger-sort-select">
-        <option value="added_desc">Date Added (Newest)</option>
-        <option value="added_asc">Date Added (Oldest)</option>
-        <option value="size_desc">File Size (Largest)</option>
-        <option value="size_asc">File Size (Smallest)</option>
-        <option value="name_asc">Filename (A-Z)</option>
-        <option value="name_desc">Filename (Z-A)</option>
+      <select id="ledger-sort" class="ledger-sort-select" title="Sort by">
+        <option value="added">Date Added</option>
+        <option value="size">File Size</option>
+        <option value="name">Filename</option>
       </select>
+      <button id="ledger-sort-order-btn" class="icon-btn ledger-sort-order-btn" title="Newest first" aria-label="Sort newest first">
+        <i class="ti ti-sort-descending" aria-hidden="true"></i>
+      </button>
       <button id="ledger-more-btn" class="icon-btn" title="More actions">
         <i class="ti ti-dots-vertical" aria-hidden="true"></i>
       </button>
@@ -276,6 +277,8 @@
   <div id="ctx-replace-source" class="ctx-item hidden">Replace Stash Source</div>
   <div id="ctx-replace-with-twin" class="ctx-item hidden">Promote Twin</div>
   <div id="ctx-open-folder" class="ctx-item hidden">Open in Explorer</div>
+  <div id="ctx-open-twin-folder" class="ctx-item hidden">Open Twin Folder</div>
+  <div id="ctx-delete-twin" class="ctx-item ctx-danger hidden">Delete Twin</div>
 </div>
 
 <!-- "Open With..." flyout, positioned to the right (or left, if it would

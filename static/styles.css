@@ -131,7 +131,8 @@ html, body {
   color: var(--teal);
 }
 .url-input-wrap .input-field::placeholder {
-  color: var(--text-muted);
+  color: #ffffff;
+  opacity: 1;
 }
 .url-input-wrap .input-field:disabled {
   opacity: 0.5;
@@ -532,6 +533,41 @@ html, body {
 .ledger-sort-select:focus {
   outline: none;
   border-color: var(--teal);
+}
+
+.ledger-sort-order-btn {
+  flex: 0 0 32px;
+}
+
+.ledger-sort-order-btn .ti {
+  font-size: 15px;
+}
+
+#ytdlp-domain-args-list {
+  max-height: 260px;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
+#ytdlp-domain-args-list .program-row {
+  min-width: 0;
+}
+
+.ytdlp-rule-controls {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex: 0 0 auto;
+}
+
+.ytdlp-rule-move {
+  min-width: 28px;
+  padding: 4px 7px;
+}
+
+.ytdlp-rule-move:disabled {
+  opacity: 0.35;
+  cursor: default;
 }
 
 .ledger-stats-bar {
@@ -1051,7 +1087,7 @@ html, body {
   border-radius: var(--radius-sm);
   cursor: pointer;
   white-space: nowrap;
-  color: var(--text-secondary);
+  color: #c8d0db;
   transition: color 0.15s, background 0.15s;
 }
 .ctx-item:hover {
@@ -1101,14 +1137,14 @@ html, body {
   cursor: default;
 }
 .ctx-row:hover { background: none; }
-.ctx-label { color: var(--text-muted); font-weight: 600; }
+.ctx-label { color: #c8d0db; font-weight: 600; }
 
 .ctx-section-label {
   font-size: 10px;
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 0.04em;
-  color: var(--text-disabled);
+  color: #aeb8c6;
   padding: 6px 12px 2px;
 }
 

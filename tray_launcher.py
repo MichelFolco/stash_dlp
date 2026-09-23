@@ -1,140 +1,156 @@
-"""System tray launcher for Stash DLP Web (Windows).
+"""StashDLP Windows system-tray launcher.
 
-Runs the FastAPI/uvicorn server in a background thread and shows a tray
-icon (same pattern as YTMusicWeb's pystray usage) with:
-  - double-click / "Open Stash DLP" -> opens the ledger in your browser
-  - "Quit" -> stops the server and exits
-
-Run this instead of backend/main.py directly when you want it to live in
-the tray rather than a console window.
+The launcher deliberately does not reimplement the FastAPI/uvicorn startup.
+It starts the existing backend/main.py as a separate process and only owns
+that process's lifetime and its Windows console/tray UI.
 """
+from __future__ import annotations
+
+import ctypes
 import os
+import subprocess
 import sys
-
-if getattr(sys, "frozen", False):
-    # Running as a PyInstaller-bundled exe: __file__ points into the
-    # temporary extraction folder, which is wiped after the process
-    # exits. Use the actual exe's own directory instead, so the log
-    # file/icon lookup/settings all persist next to it correctly.
-    PROJECT_ROOT = os.path.dirname(os.path.abspath(sys.executable))
-else:
-    PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
-
-# ── pythonw.exe fix ────────────────────────────────────────────
-# Under pythonw.exe (no console attached), sys.stdout/sys.stderr are None
-# rather than just empty. The instant anything tries to write a line to
-# them - and uvicorn's logging does this immediately on startup - it
-# raises, the background thread dies silently, and since there's no
-# console to show the traceback it just looks like nothing happened.
-# Redirect both to a log file before anything else gets a chance to log.
-def _stream_is_usable(stream):
-    if stream is None:
-        return False
-    try:
-        stream.write("")
-        return True
-    except Exception:
-        return False
-
-
-if not _stream_is_usable(sys.stdout) or not _stream_is_usable(sys.stderr):
-    _log_path = os.path.join(PROJECT_ROOT, "tray_launcher.log")
-    _log_file = open(_log_path, "a", buffering=1, encoding="utf-8")
-    sys.stdout = _log_file
-    sys.stderr = _log_file
-
 import threading
 import time
 import webbrowser
-
-if not getattr(sys, "frozen", False):
-    BACKEND_DIR = os.path.join(PROJECT_ROOT, "backend")
-    sys.path.insert(0, BACKEND_DIR)
-
-from config import HOST, PORT
-
-URL = f"http://127.0.0.1:{PORT}"  # always open the browser via loopback locally
+from pathlib import Path
 
 import pystray
-import uvicorn
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image
+
+from backend.config import PORT
+
+PROJECT_ROOT = Path(__file__).resolve().parent
+APP_NAME = "Stash DLP Web"
+APP_URL = f"http://127.0.0.1:{PORT}"
+APP_ENTRY = PROJECT_ROOT / "backend" / "main.py"
+LOGO_PATH = PROJECT_ROOT / "static" / "logo.png"
+
+SW_HIDE = 0
+SW_SHOW = 5
+
+kernel32 = ctypes.windll.kernel32
+user32 = ctypes.windll.user32
+kernel32.GetConsoleWindow.restype = ctypes.c_void_p
+kernel32.AttachConsole.argtypes = [ctypes.c_uint32]
+kernel32.AttachConsole.restype = ctypes.c_bool
+kernel32.FreeConsole.argtypes = []
+kernel32.FreeConsole.restype = ctypes.c_bool
 
 
-def load_icon_image():
-    """Looks for a real icon first (drop your own stash_dlp.ico/png in the
-    project root, or reuse static/logo.png), falling back to a generated
-    placeholder so this works out of the box."""
-    candidates = [
-        os.path.join(PROJECT_ROOT, "icon.ico"),
-        os.path.join(PROJECT_ROOT, "icon.png"),
-        os.path.join(PROJECT_ROOT, "static", "logo.png"),
-    ]
-    for path in candidates:
-        if os.path.exists(path):
+class TrayLauncher:
+    def __init__(self) -> None:
+        self.process: subprocess.Popen | None = None
+        self.console_hwnd: int | None = None
+        self.icon: pystray.Icon | None = None
+        self._stopping = False
+
+    def start_server(self) -> None:
+        if self.process is not None and self.process.poll() is None:
+            return
+
+        # This is the app's existing startup entry point. The server itself
+        # still calls uvicorn.run(...); this launcher does not duplicate it.
+        # The tray is intentionally started with pythonw.exe, but the app
+        # itself must be started with the normal console Python so that its
+        # existing console can be shown/hidden from the tray menu.
+        python_exe = Path(sys.executable)
+        if python_exe.name.lower() == "pythonw.exe":
+            python_exe = python_exe.with_name("python.exe")
+        command = [str(python_exe), str(APP_ENTRY)]
+
+        creationflags = getattr(subprocess, "CREATE_NEW_CONSOLE", 0)
+        self.process = subprocess.Popen(
+            command,
+            cwd=str(PROJECT_ROOT),
+            creationflags=creationflags,
+        )
+
+        # Give Windows a moment to create the child's console window, then
+        # capture that window handle so the tray can hide/show it.
+        self.console_hwnd = self._find_console_window(self.process.pid)
+        if self.console_hwnd:
+            self._show_console(False)
+
+    def _find_console_window(self, pid: int) -> int | None:
+        """Attach briefly to the child's console and obtain its HWND."""
+        for _ in range(30):
+            if kernel32.AttachConsole(pid):
+                try:
+                    hwnd = kernel32.GetConsoleWindow()
+                finally:
+                    kernel32.FreeConsole()
+                if hwnd:
+                    return int(hwnd)
+            time.sleep(0.1)
+        return None
+
+    def _show_console(self, visible: bool) -> None:
+        if self.console_hwnd:
+            user32.ShowWindow(self.console_hwnd, SW_SHOW if visible else SW_HIDE)
+
+    def toggle_console(self, _icon=None, _item=None) -> None:
+        if not self.console_hwnd:
+            self.console_hwnd = self._find_console_window(
+                self.process.pid if self.process else 0
+            )
+        if self.console_hwnd:
+            visible = bool(user32.IsWindowVisible(self.console_hwnd))
+            self._show_console(not visible)
+
+    def open_app(self, _icon=None, _item=None) -> None:
+        webbrowser.open(APP_URL)
+
+    def restart_server(self, _icon=None, _item=None) -> None:
+        self.stop_server()
+        if not self._stopping:
+            self.start_server()
+
+    def stop_server(self) -> None:
+        process = self.process
+        self.process = None
+        self.console_hwnd = None
+        if not process or process.poll() is not None:
+            return
+
+        # main.py uses reload=False, so there is no uvicorn supervisor tree.
+        # Still use taskkill /T as a defensive Windows process-tree cleanup.
+        try:
+            subprocess.run(
+                ["taskkill", "/PID", str(process.pid), "/T", "/F"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                check=False,
+            )
+        except OSError:
+            process.terminate()
             try:
-                return Image.open(path).convert("RGBA")
-            except Exception:
-                pass
+                process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                process.kill()
 
-    # Fallback: simple generated placeholder (dark tile, cyan "S")
-    size = 64
-    img = Image.new("RGBA", (size, size), (18, 18, 20, 255))
-    draw = ImageDraw.Draw(img)
-    draw.rounded_rectangle([2, 2, size - 2, size - 2], radius=10, outline=(0, 255, 255, 255), width=3)
-    try:
-        font = ImageFont.truetype("arialbd.ttf", 34)
-    except Exception:
-        font = ImageFont.load_default()
-    text = "S"
-    bbox = draw.textbbox((0, 0), text, font=font)
-    tw, th = bbox[2] - bbox[0], bbox[3] - bbox[1]
-    draw.text(((size - tw) / 2 - bbox[0], (size - th) / 2 - bbox[1]), text, fill=(0, 255, 255, 255), font=font)
-    return img
+    def quit(self, _icon=None, _item=None) -> None:
+        self._stopping = True
+        self.stop_server()
+        if self.icon:
+            self.icon.stop()
 
+    def build_icon(self) -> pystray.Icon:
+        image = Image.open(LOGO_PATH).convert("RGBA")
+        menu = pystray.Menu(
+            pystray.MenuItem(f"Open {APP_NAME}", self.open_app, default=True),
+            pystray.MenuItem("Show/Hide Console", self.toggle_console),
+            pystray.MenuItem("Restart Server", self.restart_server),
+            pystray.MenuItem("Quit", self.quit),
+        )
+        self.icon = pystray.Icon("StashDLP", image, APP_NAME, menu)
+        return self.icon
 
-class ServerThread(threading.Thread):
-    def __init__(self):
-        super().__init__(daemon=True)
-        from main import app  # noqa: imported lazily so sys.path is set up first
-        config = uvicorn.Config(app, host=HOST, port=PORT, log_level="warning")
-        self.server = uvicorn.Server(config)
-
-    def run(self):
-        self.server.run()
-
-    def stop(self):
-        self.server.should_exit = True
-
-
-def open_browser(icon=None, item=None):
-    webbrowser.open(URL)
-
-
-def quit_app(icon, item):
-    icon.stop()
-    server_thread.stop()
+    def run(self) -> None:
+        self.start_server()
+        icon = self.build_icon()
+        icon.run()
 
 
 if __name__ == "__main__":
-    try:
-        _startup_delay = float(os.environ.get("STASH_DLP_STARTUP_DELAY", "0") or 0)
-        if _startup_delay > 0:
-            time.sleep(_startup_delay)
-
-        server_thread = ServerThread()
-        server_thread.start()
-
-        tray_icon = pystray.Icon(
-            "stash_dlp",
-            icon=load_icon_image(),
-            title="Stash DLP Manager",
-            menu=pystray.Menu(
-                pystray.MenuItem("Open Stash DLP", open_browser, default=True),
-                pystray.MenuItem("Quit", quit_app),
-            ),
-        )
-        tray_icon.run()
-    except Exception:
-        import traceback
-        traceback.print_exc()  # goes to tray_launcher.log under pythonw.exe
-        raise
+    TrayLauncher().run()
