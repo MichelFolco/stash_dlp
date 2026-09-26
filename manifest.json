@@ -1,0 +1,21 @@
+{
+  "name": "StashDLP",
+  "short_name": "StashDLP",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#ffffff",
+  "theme_color": "#000000",
+  "orientation": "vertical",
+  "icons": [
+    {
+      "src": "/static/favicon.png",
+      "sizes": "64x64",
+      "type": "image/png"
+    },
+    {
+      "src": "/static/logo.png",
+      "sizes": "128x128",
+      "type": "image/png"
+    }
+  ]
+}
