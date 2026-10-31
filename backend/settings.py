@@ -662,6 +662,25 @@ def set_sync_clip_duration(value: float) -> float:
     _persist(data)
     return value
 
+# ── Stash connection ────────────────────────────────────────────
+# Address of the Stash server, editable from the Settings panel. Empty
+# (key absent) means "no override": stash_integration then falls back to
+# the STASH_HOST environment variable and finally to localhost:9999.
+STASH_HOST_KEY = "stash_host"
+
+def get_stash_host_override() -> str:
+    return str(_load().get(STASH_HOST_KEY, "") or "").strip()
+
+def set_stash_host_override(value: str) -> str:
+    value = (value or "").strip()
+    data = _load()
+    if value:
+        data[STASH_HOST_KEY] = value
+    else:
+        data.pop(STASH_HOST_KEY, None)
+    _persist(data)
+    return value
+
 # ── yt-dlp extra arguments (global default + per-domain overrides) ──
 # Two tiers, both stored flat like download_prefs: `default_args` is a
 # single string appended to every yt-dlp invocation (throttling knobs,

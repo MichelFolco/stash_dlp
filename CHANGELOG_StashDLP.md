@@ -1,3 +1,32 @@
+# v1.30.34 - Folder explorer menus
+
+- The download and target folder menus are now file explorers: breadcrumbs, Up, sub-folders of the current path (click to go in), filter, hidden-folder toggle, New folder, Select this folder, and a Home view with saved folders and drives.
+- Added an Up button beside both folders in the status row; new `/api/fs/list` and `/api/fs/mkdir` (other devices are limited to saved folders).
+
+# v1.30.33 - Audio thumbnails
+
+- Audio cards now show their real thumbnail (download thumbnail or embedded cover art); the music-note icon is only the fallback when none exists.
+- Cover art is shown uncropped on audio cards; files with no art are remembered so ffmpeg is not re-run on every refresh.
+
+# v1.30.32 - Ultra-narrow file names
+
+- Ultra-narrow mode (220px or narrower) now shows the file name, truncated to one line, under each card's thumbnail.
+
+# v1.30.31 - Stash-aware settings, ultra-narrow tray
+
+- Settings show the Stash section and the Stash tray option only while a Stash server is running; the Server info moved to About.
+- At 220px or narrower the tray is always visible and shows only clipboard monitoring, auto M3U retry and auto-confirm titles (plus the settings button).
+
+# v1.30.30 - Settings panel
+
+- Replaced the logo menu and Settings flyout with one Settings panel (gear button): Downloads, Automation, Library, Tray, Tools, Connections, About.
+- Choose which quick-access icons are pinned to the nav tray and their order (per browser); the Stash address is now editable with a Test button.
+
+# v1.30.29 - Tray launcher rebuilt
+
+- Rebuilt the tray launcher on the Genre Manager design: hidden server with a log file, status-dot icon, single instance, crash notification, and Start with Windows.
+- In-app Restart now hands over to the tray; added `start_console.bat`, and `pystray`/`pillow` to requirements. Synced `APP_VERSION` with the changelog.
+
 # v1.30.28 - Queue and yt-dlp manager improvements
 
 - Added a scrollable yt-dlp site-rule list with persistent up/down reorder controls.

@@ -771,6 +771,8 @@ html, body {
 .job-card.audio .job-thumb {
   background: #14101f;
 }
+/* Cover art is often square: show all of it instead of cropping it to 16:9. */
+.job-card.audio .job-thumb img { object-fit: contain; }
 .job-card.audio .job-thumb .job-thumb-placeholder {
   color: #7a6ba8;
 }
@@ -1178,92 +1180,7 @@ html, body {
   text-overflow: ellipsis;
 }
 
-.ctx-item-tree {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-}
-.ctx-item-tree .ctx-tree-label {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-/* Only the label picks a folder - the row itself stays non-interactive
-   so the chevron (children only) and label (select this folder) don't
-   fight over the same click. */
-.ctx-item-tree:not(.ctx-disabled) { cursor: default; }
-.ctx-item-tree:not(.ctx-disabled) .ctx-tree-label:hover { color: var(--teal); }
-.ctx-item-tree .ctx-chevron {
-  cursor: pointer;
-  padding: 2px 4px;
-  border-radius: var(--radius-sm);
-}
-.ctx-item-tree .ctx-chevron:hover { background: var(--panel); }
-
-/* Root-level "remove saved folder" button - a small framed minus so it
-   reads as a deliberate, deletion-flavored action rather than a plain
-   link, without being as loud as a full trash icon. */
-.ctx-tree-remove {
-  flex: 0 0 auto;
-  width: 18px;
-  height: 18px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: transparent;
-  border: 1px solid var(--border);
-  border-radius: 3px;
-  color: var(--text-muted);
-  cursor: pointer;
-  font-size: 12px;
-  line-height: 1;
-  padding: 0;
-}
-.ctx-tree-remove:hover {
-  background: var(--error-bg);
-  border-color: var(--error-text);
-  color: var(--error-text);
-}
-
-/* Inline "remove this folder?" confirmation that replaces a row's
-   normal contents in place, rather than a browser confirm() popup. */
-.ctx-tree-confirm {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  width: 100%;
-}
-.ctx-tree-confirm-msg {
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  color: var(--text-muted);
-  font-size: 11px;
-}
-.ctx-tree-confirm-btn {
-  flex: 0 0 auto;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: transparent;
-  padding: 3px 8px;
-  font-size: 11px;
-  cursor: pointer;
-  color: var(--text-secondary);
-}
-.ctx-tree-confirm-yes:hover {
-  background: var(--error-bg);
-  border-color: var(--error-text);
-  color: var(--error-text);
-}
-.ctx-tree-confirm-no:hover {
-  background: var(--panel);
-  color: var(--teal);
-}
-
-/* Sort toggle pinned above the (scrollable) folder tree list. */
+/* Sort buttons of the folder explorer. */
 .folder-sort-bar {
   display: flex;
   align-items: center;
@@ -1295,22 +1212,6 @@ html, body {
   color: var(--teal);
   border-color: var(--teal-dim);
   background: var(--panel);
-}
-
-/* Long subfolder listings (a deep video library) scroll instead of
-   running off the bottom of the viewport. Sort bar and the trailing
-   Browse/set-custom-folder item stay pinned outside this area - see
-   openFolderQuickDropdown(). */
-.folder-tree-scroll {
-  overflow-y: auto;
-  max-height: 45vh;
-}
-
-/* Nested subfolder flyouts (see renderTreeLevel) get the same
-   treatment applied to the whole flyout, Back button included. */
-.tree-flyout {
-  overflow-y: auto;
-  max-height: 45vh;
 }
 
 /* ── Modals ─────────────────────────────────────────────────── */
@@ -1965,17 +1866,42 @@ html, body {
     font-size: 16px;
   }
 
-  /* Keep only live download metrics below the thumbnail. */
+  /* Below the thumbnail: the file name (truncated to one line), then the
+     live download metrics. */
   .job-card-body {
     width: 100%;
     min-width: 0;
     display: block;
   }
 
-  .job-title-row,
   .job-path,
   .job-card-footer {
     display: none !important;
+  }
+
+  /* Keep only the name from the title row; badges and status icons need
+     more room than this width has (they remain in the tooltip). */
+  .job-title-row {
+    display: block !important;
+    width: 100%;
+    min-width: 0;
+    margin-top: 2px;
+  }
+
+  .job-title-row > *:not(.job-title) {
+    display: none !important;
+  }
+
+  .job-title {
+    display: block;
+    min-width: 0;
+    font-size: 8px;
+    font-weight: 500;
+    line-height: 1.25;
+    text-align: center;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
 
   .job-title-path-col {
@@ -2358,3 +2284,403 @@ html, body {
 /* ── Mass Encode preset picker ─────────────────────────────── */
 .batch-encode-box { max-width: 460px; }
 #batch-encode-preset-select { width: 100%; }
+
+/* ── Settings panel ─────────────────────────────────────────── */
+.tray-unpinned { display: none !important; }
+
+.settings-box {
+  max-width: 760px;
+  width: 94%;
+  height: min(640px, 90vh);
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.settings-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 14px 10px 24px;
+  border-bottom: 1px solid var(--border-soft);
+}
+.settings-header .modal-title { margin: 0; flex: 1; }
+.settings-saved { font-size: 11px; color: var(--done-text); }
+.settings-saved.error { color: var(--error-text); }
+
+.settings-layout { display: flex; flex: 1; min-height: 0; }
+.settings-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 10px;
+  width: 168px;
+  flex-shrink: 0;
+  border-right: 1px solid var(--border-soft);
+  overflow-y: auto;
+}
+.settings-nav-btn {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 10px;
+  background: transparent;
+  border: none;
+  border-radius: var(--radius-sm);
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  text-align: left;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.settings-nav-btn .ti { font-size: 15px; }
+.settings-nav-btn:hover { background: var(--panel); color: var(--text); }
+.settings-nav-btn.active { background: var(--teal-glow); color: var(--teal); }
+.settings-nav-btn:focus-visible { outline: 1px solid var(--teal); }
+
+.settings-content { flex: 1; min-width: 0; overflow-y: auto; padding: 14px 24px 22px; }
+.settings-section.hidden { display: none; }
+.settings-section-title {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  margin-bottom: 4px;
+}
+.settings-intro { color: var(--text-secondary); font-size: 12px; line-height: 1.45; margin: 4px 0 8px; }
+
+.settings-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  min-height: 44px;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--border-soft);
+}
+.settings-row:last-child { border-bottom: none; }
+.settings-row-stack { flex-direction: column; align-items: stretch; gap: 8px; }
+.settings-row-head { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.settings-row-text { min-width: 0; flex: 1; }
+.settings-row-label { font-size: 13px; font-weight: 600; color: var(--text); }
+.settings-row-desc { font-size: 11px; color: var(--text-secondary); line-height: 1.45; margin-top: 2px; white-space: pre-line; }
+.settings-path { font-size: 12px; color: var(--text-secondary); margin-top: 4px; overflow-wrap: anywhere; }
+.settings-preview { font-size: 11px; color: var(--text-secondary); overflow-wrap: anywhere; }
+.settings-status { font-size: 11px; color: var(--text-secondary); min-height: 1.3em; overflow-wrap: anywhere; }
+.settings-status.ok { color: var(--done-text); }
+.settings-status.error { color: var(--error-text); }
+.settings-inline { display: flex; gap: 8px; }
+.settings-inline .input-field { flex: 1; min-width: 0; }
+.settings-actions { margin-top: 12px; }
+
+.settings-box .input-field {
+  background: var(--panel);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 7px 10px;
+  font: inherit;
+  font-size: 12px;
+}
+.settings-box .input-field:focus { outline: 1px solid var(--teal); }
+.settings-select {
+  background: var(--panel);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 6px 8px;
+  font: inherit;
+  font-size: 12px;
+}
+
+.switch { position: relative; display: inline-flex; flex-shrink: 0; cursor: pointer; }
+.switch input { position: absolute; inset: 0; width: 100%; height: 100%; margin: 0; opacity: 0; cursor: pointer; }
+.switch-track {
+  position: relative;
+  width: 36px;
+  height: 20px;
+  border-radius: 10px;
+  background: var(--border);
+  border: 1px solid var(--border);
+  transition: background .15s, border-color .15s;
+}
+.switch-track::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--text-secondary);
+  transition: transform .15s, background .15s;
+}
+.switch input:checked + .switch-track { background: var(--teal-glow-strong); border-color: var(--teal-dim); }
+.switch input:checked + .switch-track::after { transform: translateX(16px); background: var(--teal); }
+.switch input:focus-visible + .switch-track { outline: 2px solid var(--teal); outline-offset: 2px; }
+
+.settings-tray-list { display: flex; flex-direction: column; }
+.settings-tray-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 44px;
+  padding: 4px 0;
+  border-bottom: 1px solid var(--border-soft);
+}
+.settings-tray-icon { font-size: 17px; width: 24px; text-align: center; color: var(--teal); flex-shrink: 0; }
+.settings-tray-text { flex: 1; min-width: 0; }
+.settings-tray-row.unpinned .settings-tray-icon,
+.settings-tray-row.unpinned .settings-row-label { opacity: .5; }
+.settings-tray-move { width: 30px; height: 30px; font-size: 14px; }
+.settings-tray-move:disabled { opacity: .25; cursor: default; }
+
+@media (max-width: 600px) {
+  .settings-box { width: 100%; height: 100vh; max-height: 100vh; border-radius: 0; }
+  .settings-layout { flex-direction: column; }
+  .settings-nav {
+    flex-direction: row;
+    width: auto;
+    padding: 6px;
+    border-right: none;
+    border-bottom: 1px solid var(--border-soft);
+    overflow-x: auto;
+    overflow-y: hidden;
+  }
+  .settings-nav-btn { flex-shrink: 0; }
+  .settings-content { padding: 10px 14px 20px; }
+  .settings-row { flex-wrap: wrap; }
+  .settings-tray-move { width: 36px; height: 36px; }
+}
+
+/* Stash-only settings (shown while a Stash server is running). */
+.stash-hidden { display: none !important; }
+
+/* ── Ultra-narrow tray ──────────────────────────────────────────
+   At <=220px the hamburger is hidden, so the tray is always shown and
+   reduced to three glyphs: clipboard monitoring, auto M3U retry and
+   auto-confirm titles. They appear regardless of the Tray pin choices;
+   the settings button stays so Settings remains reachable. */
+@media (max-width: 220px) {
+  .nav-tray,
+  .nav-tray.hidden,
+  .nav-tray.open {
+    display: block !important;
+    max-height: none;
+    opacity: 1;
+    margin: 0;
+    overflow: visible;
+  }
+  .nav-tray-inner { justify-content: center; padding: 2px; gap: 2px; }
+  .nav-tray-inner > .mode-container { display: none !important; }
+  .navigation-actions { display: flex; flex-wrap: wrap; justify-content: center; gap: 2px; }
+  .navigation-actions > *:not(#ctx-clipboard-monitor-toggle):not(#ctx-auto-m3u-retry-toolbar-toggle):not(#tray-auto-confirm-toggle):not(#gear-btn) {
+    display: none !important;
+  }
+  .navigation-actions > #ctx-clipboard-monitor-toggle,
+  .navigation-actions > #ctx-auto-m3u-retry-toolbar-toggle,
+  .navigation-actions > #tray-auto-confirm-toggle {
+    display: flex !important;
+  }
+  .navigation-actions .icon-btn { width: 28px; height: 28px; font-size: 14px; }
+}
+
+/* ── Folder explorer menus ──────────────────────────────────── */
+.folder-up-btn {
+  appearance: none;
+  flex: 0 0 auto;
+  width: 22px;
+  height: 22px;
+  margin: 0 -2px 0 -4px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+.folder-up-btn .ti { color: inherit; font-size: 14px; }
+.folder-up-btn:hover { color: var(--teal); border-color: var(--teal-dim); background: var(--panel); }
+.folder-up-btn:focus-visible { outline: 1px solid var(--teal); }
+
+.folder-quickmenu.fe-menu {
+  width: 440px;
+  max-width: calc(100vw - 16px);
+  padding: 0;
+  overflow: hidden;
+}
+.fe { display: flex; flex-direction: column; min-width: 0; }
+.fe-bar { display: flex; align-items: center; gap: 4px; padding: 6px 6px 4px; }
+.fe-icon {
+  appearance: none;
+  flex: 0 0 auto;
+  width: 28px;
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text-secondary);
+  font-size: 15px;
+  cursor: pointer;
+}
+.fe-icon:hover:not(:disabled) { color: var(--teal); border-color: var(--teal-dim); }
+.fe-icon:disabled { opacity: .35; cursor: default; }
+.fe-icon[aria-pressed="true"] { color: var(--teal); border-color: var(--teal-dim); background: var(--teal-glow); }
+.fe-icon:focus-visible, .fe-crumb:focus-visible, .fe-row-btn:focus-visible, .fe-btn:focus-visible { outline: 1px solid var(--teal); }
+
+.fe-crumbs {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 0 4px;
+  overflow-x: auto;
+  white-space: nowrap;
+  scrollbar-width: none;
+  font-size: 12px;
+}
+.fe-crumbs::-webkit-scrollbar { display: none; }
+.fe-crumb {
+  background: none;
+  border: none;
+  border-radius: 4px;
+  padding: 3px 5px;
+  color: var(--text-secondary);
+  font: inherit;
+  cursor: pointer;
+}
+.fe-crumb:hover { color: var(--teal); background: var(--panel); }
+.fe-crumb[aria-current="true"] { color: var(--text); font-weight: 600; cursor: default; }
+.fe-crumb[aria-current="true"]:hover { color: var(--text); background: none; }
+.fe-crumb-sep { color: var(--text-disabled); font-size: 12px; }
+.fe-crumbs-label { color: var(--text-secondary); font-size: 12px; padding: 0 4px; }
+
+.fe-tools { display: flex; align-items: center; gap: 6px; padding: 2px 6px 6px; border-bottom: 1px solid var(--border); }
+.fe-filter {
+  flex: 1;
+  min-width: 0;
+  background: var(--panel);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 5px 8px;
+  font: inherit;
+  font-size: 12px;
+}
+.fe-filter:focus { outline: 1px solid var(--teal); }
+.fe-sort { display: flex; gap: 3px; }
+
+.fe-list { min-height: 160px; max-height: min(46vh, 340px); overflow-y: auto; padding: 4px; }
+.fe-list.busy { opacity: .55; }
+.fe-section {
+  padding: 6px 8px 2px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: .05em;
+  text-transform: uppercase;
+  color: var(--text-disabled);
+}
+.fe-empty { padding: 18px 10px; text-align: center; color: var(--text-secondary); font-size: 12px; }
+.fe-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 30px;
+  padding: 5px 8px;
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  font-size: 12px;
+  cursor: pointer;
+}
+.fe-row:hover, .fe-row.active { background: var(--panel-2); }
+.fe-row.active { outline: 1px solid var(--teal-dim); }
+.fe-row.is-current .fe-row-name { color: var(--teal); }
+.fe-row-icon { flex-shrink: 0; font-size: 16px; color: var(--teal); }
+.fe-row-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fe-row-chev { flex-shrink: 0; font-size: 14px; color: var(--text-disabled); }
+.fe-tag {
+  flex-shrink: 0;
+  padding: 0 6px;
+  border: 1px solid var(--teal-dim);
+  border-radius: 8px;
+  font-size: 9px;
+  text-transform: uppercase;
+  color: var(--teal);
+}
+.fe-row-btn {
+  appearance: none;
+  flex-shrink: 0;
+  width: 24px;
+  height: 24px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text-secondary);
+  font-size: 13px;
+  cursor: pointer;
+  opacity: 0;
+}
+.fe-row:hover .fe-row-btn, .fe-row.active .fe-row-btn, .fe-row-btn:focus-visible { opacity: 1; }
+.fe-row-btn:hover:not(:disabled) { color: var(--teal); border-color: var(--teal-dim); }
+.fe-row-btn:disabled { display: none; }
+.fe-row-remove:hover:not(:disabled) { color: var(--error-text); border-color: var(--error-text); }
+
+.fe-status { min-height: 1.5em; padding: 3px 10px 0; font-size: 11px; color: var(--text-secondary); overflow-wrap: anywhere; }
+.fe-status.error { color: var(--error-text); }
+.fe-footer { display: flex; justify-content: flex-end; gap: 6px; padding: 6px; border-top: 1px solid var(--border); }
+.fe-btn {
+  appearance: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 28px;
+  padding: 4px 10px;
+  background: var(--panel);
+  color: var(--text-secondary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.fe-btn:hover:not(:disabled) { color: var(--text); border-color: var(--teal-dim); background: var(--panel-2); }
+.fe-btn:disabled { opacity: .4; cursor: default; }
+.fe-btn-primary { color: var(--teal); border-color: var(--teal-dim); background: var(--teal-glow); }
+.fe-btn-danger { color: var(--error-text); border-color: #6b2730; background: var(--error-bg); }
+.fe-advanced { border-top: 1px solid var(--border); border-radius: 0; font-size: 11px; color: var(--text-secondary); }
+.fe-create-input {
+  flex: 1;
+  min-width: 0;
+  background: var(--panel);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 4px 8px;
+  font: inherit;
+  font-size: 12px;
+}
+.fe-create-input:focus { outline: 1px solid var(--teal); }
+.fe-row.fe-create, .fe-row.fe-confirm { cursor: default; }
+.fe-row.fe-create:hover, .fe-row.fe-confirm:hover { background: transparent; }
+
+/* Touch: bigger targets, row actions always visible (there is no hover). */
+@media (pointer: coarse) {
+  .fe-row { min-height: 40px; }
+  .fe-row-btn { opacity: 1; width: 32px; height: 32px; }
+  .fe-icon { width: 36px; height: 36px; }
+  .folder-up-btn { width: 30px; height: 30px; }
+}

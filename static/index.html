@@ -64,6 +64,18 @@
           <button id="ctx-clipboard-monitor-toggle" class="icon-btn" title="Clipboard Monitoring (auto-download URLs)">
             <i class="ti ti-clipboard" aria-hidden="true"></i>
           </button>
+          <button id="tray-tag-toggle" class="icon-btn" title="Tag file with [Domain]" aria-label="Tag file with [Domain]">
+            <i class="ti ti-tag" aria-hidden="true"></i>
+          </button>
+          <button id="tray-auto-confirm-toggle" class="icon-btn" title="Auto-Confirm Titles" aria-label="Auto-Confirm Titles">
+            <i class="ti ti-checks" aria-hidden="true"></i>
+          </button>
+          <button id="tray-title-prefix-toggle" class="icon-btn" title="Apply Title Prefix" aria-label="Apply Title Prefix">
+            <i class="ti ti-text-plus" aria-hidden="true"></i>
+          </button>
+          <button id="tray-detect-renames-toggle" class="icon-btn" title="Detect Renamed Files" aria-label="Detect Renamed Files">
+            <i class="ti ti-replace" aria-hidden="true"></i>
+          </button>
           <button id="stash-status-btn" class="icon-btn hidden" title="Stash (Ctrl+S)">
             <img src="/static/stash_logo.png" alt="Stash" class="stash-status-icon">
           </button>
@@ -73,7 +85,7 @@
           <button id="folder-controls-toggle-btn" class="icon-btn" title="Keep folder controls visible even when the tray is closed">
             <i class="ti ti-pin" aria-hidden="true"></i>
           </button>
-          <button id="gear-btn" class="icon-btn" title="Settings">
+          <button id="gear-btn" class="icon-btn" title="Settings" aria-label="Settings">
             <i class="ti ti-settings" aria-hidden="true"></i>
           </button>
         </div>
@@ -83,11 +95,13 @@
     <!-- Folder controls: shown whenever the nav tray is open, or always
          when pinned via the toggle above (independent of tray state). -->
     <div id="folder-status-row" class="folder-status-row hidden">
-      <div id="folder-status-save" class="folder-status-item" title="Click to choose a download folder">
+      <div id="folder-status-save" class="folder-status-item" title="Click to browse folders">
+        <button type="button" id="folder-up-save" class="folder-up-btn" title="Up one folder" aria-label="Download folder: up one folder"><i class="ti ti-arrow-up" aria-hidden="true"></i></button>
         <i class="ti ti-folder-down" aria-hidden="true"></i>
         <span class="folder-status-path">…</span>
       </div>
-      <div id="folder-status-target" class="folder-status-item" title="Click to choose a target folder">
+      <div id="folder-status-target" class="folder-status-item" title="Click to browse folders">
+        <button type="button" id="folder-up-target" class="folder-up-btn" title="Up one folder" aria-label="Target folder: up one folder"><i class="ti ti-arrow-up" aria-hidden="true"></i></button>
         <i class="ti ti-target" aria-hidden="true"></i>
         <span class="folder-status-path">…</span>
       </div>
@@ -153,40 +167,12 @@
 </div>
 
 <!-- Custom context menus (right-click), replacing QMenu -->
-<div id="logo-menu" class="ctx-menu hidden">
-  <div id="ctx-version" class="ctx-item ctx-disabled">yt-dlp version unknown</div>
-  <div id="ctx-check-ytdlp-update" class="ctx-item">Check for yt-dlp Update</div>
-  <div class="ctx-separator"></div>
-  <div id="ctx-settings-submenu" class="ctx-item ctx-item-submenu">
-    <span>Settings</span><span class="ctx-chevron">▸</span>
-  </div>
-  <div class="ctx-separator"></div>
-  <div id="ctx-manage-programs" class="ctx-item">Manage External Programs</div>
-  <div class="ctx-separator"></div>
-  <div id="ctx-restart-app" class="ctx-item ctx-danger">Restart App</div>
-</div>
-
-<!-- Folders flyout: both folder info blocks + their change buttons -->
-<div id="folders-flyout" class="ctx-menu hidden">
-  <div id="ctx-save-dir" class="ctx-item ctx-disabled ctx-folder-info" title="">
-    <div class="ctx-folder-path">Folder: (loading...)</div>
-    <div id="ctx-save-free" class="ctx-folder-free"></div>
-  </div>
-  <div id="ctx-change-folder" class="ctx-item">Change Download Folder...</div>
-  <div class="ctx-separator"></div>
-  <div id="ctx-target-dir" class="ctx-item ctx-disabled ctx-folder-info" title="">
-    <div class="ctx-folder-path">Target: (none set)</div>
-    <div id="ctx-target-free" class="ctx-folder-free"></div>
-  </div>
-  <div id="ctx-change-target" class="ctx-item">Change Target Folder...</div>
-</div>
-
 <!-- Quick folder-switch dropdowns: opened by clicking the DL: / Target:
      lines in the main UI, listing saved folders for one-tap switching -->
-<div id="dl-folder-quickmenu" class="ctx-menu folder-quickmenu hidden">
+<div id="dl-folder-quickmenu" class="ctx-menu folder-quickmenu fe-menu hidden">
   <div id="dl-folder-quickmenu-list"></div>
 </div>
-<div id="target-folder-quickmenu" class="ctx-menu folder-quickmenu hidden">
+<div id="target-folder-quickmenu" class="ctx-menu folder-quickmenu fe-menu hidden">
   <div id="target-folder-quickmenu-list"></div>
 </div>
 
@@ -201,35 +187,12 @@
   <div id="url-args-manage-all" class="ctx-item">Manage yt-dlp Arguments...</div>
 </div>
 
-<!-- Settings flyout: Max Res + toggles -->
+<!-- Ledger overflow menu -->
 <div id="ledger-more-menu" class="ctx-menu hidden">
   <div id="refresh-btn" class="ctx-item"><i class="ti ti-refresh" aria-hidden="true"></i> Refresh</div>
   <div id="move-all-btn" class="ctx-item"><i class="ti ti-arrow-right" aria-hidden="true"></i> Move All to Target</div>
   <div class="ctx-separator"></div>
   <div id="open-converted-btn" class="ctx-item"><i class="ti ti-folder-down" aria-hidden="true"></i> Open "Converted" Folder</div>
-</div>
-
-<div id="settings-flyout" class="ctx-menu hidden">
-  <div class="ctx-section-label">Download Behavior</div>
-  <div id="ctx-tag-toggle" class="ctx-item ctx-checkable">
-    <span class="ctx-check">✓</span> Tag File [Domain]
-  </div>
-  <div class="ctx-separator"></div>
-  <div class="ctx-section-label">Automation</div>
-  <div id="ctx-auto-confirm-titles-toggle" class="ctx-item ctx-checkable">
-    <span class="ctx-check"></span> Auto-Confirm Titles (skip edit step)
-  </div>
-  <div id="ctx-detect-renames-toggle" class="ctx-item ctx-checkable" title="Recognize a file renamed or moved outside the app and keep its download history attached to the new name">
-    <span class="ctx-check">✓</span> Detect Renamed Files
-  </div>
-  <div class="ctx-item ctx-row">
-    <span class="ctx-label">Title Prefix:</span>
-    <input type="text" id="title-prefix-input" class="ctx-text-input" placeholder="e.g. [MyChannel] ">
-  </div>
-  <div id="ctx-title-prefix-toggle" class="ctx-item ctx-checkable">
-    <span class="ctx-check"></span> Apply Title Prefix
-  </div>
-  <div class="ctx-separator"></div>
 </div>
 
 <div id="job-menu" class="ctx-menu hidden">
@@ -297,6 +260,210 @@
   <div id="stash-menu-import" class="ctx-item">Import from Stash</div>
   <div id="stash-menu-check-tag" class="ctx-item">Check Tag</div>
   <div id="stash-menu-largest-files" class="ctx-item">Largest Files</div>
+</div>
+
+<!-- Settings panel: opened by the gear button. State lives in the shared `state`
+     object (app.js); every control here is kept in sync with the matching tray
+     quick toggle by syncPrefControls(). -->
+<div id="settings-modal" class="modal-overlay hidden">
+  <div class="modal-box settings-box" role="dialog" aria-modal="true" aria-labelledby="settings-title">
+    <div class="settings-header">
+      <div id="settings-title" class="modal-title">Settings</div>
+      <span id="settings-saved" class="settings-saved" aria-live="polite"></span>
+      <button id="settings-close-btn" class="icon-btn" title="Close" aria-label="Close settings"><i class="ti ti-x" aria-hidden="true"></i></button>
+    </div>
+    <div class="settings-layout">
+      <nav id="settings-nav" class="settings-nav" role="tablist" aria-label="Settings sections">
+        <button class="settings-nav-btn active" data-section="downloads" role="tab"><i class="ti ti-download" aria-hidden="true"></i><span>Downloads</span></button>
+        <button class="settings-nav-btn" data-section="automation" role="tab"><i class="ti ti-bolt" aria-hidden="true"></i><span>Automation</span></button>
+        <button class="settings-nav-btn" data-section="library" role="tab"><i class="ti ti-folder" aria-hidden="true"></i><span>Library</span></button>
+        <button class="settings-nav-btn" data-section="tray" role="tab"><i class="ti ti-pin" aria-hidden="true"></i><span>Tray</span></button>
+        <button class="settings-nav-btn" data-section="tools" role="tab"><i class="ti ti-tool" aria-hidden="true"></i><span>Tools</span></button>
+        <button class="settings-nav-btn" data-section="connections" data-stash-only role="tab"><i class="ti ti-plug-connected" aria-hidden="true"></i><span>Stash</span></button>
+        <button class="settings-nav-btn" data-section="about" role="tab"><i class="ti ti-info-circle" aria-hidden="true"></i><span>About</span></button>
+      </nav>
+      <div class="settings-content">
+
+      <section class="settings-section" data-section="downloads">
+        <div class="settings-section-title">Downloads</div>
+        <div class="settings-row">
+          <div class="settings-row-text">
+            <div class="settings-row-label">Max resolution</div>
+            <div class="settings-row-desc">Applies to new downloads. Resets to 480p at startup and after 10 minutes of inactivity.</div>
+          </div>
+          <select id="set-res" class="settings-select" aria-label="Max resolution">
+            <option value="Best">Best</option>
+            <option value="1080p">1080p</option>
+            <option value="720p">720p</option>
+            <option value="480p">480p</option>
+            <option value="Audio Only">Audio only</option>
+          </select>
+        </div>
+        <div class="settings-row">
+          <div class="settings-row-text">
+            <div class="settings-row-label">Tag file with [Domain]</div>
+            <div class="settings-row-desc">Appends the site name to new titles, e.g. “My Video [example]”.</div>
+          </div>
+          <label class="switch"><input type="checkbox" id="set-tag-domain" aria-label="Tag file with [Domain]"><span class="switch-track" aria-hidden="true"></span></label>
+        </div>
+        <div class="settings-row settings-row-stack">
+          <div class="settings-row-head">
+            <div class="settings-row-text">
+              <div class="settings-row-label">Title prefix</div>
+              <div class="settings-row-desc">Text added to the start of every new title.</div>
+            </div>
+            <label class="switch"><input type="checkbox" id="set-title-prefix-enabled" aria-label="Apply title prefix"><span class="switch-track" aria-hidden="true"></span></label>
+          </div>
+          <input id="set-title-prefix" class="input-field" type="text" placeholder="e.g. [MyChannel] " autocomplete="off" spellcheck="false" aria-label="Title prefix text">
+          <div id="settings-title-preview" class="settings-preview"></div>
+        </div>
+      </section>
+
+      <section class="settings-section hidden" data-section="automation">
+        <div class="settings-section-title">Automation</div>
+        <div class="settings-row">
+          <div class="settings-row-text">
+            <div class="settings-row-label">Auto-confirm titles</div>
+            <div class="settings-row-desc">Skips the title-edit step and starts each download immediately.</div>
+          </div>
+          <label class="switch"><input type="checkbox" id="set-auto-confirm" aria-label="Auto-confirm titles"><span class="switch-track" aria-hidden="true"></span></label>
+        </div>
+        <div class="settings-row">
+          <div class="settings-row-text">
+            <div class="settings-row-label">M3U sniffer mode</div>
+            <div class="settings-row-desc">Finds the stream behind a pasted page by looking for an .m3u8 playlist, for sites yt-dlp does not support. Press Enter after pasting a link.</div>
+          </div>
+          <label class="switch"><input type="checkbox" id="set-m3u-sniffer" aria-label="M3U sniffer mode"><span class="switch-track" aria-hidden="true"></span></label>
+        </div>
+        <div class="settings-row">
+          <div class="settings-row-text">
+            <div class="settings-row-label">Auto-retry failed downloads via M3U</div>
+            <div class="settings-row-desc">When a normal download fails, falls back to the M3U sniffer automatically. Off gives a normal error card instead.</div>
+          </div>
+          <label class="switch"><input type="checkbox" id="set-auto-m3u-retry" aria-label="Auto-retry failed downloads via M3U"><span class="switch-track" aria-hidden="true"></span></label>
+        </div>
+        <div class="settings-row">
+          <div class="settings-row-text">
+            <div class="settings-row-label">Clipboard monitoring</div>
+            <div class="settings-row-desc">Downloads every HTTP(S) link you copy (Windows only). Always off at startup and turns itself off after 10 minutes of inactivity.</div>
+          </div>
+          <label class="switch"><input type="checkbox" id="set-clipboard" aria-label="Clipboard monitoring"><span class="switch-track" aria-hidden="true"></span></label>
+        </div>
+      </section>
+
+      <section class="settings-section hidden" data-section="library">
+        <div class="settings-section-title">Library</div>
+        <div class="settings-row">
+          <div class="settings-row-text">
+            <div class="settings-row-label">Detect renamed files</div>
+            <div class="settings-row-desc">Keeps download history attached to a file that was renamed or moved outside the app.</div>
+          </div>
+          <label class="switch"><input type="checkbox" id="set-detect-renames" aria-label="Detect renamed files"><span class="switch-track" aria-hidden="true"></span></label>
+        </div>
+        <div class="settings-row">
+          <div class="settings-row-text">
+            <div class="settings-row-label">Download folder</div>
+            <div id="ctx-save-dir" class="settings-path" title="">
+              <span class="ctx-folder-path">(loading...)</span>
+              <span id="ctx-save-free" class="ctx-folder-free"></span>
+            </div>
+          </div>
+          <button id="ctx-change-folder" class="btn">Change…</button>
+        </div>
+        <div class="settings-row">
+          <div class="settings-row-text">
+            <div class="settings-row-label">Target folder</div>
+            <div class="settings-row-desc">Where “Move to Target” sends finished files.</div>
+            <div id="ctx-target-dir" class="settings-path" title="">
+              <span class="ctx-folder-path">(none set)</span>
+              <span id="ctx-target-free" class="ctx-folder-free"></span>
+            </div>
+          </div>
+          <button id="ctx-change-target" class="btn">Change…</button>
+        </div>
+        <div class="settings-row">
+          <div class="settings-row-text">
+            <div class="settings-row-label">Always show folder controls</div>
+            <div class="settings-row-desc">Keeps the download/target folder row visible when the navigation tray is closed. Saved in this browser only.</div>
+          </div>
+          <label class="switch"><input type="checkbox" id="set-folder-pin" aria-label="Always show folder controls"><span class="switch-track" aria-hidden="true"></span></label>
+        </div>
+      </section>
+
+      <section class="settings-section hidden" data-section="tray">
+        <div class="settings-section-title">Tray</div>
+        <div class="settings-intro">Choose which quick-access icons appear in the navigation tray and in what order. The settings button is always shown. Saved in this browser only, so a phone and a desktop can differ.</div>
+        <div id="settings-tray-list" class="settings-tray-list"></div>
+        <div class="settings-actions"><button id="settings-tray-reset" class="btn">Reset to default</button></div>
+      </section>
+
+      <section class="settings-section hidden" data-section="tools">
+        <div class="settings-section-title">Tools</div>
+        <div class="settings-row">
+          <div class="settings-row-text">
+            <div class="settings-row-label">External programs</div>
+            <div class="settings-row-desc">Editors and players offered under “Open With…” on a file. Only available from the machine running the server.</div>
+          </div>
+          <button id="ctx-manage-programs" class="btn">Manage…</button>
+        </div>
+        <div class="settings-row">
+          <div class="settings-row-text">
+            <div class="settings-row-label">yt-dlp arguments</div>
+            <div class="settings-row-desc">Default arguments for every download, plus per-site rules.</div>
+          </div>
+          <button id="settings-ytdlp-args-btn" class="btn">Manage…</button>
+        </div>
+      </section>
+
+      <section class="settings-section hidden" data-section="connections" data-stash-only>
+        <div class="settings-section-title">Stash</div>
+        <div class="settings-row settings-row-stack">
+          <div class="settings-row-text">
+            <div class="settings-row-label">Stash address</div>
+            <div class="settings-row-desc">Used by Import from Stash, Check Tag and Largest Files. Leave empty to use the STASH_HOST environment variable, or http://localhost:9999.</div>
+          </div>
+          <div class="settings-inline">
+            <input id="set-stash-host" class="input-field" type="text" placeholder="http://localhost:9999" autocomplete="off" spellcheck="false" aria-label="Stash address">
+            <button id="set-stash-test" class="btn">Test</button>
+            <button id="set-stash-save" class="btn btn-primary">Save</button>
+          </div>
+          <div id="set-stash-status" class="settings-status"></div>
+        </div>
+      </section>
+
+      <section class="settings-section hidden" data-section="about">
+        <div class="settings-section-title">About</div>
+        <div class="settings-row">
+          <div class="settings-row-text">
+            <div class="settings-row-label">StashDLP</div>
+            <div id="about-app-version" class="settings-row-desc">…</div>
+          </div>
+        </div>
+        <div class="settings-row">
+          <div class="settings-row-text">
+            <div class="settings-row-label">yt-dlp</div>
+            <div id="ctx-version" class="settings-row-desc">yt-dlp version unknown</div>
+          </div>
+          <button id="ctx-check-ytdlp-update" class="btn">Check for update</button>
+        </div>
+        <div class="settings-row settings-row-stack">
+          <div class="settings-row-text">
+            <div class="settings-row-label">Server</div>
+            <div id="settings-server-info" class="settings-row-desc">…</div>
+          </div>
+        </div>
+        <div class="settings-row">
+          <div class="settings-row-text">
+            <div class="settings-row-label">Restart app</div>
+            <div class="settings-row-desc">Restarts the server. Downloads in progress are interrupted.</div>
+          </div>
+          <button id="ctx-restart-app" class="btn btn-danger">Restart</button>
+        </div>
+      </section>
+
+      </div>
+    </div>
+  </div>
 </div>
 
 <div id="stash-import-modal" class="modal-overlay hidden">

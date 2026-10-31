@@ -69,6 +69,15 @@ STASH_DLP_HOST=0.0.0.0 python backend/main.py
 
 > **Note:** if you have more than one yt-dlp install on your system (e.g. a standalone binary alongside a pip-installed copy), invoking it as `python -m yt_dlp` is more reliable than a bare `yt-dlp` on your `PATH`, since it guarantees you're calling the same interpreter's copy the rest of the app is using.
 
+## Tray launcher (Windows)
+
+`start_tray.bat` runs the server hidden in the system tray and opens the app in the browser once it is ready; `start_tray_lan.bat` does the same with the server listening on `0.0.0.0`. Install the extra packages once with `pip install -r requirements.txt`.
+
+* The icon carries a status dot: amber while starting, grey when stopped, red after an unexpected stop.
+* Right-click for Restart/Stop server, View server log, Start with Windows, and Quit. Click the icon to open the app.
+* Server output goes to `logs/server.log`; the launcher's own messages go to `logs/launcher.log`.
+* `start_console.bat` runs the server in a visible console instead (no tray), for debugging.
+
 # SCREENSHOTS
 
 ## Main UI
@@ -124,6 +133,14 @@ Set default yt-dlp arguments applied to every download, plus per-domain override
 ## External programs
 
 Register external editors, players, or other tools in Settings, then send a completed file to any of them directly from its card's context menu.
+
+## Folder explorer
+
+Click the download or target folder line to browse. Click a folder to go into it, use the breadcrumbs or the Up button to go back, and press the check mark on a row (or **Select this folder**) to use it. The filter box accepts Enter to open the only match, Backspace on an empty filter to go up, and Ctrl+Enter to select; the arrow keys move through the list. The arrow button next to each folder in the status row jumps straight to its parent. The Home button lists saved folders and, on the server machine, the drives. Other devices on the network can only browse inside the saved folders.
+
+## Settings panel
+
+The gear button opens one panel for every preference. The **Tray** section chooses which quick-access icons appear in the navigation tray and their order; the choice is saved in the browser, so a phone and a desktop can differ. Each tray icon and its switch in the panel always show the same state. While a Stash server is running, the **Stash** section appears and holds the Stash address (with a Test button); it overrides the `STASH_HOST` environment variable. At 220px width or narrower the tray shows only clipboard monitoring, auto M3U retry and auto-confirm titles.
 
 # CONFIGURATION
 

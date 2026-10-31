@@ -19,16 +19,95 @@ import shutil
 import urllib.error
 import urllib.request
 from typing import Optional
-from urllib.parse import unquote
+from urllib.parse import unquote, urlparse
 
-STASH_HOST = os.environ.get("STASH_HOST", "http://localhost:9999").rstrip("/")
 from audio_sync import FILE_OP_RETRIES, FILE_OP_RETRY_DELAY, _is_lock_error, _remove_with_retry
 from ffmpeg_encode import probe_basic_info
 from job_manager import NeedsDecisionError
-from settings import get_save_dir
+from settings import get_save_dir, get_stash_host_override, set_stash_host_override
 from storage import save_queue_to_disk
 from thumbnails import thumbnail_path_for
 from ytdlp_utils import clean_filename, find_converted_file, find_media_file, format_file_size, is_audio_file
+
+# ── Stash address ───────────────────────────────────────────────
+# Precedence: address saved in the Settings panel > STASH_HOST environment
+# variable > http://localhost:9999. STASH_HOST is read at call time by every
+# function below, so apply_stash_host_override() takes effect immediately.
+DEFAULT_STASH_HOST = "http://localhost:9999"
+
+
+def _resolve_stash_host():
+    override = get_stash_host_override()
+    if override:
+        return override.rstrip("/"), "settings"
+    env = os.environ.get("STASH_HOST", "").strip()
+    if env:
+        return env.rstrip("/"), "environment"
+    return DEFAULT_STASH_HOST, "default"
+
+
+STASH_HOST, STASH_HOST_SOURCE = _resolve_stash_host()
+
+
+def normalize_stash_host(value: str) -> str:
+    """Validates an address typed into the Settings panel. Empty is allowed
+    (it clears the saved override)."""
+    value = (value or "").strip().rstrip("/")
+    if not value:
+        return ""
+    parsed = urlparse(value)
+    if parsed.scheme not in ("http", "https") or not parsed.netloc:
+        raise ValueError("Enter an address like http://localhost:9999")
+    return value
+
+
+def stash_config() -> dict:
+    return {
+        "host": STASH_HOST,
+        "source": STASH_HOST_SOURCE,
+        "override": get_stash_host_override(),
+        "default": DEFAULT_STASH_HOST,
+    }
+
+
+def apply_stash_host_override(value: str) -> dict:
+    global STASH_HOST, STASH_HOST_SOURCE
+    set_stash_host_override(normalize_stash_host(value))
+    STASH_HOST, STASH_HOST_SOURCE = _resolve_stash_host()
+    return stash_config()
+
+
+async def test_stash_host(host: str = "") -> dict:
+    """Connection check for the Settings panel's Test button. Tests the
+    address typed in the field (even if unsaved), or the current one."""
+    try:
+        target = normalize_stash_host(host) or STASH_HOST
+    except ValueError as e:
+        return {"ok": False, "error": str(e)}
+    query = json.dumps({"query": "{ systemStatus { status } }"}).encode("utf-8")
+    request = urllib.request.Request(
+        f"{target}/graphql", data=query,
+        headers={"Content-Type": "application/json"}, method="POST",
+    )
+
+    def _do_request():
+        with urllib.request.urlopen(request, timeout=4) as response:
+            return json.loads(response.read().decode("utf-8"))
+
+    try:
+        payload = await asyncio.to_thread(_do_request)
+    except urllib.error.HTTPError as e:
+        return {"ok": False, "error": f"Stash answered with HTTP {e.code}."}
+    except urllib.error.URLError as e:
+        return {"ok": False, "error": f"Could not reach {target}: {getattr(e, 'reason', e)}"}
+    except ValueError:
+        return {"ok": False, "error": f"{target} answered, but it does not look like a Stash server."}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+    if payload.get("errors"):
+        return {"ok": False, "error": "Stash returned an error: " + "; ".join(err.get("message", "unknown") for err in payload["errors"])}
+    return {"ok": True, "host": target}
+
 
 
 def _safe_getsize(path: str) -> int:

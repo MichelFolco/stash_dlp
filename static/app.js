@@ -97,11 +97,9 @@ const dlModeBtn = el("dl-mode-btn");
 const historyModeBtn = el("history-mode-btn");
 const modeContainer = el("mode-container");
 const resDropdown = el("res-dropdown");
-const titlePrefixInput = el("title-prefix-input");
 const ctxVersion = el("ctx-version");
 const ctxSaveDir = el("ctx-save-dir");
 const ctxChangeFolder = el("ctx-change-folder");
-const logoMenu = el("logo-menu");
 const jobMenu = el("job-menu");
 const historyMenu = el("history-menu");
 const folderModal = el("folder-modal");
@@ -165,7 +163,6 @@ const openWithFlyout = el("open-with-flyout");
 const openWithProgramsList = el("open-with-programs-list");
 const copyFlyout = el("copy-flyout");
 const fileFlyout = el("file-flyout");
-const settingsFlyout = el("settings-flyout");
 const externalProgramsModal = el("external-programs-modal");
 const externalProgramsList = el("external-programs-list");
 const programFormModal = el("program-form-modal");
@@ -535,26 +532,32 @@ async function boot() {
 // Polls Stash's reachability so the Stash button in the top row only
 // shows up when Stash is actually running - avoids a dead button that
 // just errors out on every click when Stash is off.
+// True while a Stash server answers. Stash-related UI (tray button, Settings
+// "Stash" section, its tray-list row) is shown only while this is true.
+let stashRunning = false;
+
 async function refreshStashStatus() {
   try {
     const res = await fetch("/api/stash/status");
     const data = await res.json();
-    stashStatusBtn.classList.toggle("hidden", !data.running);
+    stashRunning = !!data.running;
   } catch (e) {
-    stashStatusBtn.classList.add("hidden");
+    stashRunning = false;
   }
+  stashStatusBtn.classList.toggle("hidden", !stashRunning);
+  applySettingsStashVisibility();
 }
 
 // Static for the life of the page (IS_LOCAL doesn't change at runtime),
 // so this just needs to run once at boot rather than on every menu open.
 function applyLocalOnlyUI() {
   if (IS_LOCAL) return;
-  for (const id of ["ctx-manage-programs", "ctx-open-with", "flyout-manage-programs", "ctx-history-open-location"]) {
+  for (const id of ["ctx-open-with", "flyout-manage-programs", "ctx-history-open-location"]) {
     const item = el(id);
     item.classList.add("ctx-disabled");
     item.title = REMOTE_ONLY_TOOLTIP;
   }
-  for (const id of ["encode-source-browse-btn", "open-converted-btn"]) {
+  for (const id of ["encode-source-browse-btn", "open-converted-btn", "ctx-manage-programs"]) {
     const btn = el(id);
     btn.disabled = true;
     btn.title = REMOTE_ONLY_TOOLTIP;
@@ -599,14 +602,7 @@ async function refreshDownloadPrefs() {
     state.clipboardMonitor = false;
     saveDownloadPrefs();
   }
-  el("ctx-tag-toggle").querySelector(".ctx-check").textContent = state.tagDomain ? "✓" : "";
-  el("ctx-m3u-toggle").classList.toggle("active", state.m3uSniffer);
-  el("ctx-auto-m3u-retry-toolbar-toggle").classList.toggle("active", state.autoM3uRetry);
-  el("ctx-auto-confirm-titles-toggle").querySelector(".ctx-check").textContent = state.autoConfirmTitles ? "✓" : "";
-  el("ctx-clipboard-monitor-toggle").classList.toggle("active", state.clipboardMonitor);
-  el("ctx-detect-renames-toggle").querySelector(".ctx-check").textContent = state.detectRenames ? "✓" : "";
-  el("ctx-title-prefix-toggle").querySelector(".ctx-check").textContent = state.titlePrefixEnabled ? "✓" : "";
-  titlePrefixInput.value = state.titlePrefix;
+  syncPrefControls();
 }
 
 async function refreshYtdlpArgs() {
@@ -902,7 +898,7 @@ el("ytdlp-domain-args-delete-btn").addEventListener("click", async () => {
 });
 
 function saveDownloadPrefs() {
-  fetch("/api/download-prefs", {
+  return fetch("/api/download-prefs", {
     method: "POST", headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       quality: resDropdown.value,
@@ -915,7 +911,10 @@ function saveDownloadPrefs() {
       title_prefix: state.titlePrefix,
       title_prefix_enabled: state.titlePrefixEnabled,
     }),
-  }).catch((e) => { /* best-effort - not worth surfacing a UI error over */ });
+  }).then((res) => {
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    reportSaved(true);
+  }).catch(() => reportSaved(false));
 }
 
 async function refreshSaveDir() {
@@ -925,7 +924,7 @@ async function refreshSaveDir() {
     setSaveDirDisplay(data.save_dir, data.free_space);
     state.saveDirRoots = data.roots || [];
   } catch (e) {
-    ctxSaveDir.querySelector(".ctx-folder-path").textContent = "Folder: (unavailable)";
+    ctxSaveDir.querySelector(".ctx-folder-path").textContent = "(unavailable)";
     ctxSaveDir.querySelector("#ctx-save-free").textContent = "";
     folderStatusSave.querySelector(".folder-status-path").textContent = "(unavailable)";
     folderStatusSave.title = "";
@@ -934,7 +933,7 @@ async function refreshSaveDir() {
 
 function setSaveDirDisplay(path, freeSpace) {
   const { compact, tooltip } = compactFolderDisplay(path, freeSpace);
-  ctxSaveDir.querySelector(".ctx-folder-path").textContent = path ? `Folder: ${compact}` : "Folder: (unavailable)";
+  ctxSaveDir.querySelector(".ctx-folder-path").textContent = path ? compact : "(unavailable)";
   ctxSaveDir.querySelector("#ctx-save-free").textContent = "";
   ctxSaveDir.title = tooltip;
 
@@ -1011,7 +1010,7 @@ async function refreshTargetDir() {
     setTargetDirDisplay(data.target_dir, data.free_space);
     state.targetDirRoots = data.roots || [];
   } catch (e) {
-    ctxTargetDir.querySelector(".ctx-folder-path").textContent = "Target: (unavailable)";
+    ctxTargetDir.querySelector(".ctx-folder-path").textContent = "(unavailable)";
     ctxTargetDir.querySelector("#ctx-target-free").textContent = "";
     folderStatusTarget.querySelector(".folder-status-path").textContent = "(unavailable)";
     folderStatusTarget.title = "";
@@ -1022,13 +1021,13 @@ function setTargetDirDisplay(path, freeSpace) {
   const pathEl = ctxTargetDir.querySelector(".ctx-folder-path");
   const freeEl = ctxTargetDir.querySelector("#ctx-target-free");
   if (!path) {
-    pathEl.textContent = "Target: (none set)";
+    pathEl.textContent = "(none set)";
     freeEl.textContent = "";
     folderStatusTarget.querySelector(".folder-status-path").textContent = "(none set)";
     folderStatusTarget.title = "";
   } else {
     const { compact, tooltip } = compactFolderDisplay(path, freeSpace);
-    pathEl.textContent = `Target: ${compact}`;
+    pathEl.textContent = compact;
     freeEl.textContent = "";
     folderStatusTarget.querySelector(".folder-status-path").textContent = compact;
     folderStatusTarget.title = tooltip;
@@ -1630,14 +1629,19 @@ navToggleBtn.classList.toggle("active", navTrayPersistedOpen);
 folderControlsToggleBtn.classList.toggle("active", folderControlsPinned);
 updateFolderStatusRowVisibility();
 
-folderControlsToggleBtn.addEventListener("click", (e) => {
-  e.stopPropagation();
-  folderControlsPinned = !folderControlsPinned;
+function setFolderControlsPinned(value) {
+  folderControlsPinned = !!value;
   folderControlsToggleBtn.classList.toggle("active", folderControlsPinned);
   try {
     localStorage.setItem("stashdlp_folder_controls_pinned", folderControlsPinned ? "1" : "0");
   } catch (err) { /* ignore - localStorage unavailable */ }
   updateFolderStatusRowVisibility();
+  el("set-folder-pin").checked = folderControlsPinned;
+}
+
+folderControlsToggleBtn.addEventListener("click", (e) => {
+  e.stopPropagation();
+  setFolderControlsPinned(!folderControlsPinned);
 });
 
 ledgerFilterInput.addEventListener("input", () => {
@@ -2233,32 +2237,26 @@ function buildJobCard(job) {
 
   const thumb = document.createElement("div");
   thumb.className = "job-thumb";
-  if (job.is_audio) {
-    // No point requesting a video-frame thumbnail for an audio-only
-    // file - just show a distinct icon directly.
+  // Audio files get their real thumbnail too (yt-dlp's download thumbnail or
+  // the cover art embedded in the file). The note/clapper icon is only the
+  // fallback for when the server has none.
+  thumb.classList.add("loading");
+  const thumbImg = document.createElement("img");
+  thumbImg.loading = "lazy";
+  thumbImg.alt = "";
+  thumbImg.src = `/api/jobs/thumbnail?filename=${encodeURIComponent(job.filename)}`;
+  thumbImg.addEventListener("load", () => {
+    thumb.classList.remove("loading");
+  }, { once: true });
+  thumbImg.addEventListener("error", () => {
+    thumb.classList.remove("loading");
+    thumbImg.remove();
     const placeholder = document.createElement("span");
     placeholder.className = "job-thumb-placeholder";
-    placeholder.textContent = "🎵";
+    placeholder.textContent = job.is_audio ? "🎵" : "🎬";
     thumb.appendChild(placeholder);
-  } else {
-    thumb.classList.add("loading");
-    const thumbImg = document.createElement("img");
-    thumbImg.loading = "lazy";
-    thumbImg.alt = "";
-    thumbImg.src = `/api/jobs/thumbnail?filename=${encodeURIComponent(job.filename)}`;
-    thumbImg.addEventListener("load", () => {
-      thumb.classList.remove("loading");
-    }, { once: true });
-    thumbImg.addEventListener("error", () => {
-      thumb.classList.remove("loading");
-      thumbImg.remove();
-      const placeholder = document.createElement("span");
-      placeholder.className = "job-thumb-placeholder";
-      placeholder.textContent = "🎬";
-      thumb.appendChild(placeholder);
-    }, { once: true });
-    thumb.appendChild(thumbImg);
-  }
+  }, { once: true });
+  thumb.appendChild(thumbImg);
   const thumbWrap = document.createElement("div");
   thumbWrap.className = "job-thumb-wrap";
   thumbWrap.appendChild(thumb);
@@ -2754,25 +2752,14 @@ function updateJobCardEncodeProgress(encodeJob) {
 // Every submenu flyout in the app - Copy/File (job menu) and
 // Folders/Settings (logo menu) all share this one open/close/position
 // mechanism, so anything that resets menu state just walks this list.
-const ALL_FLYOUTS = [openWithFlyout, copyFlyout, fileFlyout, settingsFlyout, dlFolderQuickMenu, targetFolderQuickMenu, urlArgsFlyout, stashMenuFlyout, ledgerMoreMenu, ledgerFilterPresetMenu];
+const ALL_FLYOUTS = [openWithFlyout, copyFlyout, fileFlyout, dlFolderQuickMenu, targetFolderQuickMenu, urlArgsFlyout, stashMenuFlyout, ledgerMoreMenu, ledgerFilterPresetMenu];
 
 function hideAllFlyouts() {
   for (const flyout of ALL_FLYOUTS) flyout.classList.add("hidden");
-  closeAllTreeFlyouts();
 }
 
 // ── Context menus ─────────────────────────────────────────────
-function openLogoMenu(x, y) {
-  jobMenu.classList.add("hidden");
-  historyMenu.classList.add("hidden");
-  hideAllFlyouts();
-  positionMenu(logoMenu, x, y);
-  refreshSaveDir();
-  refreshTargetDir();
-}
-
 function openJobMenu(x, y, job) {
-  logoMenu.classList.add("hidden");
   historyMenu.classList.add("hidden");
   hideAllFlyouts();
 
@@ -2852,7 +2839,6 @@ function openJobMenu(x, y, job) {
 // just four actions) and independent of job status, since a history
 // record isn't a ledger job.
 function openHistoryMenu(x, y, entry) {
-  logoMenu.classList.add("hidden");
   jobMenu.classList.add("hidden");
   hideAllFlyouts();
 
@@ -2970,7 +2956,6 @@ function closeOtherFlyouts(except) {
   for (const flyout of ALL_FLYOUTS) {
     if (flyout !== except) flyout.classList.add("hidden");
   }
-  closeAllTreeFlyouts();
 }
 
 function positionFlyoutNextTo(flyoutEl, anchorMenu) {
@@ -3048,15 +3033,6 @@ el("ctx-file-submenu").addEventListener("click", () => {
   }
   closeOtherFlyouts(fileFlyout);
   positionFlyoutNextTo(fileFlyout, jobMenu);
-});
-
-el("ctx-settings-submenu").addEventListener("click", () => {
-  if (!settingsFlyout.classList.contains("hidden")) {
-    settingsFlyout.classList.add("hidden");
-    return;
-  }
-  closeOtherFlyouts(settingsFlyout);
-  positionFlyoutNextTo(settingsFlyout, logoMenu);
 });
 
 async function launchExternalProgram(programId) {
@@ -4103,7 +4079,6 @@ function positionMenu(menu, x, y) {
 }
 
 function closeMenus() {
-  logoMenu.classList.add("hidden");
   ledgerFilterPresetMenu.classList.add("hidden");
   ledgerFilterPresetBtn.setAttribute("aria-expanded", "false");
   jobMenu.classList.add("hidden");
@@ -4119,49 +4094,10 @@ document.addEventListener("click", (e) => {
   // before it's possible to actually tap an item in it.
   if (Date.now() - lastMenuOpenAt < MENU_CLOSE_GRACE_MS) return;
   const clickedInsideAMenu =
-    logoMenu.contains(e.target) ||
     jobMenu.contains(e.target) ||
     historyMenu.contains(e.target) ||
-    ALL_FLYOUTS.some((flyout) => flyout.contains(e.target)) ||
-    openTreeFlyouts.some((flyout) => flyout.contains(e.target));
+    ALL_FLYOUTS.some((flyout) => flyout.contains(e.target));
   if (!clickedInsideAMenu) closeMenus();
-});
-
-el("ctx-tag-toggle").addEventListener("click", () => {
-  state.tagDomain = !state.tagDomain;
-  el("ctx-tag-toggle").querySelector(".ctx-check").textContent = state.tagDomain ? "✓" : "";
-  saveDownloadPrefs();
-});
-
-el("ctx-m3u-toggle").addEventListener("click", () => {
-  state.m3uSniffer = !state.m3uSniffer;
-  el("ctx-m3u-toggle").classList.toggle("active", state.m3uSniffer);
-  if (state.m3uSniffer) {
-    inputField.placeholder = "Paste a link, then press ENTER...";
-  }
-  saveDownloadPrefs();
-});
-
-el("ctx-auto-m3u-retry-toolbar-toggle").addEventListener("click", () => {
-  state.autoM3uRetry = !state.autoM3uRetry;
-  el("ctx-auto-m3u-retry-toolbar-toggle").classList.toggle("active", state.autoM3uRetry);
-  saveDownloadPrefs();
-});
-
-el("ctx-auto-confirm-titles-toggle").addEventListener("click", () => {
-  state.autoConfirmTitles = !state.autoConfirmTitles;
-  el("ctx-auto-confirm-titles-toggle").querySelector(".ctx-check").textContent = state.autoConfirmTitles ? "✓" : "";
-  saveDownloadPrefs();
-});
-
-el("ctx-clipboard-monitor-toggle").addEventListener("click", () => {
-  state.clipboardMonitor = !state.clipboardMonitor;
-  el("ctx-clipboard-monitor-toggle").classList.toggle("active", state.clipboardMonitor);
-  saveDownloadPrefs();
-  flashStatus(state.clipboardMonitor
-    ? "Clipboard monitoring enabled. Feature will turn off after 10 minutes of inactivity."
-    : "Clipboard monitoring disabled.");
-  resetClipboardMonitorIdleTimer();
 });
 
 // ── Auto-download (Clipboard Monitoring) inactivity timeout ────────
@@ -4178,7 +4114,7 @@ let clipboardMonitorIdleTimer = null;
 function disableClipboardMonitorForInactivity() {
   if (!state.clipboardMonitor) return;
   state.clipboardMonitor = false;
-  el("ctx-clipboard-monitor-toggle").classList.toggle("active", false);
+  syncPrefControls();
   saveDownloadPrefs();
   flashStatus("Clipboard monitoring disabled after 10 minutes of inactivity.");
 }
@@ -4212,6 +4148,7 @@ function resetDownloadResolutionIdleTimer() {
   downloadResIdleTimer = setTimeout(() => {
     if (resDropdown.value !== "480p") {
       resDropdown.value = "480p";
+      syncPrefControls();
       saveDownloadPrefs();
       flashStatus("Download resolution reset to 480p after 10 minutes of inactivity.");
     }
@@ -4224,28 +4161,398 @@ for (const evt of ["mousemove", "mousedown", "keydown", "touchstart", "wheel"]) 
 resDropdown.addEventListener("change", resetDownloadResolutionIdleTimer);
 resetDownloadResolutionIdleTimer();
 
-el("ctx-detect-renames-toggle").addEventListener("click", () => {
-  state.detectRenames = !state.detectRenames;
-  el("ctx-detect-renames-toggle").querySelector(".ctx-check").textContent = state.detectRenames ? "✓" : "";
+// ══ Settings panel ═══════════════════════════════════════════════
+// One panel (gear button) for every preference. The booleans below live in
+// `state` and are saved through /api/download-prefs; each one has a switch in
+// the panel and, optionally, an icon-only quick toggle in the navigation tray.
+// setPref() is the only writer, so the two controls can never disagree.
+const PREF_CONTROLS = [
+  { key: "tagDomain",          input: "set-tag-domain",           tray: "tray-tag-toggle" },
+  { key: "autoConfirmTitles",  input: "set-auto-confirm",         tray: "tray-auto-confirm-toggle" },
+  { key: "titlePrefixEnabled", input: "set-title-prefix-enabled", tray: "tray-title-prefix-toggle" },
+  { key: "detectRenames",      input: "set-detect-renames",       tray: "tray-detect-renames-toggle" },
+  { key: "m3uSniffer",         input: "set-m3u-sniffer",          tray: "ctx-m3u-toggle" },
+  { key: "autoM3uRetry",       input: "set-auto-m3u-retry",       tray: "ctx-auto-m3u-retry-toolbar-toggle" },
+  { key: "clipboardMonitor",   input: "set-clipboard",            tray: "ctx-clipboard-monitor-toggle" },
+];
+
+const settingsModal = el("settings-modal");
+const settingsSavedEl = el("settings-saved");
+let settingsSavedTimer = null;
+
+function reportSaved(ok) {
+  settingsSavedEl.textContent = ok ? "Saved" : "Couldn't save";
+  settingsSavedEl.classList.toggle("error", !ok);
+  if (!ok) flashStatus("Couldn't save the setting - is the server running?");
+  clearTimeout(settingsSavedTimer);
+  settingsSavedTimer = setTimeout(() => { settingsSavedEl.textContent = ""; }, ok ? 1500 : 4000);
+}
+
+function updateTitlePreview() {
+  const prefix = el("set-title-prefix").value;
+  const tag = state.tagDomain ? " [example]" : "";
+  const applied = state.titlePrefixEnabled && prefix;
+  let text = `Preview: ${applied ? prefix : ""}Example title${tag}`;
+  if (prefix && !state.titlePrefixEnabled) text += "  (prefix is switched off)";
+  el("settings-title-preview").textContent = text;
+}
+
+// Pushes `state` out to every control that shows it.
+function syncPrefControls() {
+  for (const c of PREF_CONTROLS) {
+    el(c.input).checked = !!state[c.key];
+    const btn = el(c.tray);
+    btn.classList.toggle("active", !!state[c.key]);
+    btn.setAttribute("aria-pressed", state[c.key] ? "true" : "false");
+  }
+  el("set-res").value = resDropdown.value;
+  el("set-folder-pin").checked = folderControlsPinned;
+  const prefixInput = el("set-title-prefix");
+  if (document.activeElement !== prefixInput) prefixInput.value = state.titlePrefix;
+  updateTitlePreview();
+}
+
+function setPref(key, value) {
+  state[key] = !!value;
+  if (key === "m3uSniffer" && state.m3uSniffer) {
+    inputField.placeholder = "Paste a link, then press ENTER...";
+  }
+  syncPrefControls();
   saveDownloadPrefs();
+  if (key === "clipboardMonitor") {
+    flashStatus(state.clipboardMonitor
+      ? "Clipboard monitoring enabled. Feature will turn off after 10 minutes of inactivity."
+      : "Clipboard monitoring disabled.");
+    resetClipboardMonitorIdleTimer();
+  }
+}
+
+for (const c of PREF_CONTROLS) {
+  el(c.input).addEventListener("change", () => setPref(c.key, el(c.input).checked));
+  el(c.tray).addEventListener("click", () => setPref(c.key, !state[c.key]));
+}
+
+el("set-res").addEventListener("change", () => {
+  resDropdown.value = el("set-res").value;
+  resDropdown.dispatchEvent(new Event("change"));   // same path as the tray dropdown: saves + restarts the idle timer
+});
+resDropdown.addEventListener("change", () => { el("set-res").value = resDropdown.value; });
+
+el("set-folder-pin").addEventListener("change", () => setFolderControlsPinned(el("set-folder-pin").checked));
+
+const titlePrefixField = el("set-title-prefix");
+titlePrefixField.addEventListener("input", updateTitlePreview);
+// "change" (blur/Enter) rather than every keystroke, so the server is written once per edit.
+titlePrefixField.addEventListener("change", () => {
+  state.titlePrefix = titlePrefixField.value;
+  updateTitlePreview();
+  saveDownloadPrefs();
+});
+titlePrefixField.addEventListener("keydown", (e) => {
+  e.stopPropagation();
+  if (e.key === "Enter") titlePrefixField.blur();
 });
 
-el("ctx-title-prefix-toggle").addEventListener("click", () => {
-  state.titlePrefixEnabled = !state.titlePrefixEnabled;
-  el("ctx-title-prefix-toggle").querySelector(".ctx-check").textContent = state.titlePrefixEnabled ? "✓" : "";
-  saveDownloadPrefs();
+// ── Tray quick-access layout ─────────────────────────────────────
+// Which icons the navigation tray shows, and in what order. Kept per browser
+// (localStorage) because a phone and a desktop want different tray contents.
+// The settings button is not listed: it must always stay reachable.
+const TRAY_ITEMS = [
+  { id: "resolution",     elId: "res-tray-item",                      label: "Max resolution",                 icon: "ti-resize",      pinned: true },
+  { id: "m3u_sniffer",    elId: "ctx-m3u-toggle",                     label: "M3U sniffer mode",               icon: "ti-radar",       pinned: true },
+  { id: "auto_m3u_retry", elId: "ctx-auto-m3u-retry-toolbar-toggle",  label: "Auto-retry via M3U",             icon: "ti-radar",       pinned: true, badge: "AUTO" },
+  { id: "clipboard",      elId: "ctx-clipboard-monitor-toggle",       label: "Clipboard monitoring",           icon: "ti-clipboard",   pinned: true },
+  { id: "tag_domain",     elId: "tray-tag-toggle",                    label: "Tag file with [Domain]",         icon: "ti-tag",         pinned: false },
+  { id: "auto_confirm",   elId: "tray-auto-confirm-toggle",           label: "Auto-confirm titles",            icon: "ti-checks",      pinned: false },
+  { id: "title_prefix",   elId: "tray-title-prefix-toggle",           label: "Apply title prefix",             icon: "ti-text-plus",   pinned: false },
+  { id: "detect_renames", elId: "tray-detect-renames-toggle",         label: "Detect renamed files",           icon: "ti-replace",     pinned: false },
+  { id: "stash",          elId: "stash-status-btn",                   label: "Stash menu",                     icon: "ti-database",    pinned: true, note: "Only appears while Stash is running." },
+  { id: "url_args",       elId: "url-args-btn",                       label: "Custom yt-dlp arguments",        icon: "ti-code",        pinned: true },
+  { id: "folder_pin",     elId: "folder-controls-toggle-btn",         label: "Keep folder controls visible",   icon: "ti-pin",         pinned: true },
+];
+const TRAY_STORAGE_KEY = "stashdlp_tray_layout";
+
+function defaultTrayLayout() {
+  return { order: TRAY_ITEMS.map((t) => t.id), pinned: TRAY_ITEMS.filter((t) => t.pinned).map((t) => t.id) };
+}
+
+function loadTrayLayout() {
+  const fallback = defaultTrayLayout();
+  try {
+    const raw = JSON.parse(localStorage.getItem(TRAY_STORAGE_KEY) || "null");
+    if (!raw || !Array.isArray(raw.order) || !Array.isArray(raw.pinned)) return fallback;
+    const known = new Set(TRAY_ITEMS.map((t) => t.id));
+    const order = raw.order.filter((id) => known.has(id));
+    for (const id of fallback.order) if (!order.includes(id)) order.push(id);   // items added in a later version
+    return { order, pinned: raw.pinned.filter((id) => known.has(id)) };
+  } catch (err) {
+    return fallback;
+  }
+}
+
+let trayLayout = loadTrayLayout();
+
+function saveTrayLayout() {
+  try { localStorage.setItem(TRAY_STORAGE_KEY, JSON.stringify(trayLayout)); } catch (err) { /* localStorage unavailable */ }
+  reportSaved(true);
+}
+
+function applyTrayLayout() {
+  const container = gearBtn.parentElement;
+  for (const id of trayLayout.order) {
+    const item = TRAY_ITEMS.find((t) => t.id === id);
+    const node = el(item.elId);
+    container.insertBefore(node, gearBtn);          // the gear always stays last
+    node.classList.toggle("tray-unpinned", !trayLayout.pinned.includes(id));
+  }
+}
+
+function renderTrayList(focus) {
+  const list = el("settings-tray-list");
+  list.innerHTML = "";
+  // The Stash menu row is a Stash option: listed only while Stash is running (its saved pin state is kept).
+  const listed = trayLayout.order.filter((id) => stashRunning || id !== "stash");
+  listed.forEach((id, index) => {
+    const item = TRAY_ITEMS.find((t) => t.id === id);
+    const pinned = trayLayout.pinned.includes(id);
+
+    const row = document.createElement("div");
+    row.className = "settings-tray-row" + (pinned ? "" : " unpinned");
+    row.dataset.trayId = id;
+
+    const icon = document.createElement("i");
+    icon.className = `ti ${item.icon} settings-tray-icon`;
+    icon.setAttribute("aria-hidden", "true");
+    row.appendChild(icon);
+
+    const text = document.createElement("div");
+    text.className = "settings-tray-text";
+    const label = document.createElement("div");
+    label.className = "settings-row-label";
+    label.textContent = item.label;
+    text.appendChild(label);
+    if (item.note) {
+      const note = document.createElement("div");
+      note.className = "settings-row-desc";
+      note.textContent = item.note;
+      text.appendChild(note);
+    }
+    row.appendChild(text);
+
+    for (const [dir, glyph, name] of [[-1, "ti-arrow-up", "up"], [1, "ti-arrow-down", "down"]]) {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = `icon-btn settings-tray-move tray-move-${name}`;
+      btn.title = `Move ${name}`;
+      btn.setAttribute("aria-label", `Move ${item.label} ${name}`);
+      btn.disabled = (dir < 0 && index === 0) || (dir > 0 && index === listed.length - 1);
+      btn.innerHTML = `<i class="ti ${glyph}" aria-hidden="true"></i>`;
+      btn.addEventListener("click", () => {
+        // Swap with the neighbouring *listed* row so a hidden Stash row never causes a dead click.
+        const a = trayLayout.order.indexOf(id);
+        const b = trayLayout.order.indexOf(listed[index + dir]);
+        [trayLayout.order[a], trayLayout.order[b]] = [trayLayout.order[b], trayLayout.order[a]];
+        applyTrayLayout();
+        saveTrayLayout();
+        renderTrayList({ id, name });
+      });
+      row.appendChild(btn);
+    }
+
+    const sw = document.createElement("label");
+    sw.className = "switch";
+    sw.title = "Show in tray";
+    const input = document.createElement("input");
+    input.type = "checkbox";
+    input.checked = pinned;
+    input.setAttribute("aria-label", `Show ${item.label} in tray`);
+    input.addEventListener("change", () => {
+      trayLayout.pinned = trayLayout.pinned.filter((p) => p !== id);
+      if (input.checked) trayLayout.pinned.push(id);
+      applyTrayLayout();
+      saveTrayLayout();
+      row.classList.toggle("unpinned", !input.checked);
+    });
+    const track = document.createElement("span");
+    track.className = "switch-track";
+    track.setAttribute("aria-hidden", "true");
+    sw.append(input, track);
+    row.appendChild(sw);
+
+    list.appendChild(row);
+  });
+  if (focus) {
+    const target = list.querySelector(`[data-tray-id="${focus.id}"] .tray-move-${focus.name}`)
+      || list.querySelector(`[data-tray-id="${focus.id}"] .settings-tray-move:not(:disabled)`);
+    if (target) target.focus();
+  }
+}
+
+el("settings-tray-reset").addEventListener("click", () => {
+  trayLayout = defaultTrayLayout();
+  applyTrayLayout();
+  saveTrayLayout();
+  renderTrayList();
 });
 
-// "change" (fires on blur/Enter, not every keystroke) rather than
-// "input" - this only needs to persist once the person's done typing,
-// same as every other settings field in this flyout.
-titlePrefixInput.addEventListener("change", () => {
-  state.titlePrefix = titlePrefixInput.value;
-  saveDownloadPrefs();
+applyTrayLayout();
+
+// ── Panel open/close and section navigation ──────────────────────
+let settingsSection = "downloads";
+
+function showSettingsSection(name, focusNav) {
+  if (name === "connections" && !stashRunning) name = "downloads";
+  settingsSection = name;
+  for (const btn of document.querySelectorAll("#settings-nav .settings-nav-btn")) {
+    const active = btn.dataset.section === name;
+    btn.classList.toggle("active", active);
+    btn.setAttribute("aria-selected", active ? "true" : "false");
+    btn.tabIndex = active ? 0 : -1;
+    if (active && focusNav) btn.focus();
+  }
+  for (const sec of document.querySelectorAll(".settings-content .settings-section")) {
+    sec.classList.toggle("hidden", sec.dataset.section !== name);
+  }
+  el("settings-nav").nextElementSibling.scrollTop = 0;
+}
+
+// Shows the Stash section only while Stash is running. If the section is open
+// when Stash goes away, fall back to Downloads instead of showing a blank pane.
+function applySettingsStashVisibility() {
+  for (const node of document.querySelectorAll("#settings-modal [data-stash-only]")) {
+    node.classList.toggle("stash-hidden", !stashRunning);
+  }
+  if (!stashRunning && settingsSection === "connections") showSettingsSection("downloads", false);
+  if (stashRunning && !settingsModal.classList.contains("hidden")) loadStashConfig();
+  renderTrayList();
+}
+
+function openSettingsModal(section) {
+  closeMenus();
+  syncPrefControls();
+  applySettingsStashVisibility();
+  refreshStashStatus();                // re-check now rather than waiting for the 30 s poll
+  refreshSaveDir();
+  refreshTargetDir();
+  refreshVersion();
+  loadAppInfo();
+  settingsSavedEl.textContent = "";
+  showSettingsSection(section || settingsSection, false);
+  settingsModal.classList.remove("hidden");
+  if (stashRunning) loadStashConfig();
+  const active = document.querySelector("#settings-nav .settings-nav-btn.active");
+  if (active) active.focus();
+}
+
+function closeSettingsModal() {
+  settingsModal.classList.add("hidden");
+  gearBtn.focus();
+}
+
+gearBtn.addEventListener("click", (e) => {
+  e.stopPropagation();
+  openSettingsModal();
 });
-// Typing a space or hitting Enter inside the settings flyout shouldn't
-// fall through to any global keyboard shortcuts bound on the document.
-titlePrefixInput.addEventListener("keydown", (e) => e.stopPropagation());
+el("settings-close-btn").addEventListener("click", closeSettingsModal);
+
+let settingsPressStartedOnOverlay = false;
+settingsModal.addEventListener("mousedown", (e) => { settingsPressStartedOnOverlay = e.target === settingsModal; });
+settingsModal.addEventListener("click", (e) => {
+  if (settingsPressStartedOnOverlay && e.target === settingsModal) closeSettingsModal();
+});
+
+const settingsNavButtons = () => Array.from(document.querySelectorAll("#settings-nav .settings-nav-btn:not(.stash-hidden)"));
+for (const btn of settingsNavButtons()) {
+  btn.addEventListener("click", () => showSettingsSection(btn.dataset.section, false));
+}
+el("settings-nav").addEventListener("keydown", (e) => {
+  const keys = { ArrowDown: 1, ArrowRight: 1, ArrowUp: -1, ArrowLeft: -1 };
+  if (!(e.key in keys)) return;
+  e.preventDefault();
+  const buttons = settingsNavButtons();
+  const current = buttons.findIndex((b) => b.dataset.section === settingsSection);
+  showSettingsSection(buttons[(current + keys[e.key] + buttons.length) % buttons.length].dataset.section, true);
+});
+
+// ── Tools, Connections, About ────────────────────────────────────
+el("settings-ytdlp-args-btn").addEventListener("click", () => openYtdlpArgsModal());
+
+const STASH_SOURCE_LABEL = { settings: "saved in Settings", environment: "STASH_HOST environment variable", default: "default" };
+const stashHostInput = el("set-stash-host");
+const stashStatusLine = el("set-stash-status");
+
+function setStashStatus(text, kind) {
+  stashStatusLine.textContent = text;
+  stashStatusLine.className = "settings-status" + (kind ? ` ${kind}` : "");
+}
+
+async function loadStashConfig() {
+  try {
+    const res = await fetch("/api/stash/config");
+    const data = await res.json();
+    stashHostInput.value = data.override || "";
+    stashHostInput.placeholder = data.default;
+    setStashStatus(`Using ${data.host} (${STASH_SOURCE_LABEL[data.source] || data.source}).`);
+  } catch (e) {
+    setStashStatus("Couldn't read the Stash address from the server.", "error");
+  }
+}
+
+el("set-stash-save").addEventListener("click", async () => {
+  setStashStatus("Saving...");
+  try {
+    const res = await fetch("/api/stash/config", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ host: stashHostInput.value }),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      setStashStatus(data.error || "Couldn't save the Stash address.", "error");
+      return;
+    }
+    stashHostInput.value = data.override || "";
+    setStashStatus(`Saved. Using ${data.host} (${STASH_SOURCE_LABEL[data.source] || data.source}).`, "ok");
+    reportSaved(true);
+    refreshStashStatus();
+  } catch (e) {
+    setStashStatus("Couldn't reach the server to save the address.", "error");
+  }
+});
+
+el("set-stash-test").addEventListener("click", async () => {
+  setStashStatus("Testing...");
+  try {
+    const res = await fetch("/api/stash/test", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ host: stashHostInput.value }),
+    });
+    const data = await res.json();
+    setStashStatus(data.ok ? `Connected to Stash at ${data.host}.` : data.error, data.ok ? "ok" : "error");
+  } catch (e) {
+    setStashStatus("Couldn't reach the server to run the test.", "error");
+  }
+});
+
+stashHostInput.addEventListener("keydown", (e) => {
+  e.stopPropagation();
+  if (e.key === "Enter") el("set-stash-save").click();
+});
+
+async function loadAppInfo() {
+  try {
+    const res = await fetch("/api/app/info");
+    const info = await res.json();
+    el("about-app-version").textContent = `Version ${info.version}`;
+    const reach = info.lan ? "reachable from other devices on your network" : "this computer only";
+    el("settings-server-info").textContent =
+      `Listening on ${info.host}:${info.port} (${reach}).` +
+      (info.tray ? "\nStarted by the tray launcher." : "") +
+      "\nChange with STASH_DLP_HOST and STASH_DLP_PORT; start_tray_lan.bat listens on the network.";
+  } catch (e) {
+    el("about-app-version").textContent = "Version unavailable";
+    el("settings-server-info").textContent = "Server details unavailable.";
+  }
+}
 
 el("ctx-restart-app").addEventListener("click", async () => {
   closeMenus();
@@ -4482,7 +4789,7 @@ function createFolderModalController({
 
   // The modal only ever shows the flat list of saved root folders - no
   // nesting here, that's what the quick dropdown is for (see
-  // openFolderQuickDropdown). This is purely "manage your roots":
+  // createFolderExplorer). This is purely "manage your roots":
   // click one to make it the active folder, or delete it.
   function renderRoots() {
     recentList.innerHTML = "";
@@ -4534,8 +4841,10 @@ function createFolderModalController({
     }
   }
 
+  // Resolves to { ok: true } or { ok: false, error } so callers without the
+  // modal open (the folder explorer menus, the Up buttons) can show the error.
   async function apply(path) {
-    if (!path || !path.trim()) return;
+    if (!path || !path.trim()) return { ok: false, error: "Folder path can't be empty." };
     errorEl.classList.add("hidden");
     try {
       const res = await fetch(applyEndpoint, {
@@ -4546,13 +4855,15 @@ function createFolderModalController({
       if (!res.ok) {
         errorEl.textContent = data.error || "Unknown error";
         errorEl.classList.remove("hidden");
-        return;
+        return { ok: false, error: errorEl.textContent };
       }
       onApplied(data);
       close();
+      return { ok: true };
     } catch (e) {
       errorEl.textContent = "Couldn't reach the server to change the folder.";
       errorEl.classList.remove("hidden");
+      return { ok: false, error: errorEl.textContent };
     }
   }
 
@@ -4724,339 +5035,559 @@ dlModeBtn.addEventListener("click", () => {
 });
 historyModeBtn.addEventListener("click", setAppModeSearchHistory);
 
-// ── Gear button (opens the options/logo menu; this menu is no longer
-// reachable via right-click — the gear is now the only way in) ────
-gearBtn.addEventListener("click", (e) => {
-  e.stopPropagation();
-  const rect = gearBtn.getBoundingClientRect();
-  openLogoMenu(rect.left, rect.bottom + 4);
-});
-
-// ── Folder quick-select dropdowns (click the DL:/Target: line) ──
-// Lists saved root folders for one-tap switching, nested with their
-// actual on-disk subfolders (unlimited depth, live-scanned server
-// side - see /api/settings/roots/tree). The whole tree for every root
-// is fetched once per open, so expanding a nested chevron afterward is
-// pure DOM work - no extra requests. Falls through to the full modal
-// (Browse.../type a path) via the last entry, same as before.
-//
-// Nested levels beyond the root list can't be the dropdown's own fixed
-// listEl (depth is unbounded), so each one is a freshly created flyout
-// appended to <body> and tracked in openTreeFlyouts, positioned beside
-// whichever row's chevron opened it via positionFlyoutNextTo - same
-// mechanism the Copy/File submenus already use.
-let openTreeFlyouts = [];
-
-// Sort mode for the folder tree - "recent" mirrors the backend's
-// default (most-recently-used first, from dir_last_used), "alpha" is
-// a plain client-side re-sort by name. Persisted so a preference
-// sticks across page reloads. Applied recursively so nested levels
-// (expanded later, on demand) come pre-sorted the same way.
+// ── Folder explorer menus (click the download/target folder line) ──
+// Each menu is a small file explorer over the server's folders (/api/fs/list):
+// breadcrumbs, an Up button, the sub-folders of the folder being browsed
+// (click one to go into it, level by level), a filter, New folder, and a
+// "Select this folder" action. The Home view lists the saved folders (and,
+// on the server machine, the drives). Remote devices are limited to the
+// saved folders by the server, so Up simply stops at the top of a saved folder.
 let folderSortMode = "recent";
+let folderShowHidden = false;
 try {
   folderSortMode = localStorage.getItem("stashdlp_folder_sort") || "recent";
+  folderShowHidden = localStorage.getItem("stashdlp_folder_show_hidden") === "1";
 } catch (e) {
-  // localStorage unavailable (e.g. privacy mode) - fall back to default
+  // localStorage unavailable (e.g. privacy mode) - fall back to defaults
 }
 
-function sortTreeNodes(nodes) {
-  const sorted = nodes.slice();
-  if (folderSortMode === "alpha") {
-    sorted.sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: "base" }));
-  } else {
-    sorted.sort((a, b) => {
-      const at = a.last_used || 0;
-      const bt = b.last_used || 0;
-      if (at !== bt) return bt - at; // most-recent first
-      return a.name.localeCompare(b.name, undefined, { sensitivity: "base" });
-    });
-  }
-  for (const node of sorted) {
-    if (node.children && node.children.length > 1) {
-      node.children = sortTreeNodes(node.children);
+const folderNameCollator = new Intl.Collator(undefined, { numeric: true, sensitivity: "base" });
+
+// "recent" = most recently used first (the server sends last_used), then by name.
+function sortFolders(items) {
+  const sorted = items.slice();
+  sorted.sort((a, b) => {
+    if (folderSortMode === "recent") {
+      const diff = (b.last_used || 0) - (a.last_used || 0);
+      if (diff) return diff;
     }
-  }
+    return folderNameCollator.compare(a.name, b.name);
+  });
   return sorted;
 }
 
-function closeTreeFlyoutsFrom(depth) {
-  for (let i = depth; i < openTreeFlyouts.length; i++) {
-    openTreeFlyouts[i].remove();
+// Windows paths compare case-insensitively.
+function samePath(a, b) {
+  if (!a || !b) return false;
+  if (a === b) return true;
+  return /^[a-z]:[\\/]/i.test(a) && a.toLowerCase() === b.toLowerCase();
+}
+
+function createFolderExplorer({ kind, menuEl, listEl, anchorEl, getCurrentPath, applyPath, openAdvanced, removeEndpoint }) {
+  let view = null;          // last /api/fs/list response
+  let currentPath = "";     // the folder the app is using right now
+  let filterText = "";
+  let rows = [];            // [{ el, path, open }] for keyboard navigation
+  let activeIndex = -1;
+  let creating = false;     // "New folder" input row showing
+  let requestId = 0;        // drops out-of-order responses
+  let ui = null;
+
+  const isOpen = () => !menuEl.classList.contains("hidden");
+  const reposition = () => { if (isOpen()) positionDropdownBelow(menuEl, anchorEl); };
+  const closeMenu = () => menuEl.classList.add("hidden");
+  const isTouch = () => !!(window.matchMedia && window.matchMedia("(pointer: coarse)").matches);
+
+  function icon(name, extra) {
+    const i = document.createElement("i");
+    i.className = `ti ${name}${extra ? " " + extra : ""}`;
+    i.setAttribute("aria-hidden", "true");
+    return i;
   }
-  openTreeFlyouts.length = depth;
-}
 
-function closeAllTreeFlyouts() {
-  closeTreeFlyoutsFrom(0);
-}
+  function setStatus(text, isError) {
+    ui.status.textContent = text || "";
+    ui.status.classList.toggle("error", !!isError);
+  }
 
-// Renders one level of the tree (the root list, or one root/folder's
-// children) into `container`. `depth` identifies this level's slot in
-// openTreeFlyouts - a chevron click at this depth replaces whatever
-// was already open at that depth (a sibling's previously expanded
-// flyout) and drops anything deeper than it.
-function renderTreeLevel(nodes, container, { depth, current, applyPath, closeDropdown, onRemoveRoot }) {
-  container.innerHTML = "";
+  // ── skeleton ──
+  function build() {
+    listEl.innerHTML = `
+      <div class="fe">
+        <div class="fe-bar">
+          <button type="button" class="fe-icon fe-up" title="Up one level (Backspace in the filter box)" aria-label="Up one level"><i class="ti ti-arrow-up" aria-hidden="true"></i></button>
+          <button type="button" class="fe-icon fe-home" title="Saved folders and drives" aria-label="Saved folders and drives"><i class="ti ti-home" aria-hidden="true"></i></button>
+          <div class="fe-crumbs" role="navigation" aria-label="Folder path"></div>
+        </div>
+        <div class="fe-tools">
+          <input class="fe-filter" type="text" placeholder="Filter this folder..." autocomplete="off" spellcheck="false" aria-label="Filter folders">
+          <div class="fe-sort"></div>
+          <button type="button" class="fe-icon fe-hidden" title="Show hidden folders" aria-label="Show hidden folders" aria-pressed="false"><i class="ti ti-eye" aria-hidden="true"></i></button>
+        </div>
+        <div class="fe-list" role="listbox" aria-label="Folders"></div>
+        <div class="fe-status" aria-live="polite"></div>
+        <div class="fe-footer">
+          <button type="button" class="fe-btn fe-new"><i class="ti ti-folder-plus" aria-hidden="true"></i> New folder</button>
+          <button type="button" class="fe-btn fe-btn-primary fe-select">Select this folder</button>
+        </div>
+        <div class="ctx-item fe-advanced">Type a path or use the system dialog...</div>
+      </div>`;
+    const root = listEl.firstElementChild;
+    const q = (sel) => root.querySelector(sel);
+    ui = {
+      root, up: q(".fe-up"), home: q(".fe-home"), crumbs: q(".fe-crumbs"), filter: q(".fe-filter"),
+      sort: q(".fe-sort"), hidden: q(".fe-hidden"), list: q(".fe-list"), status: q(".fe-status"),
+      newBtn: q(".fe-new"), selectBtn: q(".fe-select"), advanced: q(".fe-advanced"),
+    };
 
-  // Depth 0 is the dropdown's own root list - closing it just closes
-  // the whole dropdown, no "back" needed. Anything deeper is one of
-  // the dynamically-created flyouts, so give it a way back up besides
-  // re-clicking the chevron that opened it or clicking away entirely.
-  //
-  // A flyout opened from a row at this level (see toggleChildren below)
-  // is stored at openTreeFlyouts[depth] and rendered with depth + 1, so
-  // *this* container - if depth > 0 - lives at openTreeFlyouts[depth - 1].
-  // Back needs to drop from there (inclusive) to close itself and
-  // anything opened deeper than it, not from `depth` itself.
-  if (depth > 0) {
-    const back = document.createElement("div");
-    back.className = "ctx-item";
-    back.innerHTML = '<i class="ti ti-arrow-left" aria-hidden="true"></i> Back';
-    back.addEventListener("click", (e) => {
-      e.stopPropagation();
-      closeTreeFlyoutsFrom(depth - 1);
+    for (const [mode, label] of [["recent", "Recent"], ["alpha", "A\u2013Z"]]) {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "folder-sort-btn";
+      btn.dataset.mode = mode;
+      btn.textContent = label;
+      btn.addEventListener("click", () => {
+        folderSortMode = mode;
+        try { localStorage.setItem("stashdlp_folder_sort", mode); } catch (e) { /* ignore */ }
+        renderList();
+        renderSortButtons();
+      });
+      ui.sort.appendChild(btn);
+    }
+
+    ui.up.addEventListener("click", goUp);
+    ui.home.addEventListener("click", () => go(""));
+    ui.hidden.addEventListener("click", () => {
+      folderShowHidden = !folderShowHidden;
+      try { localStorage.setItem("stashdlp_folder_show_hidden", folderShowHidden ? "1" : "0"); } catch (e) { /* ignore */ }
+      renderHiddenToggle();
+      if (view && !view.home) go(view.path, { keepFilter: true });
     });
-    container.appendChild(back);
-    const sep = document.createElement("div");
-    sep.className = "ctx-separator";
-    container.appendChild(sep);
+    ui.filter.addEventListener("input", () => {
+      filterText = ui.filter.value;
+      activeIndex = -1;
+      renderList();
+      renderFooter();
+    });
+    ui.newBtn.addEventListener("click", () => {
+      creating = true;
+      renderList();
+    });
+    ui.selectBtn.addEventListener("click", () => { if (view && !view.home) choose(view.path); });
+    ui.advanced.addEventListener("click", () => { closeMenu(); openAdvanced(); });
+
+    // Re-rendering replaces the clicked element, so the document-level
+    // click-outside handler would see a detached target and close the menu.
+    // Stopping the click here (after the row's own handler ran) prevents that.
+    ui.root.addEventListener("click", (e) => e.stopPropagation());
+    ui.root.addEventListener("keydown", onKeydown);
   }
 
-  for (const node of nodes) {
-    const row = document.createElement("div");
-    row.className = "ctx-item ctx-item-tree";
-    if (node.path === current) row.classList.add("ctx-disabled");
-
-    const label = document.createElement("span");
-    label.className = "ctx-tree-label";
-    label.textContent = node.name;
-    label.title = node.path;
-    row.appendChild(label);
-
-    if (node.path !== current) {
-      label.addEventListener("click", () => {
-        closeDropdown();
-        applyPath(node.path);
-      });
+  // ── navigation ──
+  async function go(path, { keepFilter = false } = {}) {
+    const id = ++requestId;
+    ui.list.classList.add("busy");
+    try {
+      const res = await fetch(`/api/fs/list?kind=${kind}&path=${encodeURIComponent(path)}&hidden=${folderShowHidden ? 1 : 0}`);
+      const data = await res.json().catch(() => ({}));
+      if (id !== requestId || !isOpen()) return;
+      if (!res.ok) {
+        if (!view && path) { go(""); return; }       // first load failed (folder gone / not allowed): start at Home
+        if (!view) {
+          ui.list.innerHTML = "";
+          const msg = document.createElement("div");
+          msg.className = "fe-empty";
+          msg.textContent = data.error || "Couldn't load folders.";
+          ui.list.appendChild(msg);
+        }
+        setStatus(data.error || "Couldn't open that folder.", true);
+        return;
+      }
+      view = data;
+      creating = false;
+      activeIndex = -1;
+      if (!keepFilter) { filterText = ""; ui.filter.value = ""; }
+      renderAll();
+      ui.list.scrollTop = 0;
+    } catch (e) {
+      if (id === requestId && isOpen()) setStatus("Couldn't reach the server.", true);
+    } finally {
+      if (id === requestId) ui.list.classList.remove("busy");
     }
-
-    if (node.children && node.children.length > 0) {
-      const chevron = document.createElement("span");
-      chevron.className = "ctx-chevron";
-      chevron.textContent = "▸";
-      row.appendChild(chevron);
-
-      const toggleChildren = (e) => {
-        e.stopPropagation();
-        const alreadyOpenForThisRow =
-          openTreeFlyouts[depth] && openTreeFlyouts[depth].dataset.forPath === node.path;
-        closeTreeFlyoutsFrom(depth);
-        if (alreadyOpenForThisRow) return;
-
-        const flyout = document.createElement("div");
-        flyout.className = "ctx-menu folder-quickmenu tree-flyout hidden";
-        flyout.dataset.forPath = node.path;
-        document.body.appendChild(flyout);
-        openTreeFlyouts[depth] = flyout;
-        renderTreeLevel(node.children, flyout, { depth: depth + 1, current, applyPath, closeDropdown, onRemoveRoot });
-        positionFlyoutNextTo(flyout, row);
-      };
-      chevron.addEventListener("click", toggleChildren);
-    }
-
-    // Only root-level entries (depth 0) are "saved" folders that can be
-    // unlisted - everything below that is just a live subfolder found
-    // on disk, with nothing persisted to remove. Skip for the
-    // already-active folder too; removing your current folder out from
-    // under yourself is more confusing than useful here.
-    if (depth === 0 && onRemoveRoot && node.path !== current) {
-      const removeBtn = document.createElement("button");
-      removeBtn.className = "ctx-tree-remove";
-      removeBtn.textContent = "\u2212"; // minus sign, framed by the button's own border
-      removeBtn.title = "Remove this saved folder";
-      removeBtn.addEventListener("click", (e) => {
-        e.stopPropagation();
-        // Swap the row's contents for an inline confirm instead of a
-        // separate popup, so it's obvious exactly which folder is
-        // about to be removed.
-        row.innerHTML = "";
-        row.classList.add("ctx-tree-confirm");
-
-        const msg = document.createElement("span");
-        msg.className = "ctx-tree-confirm-msg";
-        msg.textContent = `Remove "${node.name}"?`;
-
-        const yesBtn = document.createElement("button");
-        yesBtn.className = "ctx-tree-confirm-btn ctx-tree-confirm-yes";
-        yesBtn.textContent = "Remove";
-        yesBtn.addEventListener("click", (ev) => {
-          ev.stopPropagation();
-          onRemoveRoot(node.path);
-        });
-
-        const noBtn = document.createElement("button");
-        noBtn.className = "ctx-tree-confirm-btn ctx-tree-confirm-no";
-        noBtn.textContent = "Cancel";
-        noBtn.addEventListener("click", (ev) => {
-          ev.stopPropagation();
-          renderTreeLevel(nodes, container, { depth, current, applyPath, closeDropdown, onRemoveRoot });
-        });
-
-        row.append(msg, yesBtn, noBtn);
-      });
-      row.appendChild(removeBtn);
-    }
-
-    container.appendChild(row);
-  }
-}
-
-async function openFolderQuickDropdown({ dropdownEl, listEl, anchorEl, treeEndpoint, removeEndpoint, getCurrentPath, applyPath, openAdvanced, noneLabel }) {
-  closeOtherFlyouts(dropdownEl); // also tears down any tree flyouts from a previous open
-  listEl.innerHTML = "";
-  const loading = document.createElement("div");
-  loading.className = "ctx-item ctx-disabled";
-  loading.textContent = "Loading...";
-  listEl.appendChild(loading);
-  positionDropdownBelow(dropdownEl, anchorEl);
-
-  const current = getCurrentPath() || "";
-  const closeDropdown = () => {
-    dropdownEl.classList.add("hidden");
-    closeAllTreeFlyouts();
-  };
-
-  let roots = [];
-  try {
-    const res = await fetch(treeEndpoint);
-    const data = await res.json();
-    roots = data.roots || [];
-  } catch (e) {
-    // best-effort - falls through to the empty-state below
   }
 
-  // The dropdown may have been closed (or reopened elsewhere) while
-  // the fetch was in flight - don't resurrect it out from under the
-  // user with stale content.
-  if (dropdownEl.classList.contains("hidden")) return;
+  function goUp() {
+    if (!view || view.home) return;
+    if (view.parent) go(view.parent);
+    else if (view.local) go("");                     // above a drive root: back to Home
+  }
 
-  roots = sortTreeNodes(roots);
+  async function choose(path) {
+    const result = await applyPath(path);
+    if (result && result.ok) closeMenu();
+    else setStatus((result && result.error) || "Couldn't change the folder.", true);
+  }
 
-  listEl.innerHTML = "";
+  // ── rendering ──
+  function renderAll() {
+    renderHeader();
+    renderList();
+    renderFooter();
+    renderSortButtons();
+    renderHiddenToggle();
+    reposition();
+  }
 
-  // Sort toggle, pinned above the scrollable tree area below.
-  const sortBar = document.createElement("div");
-  sortBar.className = "folder-sort-bar";
-  const sortLabel = document.createElement("span");
-  sortLabel.className = "folder-sort-label";
-  sortLabel.textContent = "Sort";
-  sortBar.appendChild(sortLabel);
+  function renderSortButtons() {
+    for (const btn of ui.sort.querySelectorAll(".folder-sort-btn")) {
+      btn.classList.toggle("active", btn.dataset.mode === folderSortMode);
+    }
+  }
 
-  const treeScroll = document.createElement("div");
-  treeScroll.className = "folder-tree-scroll";
+  function renderHiddenToggle() {
+    ui.hidden.setAttribute("aria-pressed", folderShowHidden ? "true" : "false");
+    ui.hidden.innerHTML = `<i class="ti ${folderShowHidden ? "ti-eye" : "ti-eye-off"}" aria-hidden="true"></i>`;
+    ui.hidden.title = folderShowHidden ? "Hiding nothing - click to hide hidden folders" : "Hidden folders are not shown - click to show them";
+  }
 
-  const renderRootLevel = () => {
-    if (roots.length === 0) {
-      treeScroll.innerHTML = "";
-      const empty = document.createElement("div");
-      empty.className = "ctx-item ctx-disabled";
-      empty.textContent = noneLabel;
-      treeScroll.appendChild(empty);
+  function renderHeader() {
+    const atHome = !view || view.home;
+    ui.up.disabled = atHome || (!view.parent && !view.local);
+    ui.home.disabled = atHome;
+    ui.filter.placeholder = atHome ? "Filter saved folders..." : "Filter this folder...";
+    ui.crumbs.innerHTML = "";
+    if (atHome) {
+      const label = document.createElement("span");
+      label.className = "fe-crumbs-label";
+      label.textContent = view && view.local ? "Saved folders and drives" : "Saved folders";
+      ui.crumbs.appendChild(label);
       return;
     }
-    renderTreeLevel(roots, treeScroll, { depth: 0, current, applyPath, closeDropdown, onRemoveRoot });
-  };
-
-  async function onRemoveRoot(path) {
-    try {
-      const res = await fetch(removeEndpoint, {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ path }),
-      });
-      if (res.ok) {
-        roots = roots.filter((n) => n.path !== path);
-        renderRootLevel();
+    view.breadcrumbs.forEach((crumb, index) => {
+      if (index > 0) {
+        const sep = document.createElement("span");
+        sep.className = "fe-crumb-sep";
+        sep.textContent = "\u203A";
+        ui.crumbs.appendChild(sep);
       }
-    } catch (e) {
-      // best-effort - if this fails the entry just stays in the list, no harm done
-    }
-    positionDropdownBelow(dropdownEl, anchorEl);
-  }
-
-  const modeButtons = [
-    { mode: "recent", label: "Recent" },
-    { mode: "alpha", label: "A\u2013Z" },
-  ];
-  for (const { mode, label } of modeButtons) {
-    const btn = document.createElement("button");
-    btn.className = "folder-sort-btn";
-    btn.textContent = label;
-    btn.classList.toggle("active", folderSortMode === mode);
-    btn.addEventListener("click", (e) => {
-      e.stopPropagation();
-      if (folderSortMode === mode) return;
-      folderSortMode = mode;
-      try { localStorage.setItem("stashdlp_folder_sort", mode); } catch (err) { /* ignore */ }
-      for (const b of sortBar.querySelectorAll(".folder-sort-btn")) b.classList.remove("active");
-      btn.classList.add("active");
-      roots = sortTreeNodes(roots);
-      closeAllTreeFlyouts(); // nested flyouts held stale-ordered node refs
-      renderRootLevel();
-      positionDropdownBelow(dropdownEl, anchorEl);
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "fe-crumb";
+      btn.textContent = crumb.name;
+      btn.title = crumb.path;
+      const last = index === view.breadcrumbs.length - 1;
+      if (last) btn.setAttribute("aria-current", "true");
+      else btn.addEventListener("click", () => go(crumb.path));
+      ui.crumbs.appendChild(btn);
     });
-    sortBar.appendChild(btn);
+    ui.crumbs.scrollLeft = ui.crumbs.scrollWidth;
   }
-  listEl.appendChild(sortBar);
 
-  renderRootLevel();
-  listEl.appendChild(treeScroll);
+  function renderFooter() {
+    const browsing = !!view && !view.home;
+    const isCurrent = browsing && samePath(view.path, currentPath);
+    ui.newBtn.disabled = !browsing || !view.writable;
+    ui.newBtn.title = browsing && !view.writable ? "No write permission in this folder." : "Create a folder here";
+    ui.selectBtn.disabled = !browsing || isCurrent || !view.writable;
+    ui.selectBtn.textContent = isCurrent ? "Current folder" : "Select this folder";
+    ui.selectBtn.title = browsing && !view.writable ? "No write permission in this folder." : "";
+    if (!browsing) {
+      setStatus("");
+      return;
+    }
+    const total = view.folders.length;
+    const shown = rows.length;
+    let text = total === 0 ? "No sub-folders" : `${total} folder${total === 1 ? "" : "s"}`;
+    if (filterText.trim() && total > 0) text = `${shown} of ${total} folders`;
+    if (view.truncated) text += " (list truncated)";
+    setStatus(text);
+  }
 
-  const sep = document.createElement("div");
-  sep.className = "ctx-separator";
-  listEl.appendChild(sep);
+  function setActive(index) {
+    if (rows[activeIndex]) rows[activeIndex].el.classList.remove("active");
+    activeIndex = index;
+    if (rows[activeIndex]) {
+      rows[activeIndex].el.classList.add("active");
+      rows[activeIndex].el.scrollIntoView({ block: "nearest" });
+    }
+  }
 
-  const advanced = document.createElement("div");
-  advanced.className = "ctx-item";
-  advanced.textContent = "Browse / set custom folder...";
-  advanced.addEventListener("click", () => {
-    closeDropdown();
-    openAdvanced();
-  });
-  listEl.appendChild(advanced);
+  function makeRow({ name, path, iconName, chevron, link, onOpen, removable }) {
+    const row = document.createElement("div");
+    const isCurrent = samePath(path, currentPath);
+    row.className = "fe-row" + (isCurrent ? " is-current" : "");
+    row.setAttribute("role", "option");
+    row.title = path;
 
-  positionDropdownBelow(dropdownEl, anchorEl);
+    row.appendChild(icon(link ? "ti-folder-symlink" : iconName, "fe-row-icon"));
+    const label = document.createElement("span");
+    label.className = "fe-row-name";
+    label.textContent = name;
+    row.appendChild(label);
+    if (isCurrent) {
+      const tag = document.createElement("span");
+      tag.className = "fe-tag";
+      tag.textContent = "current";
+      row.appendChild(tag);
+    }
+
+    if (removable && !isCurrent) {
+      const rm = document.createElement("button");
+      rm.type = "button";
+      rm.className = "fe-row-btn fe-row-remove";
+      rm.title = "Remove this saved folder";
+      rm.setAttribute("aria-label", `Remove saved folder ${name}`);
+      rm.appendChild(icon("ti-minus"));
+      rm.addEventListener("click", (e) => { e.stopPropagation(); confirmRemove(row, { name, path }); });
+      row.appendChild(rm);
+    }
+
+    const pick = document.createElement("button");
+    pick.type = "button";
+    pick.className = "fe-row-btn fe-row-select";
+    pick.title = "Select this folder";
+    pick.setAttribute("aria-label", `Select ${name}`);
+    pick.disabled = isCurrent;
+    pick.appendChild(icon("ti-check"));
+    pick.addEventListener("click", (e) => { e.stopPropagation(); choose(path); });
+    row.appendChild(pick);
+
+    if (chevron) row.appendChild(icon("ti-chevron-right", "fe-row-chev"));
+
+    row.addEventListener("click", onOpen);
+    rows.push({ el: row, path, open: onOpen });
+    return row;
+  }
+
+  function section(text) {
+    const s = document.createElement("div");
+    s.className = "fe-section";
+    s.textContent = text;
+    return s;
+  }
+
+  function emptyMessage(text) {
+    const d = document.createElement("div");
+    d.className = "fe-empty";
+    d.textContent = text;
+    return d;
+  }
+
+  function matchesFilter(name) {
+    const q = filterText.trim().toLowerCase();
+    return !q || name.toLowerCase().includes(q);
+  }
+
+  function renderList() {
+    ui.list.innerHTML = "";
+    rows = [];
+    activeIndex = -1;
+    if (creating && view && !view.home) ui.list.appendChild(buildCreateRow());
+
+    if (!view) {
+      ui.list.appendChild(emptyMessage("Loading..."));
+      return;
+    }
+
+    if (view.home) {
+      const saved = sortFolders(view.saved.filter((f) => matchesFilter(f.name)));
+      ui.list.appendChild(section("Saved folders"));
+      if (saved.length === 0) ui.list.appendChild(emptyMessage(filterText.trim() ? "No saved folder matches." : "No saved folders yet."));
+      for (const f of saved) {
+        ui.list.appendChild(makeRow({ name: f.name, path: f.path, iconName: "ti-folder", chevron: true, removable: true, onOpen: () => go(f.path) }));
+      }
+      const drives = (view.drives || []).filter((d) => matchesFilter(d.name));
+      if (drives.length) {
+        ui.list.appendChild(section(view.drives.length === 1 && view.drives[0].path === "/" ? "This computer" : "Drives"));
+        for (const d of drives) {
+          ui.list.appendChild(makeRow({ name: d.name, path: d.path, iconName: "ti-database", chevron: true, onOpen: () => go(d.path) }));
+        }
+      }
+      return;
+    }
+
+    const folders = sortFolders(view.folders.filter((f) => matchesFilter(f.name)));
+    if (folders.length === 0 && !creating) {
+      ui.list.appendChild(emptyMessage(filterText.trim() ? "No folders match the filter." : "No sub-folders here."));
+    }
+    for (const f of folders) {
+      ui.list.appendChild(makeRow({
+        name: f.name, path: f.path, iconName: "ti-folder", link: f.link,
+        chevron: f.has_children !== false, onOpen: () => go(f.path),
+      }));
+    }
+  }
+
+  function confirmRemove(row, folder) {
+    row.innerHTML = "";
+    row.classList.add("fe-confirm");
+    const msg = document.createElement("span");
+    msg.className = "fe-row-name";
+    msg.textContent = `Remove "${folder.name}" from saved folders?`;
+    const yes = document.createElement("button");
+    yes.type = "button";
+    yes.className = "fe-btn fe-btn-danger";
+    yes.textContent = "Remove";
+    yes.addEventListener("click", async (e) => {
+      e.stopPropagation();
+      try {
+        const res = await fetch(removeEndpoint, {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ path: folder.path }),
+        });
+        if (res.ok && view) view.saved = view.saved.filter((f) => f.path !== folder.path);
+      } catch (err) { /* the entry just stays listed */ }
+      renderList();
+    });
+    const no = document.createElement("button");
+    no.type = "button";
+    no.className = "fe-btn";
+    no.textContent = "Cancel";
+    no.addEventListener("click", (e) => { e.stopPropagation(); renderList(); });
+    row.append(msg, yes, no);
+  }
+
+  function buildCreateRow() {
+    const row = document.createElement("div");
+    row.className = "fe-row fe-create";
+    row.appendChild(icon("ti-folder-plus", "fe-row-icon"));
+    const input = document.createElement("input");
+    input.type = "text";
+    input.className = "fe-create-input";
+    input.placeholder = "New folder name";
+    input.autocomplete = "off";
+    input.spellcheck = false;
+    input.setAttribute("aria-label", "New folder name");
+    const ok = document.createElement("button");
+    ok.type = "button";
+    ok.className = "fe-btn fe-btn-primary";
+    ok.textContent = "Create";
+    const cancel = document.createElement("button");
+    cancel.type = "button";
+    cancel.className = "fe-btn";
+    cancel.textContent = "Cancel";
+
+    const submit = async () => {
+      const name = input.value.trim();
+      if (!name) { setStatus("Enter a folder name.", true); return; }
+      ok.disabled = true;
+      try {
+        const res = await fetch("/api/fs/mkdir", {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ kind, parent: view.path, name }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) { setStatus(data.error || "Couldn't create the folder.", true); ok.disabled = false; input.focus(); return; }
+        await go(data.path);                         // step into the new folder, ready to select
+      } catch (e) {
+        setStatus("Couldn't reach the server.", true);
+        ok.disabled = false;
+      }
+    };
+    ok.addEventListener("click", (e) => { e.stopPropagation(); submit(); });
+    cancel.addEventListener("click", (e) => { e.stopPropagation(); creating = false; renderList(); renderFooter(); });
+    input.addEventListener("keydown", (e) => {
+      e.stopPropagation();
+      if (e.key === "Enter") { e.preventDefault(); submit(); }
+      if (e.key === "Escape") { e.preventDefault(); creating = false; renderList(); renderFooter(); ui.filter.focus(); }
+    });
+    row.append(input, ok, cancel);
+    setTimeout(() => input.focus(), 0);
+    return row;
+  }
+
+  // ── keyboard ──
+  // Arrow keys move through the rows, Enter goes into the highlighted one
+  // (or the only match), Ctrl+Enter selects it, Backspace in an empty filter
+  // goes up, Escape closes. Everything is kept away from the global shortcuts.
+  function onKeydown(e) {
+    e.stopPropagation();
+    if (e.target.classList && e.target.classList.contains("fe-create-input")) return;
+    if (e.key === "Escape") { e.preventDefault(); closeMenu(); return; }
+    if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+      if (rows.length === 0) return;
+      e.preventDefault();
+      const step = e.key === "ArrowDown" ? 1 : -1;
+      setActive(activeIndex < 0 ? (step > 0 ? 0 : rows.length - 1) : (activeIndex + step + rows.length) % rows.length);
+      return;
+    }
+    if (e.key === "ArrowLeft" && e.altKey) { e.preventDefault(); goUp(); return; }
+    if (e.target !== ui.filter) return;
+    if (e.key === "Backspace" && !ui.filter.value) { e.preventDefault(); goUp(); return; }
+    if (e.key === "Enter") {
+      e.preventDefault();
+      const target = rows[activeIndex] || (rows.length === 1 ? rows[0] : null);
+      if (e.ctrlKey || e.metaKey) {
+        if (target) choose(target.path);
+        else if (view && !view.home) choose(view.path);
+      } else if (target) {
+        target.open();
+      }
+    }
+  }
+
+  function open() {
+    closeOtherFlyouts(menuEl);
+    currentPath = getCurrentPath() || "";
+    view = null;
+    filterText = "";
+    creating = false;
+    build();
+    renderAll();
+    positionDropdownBelow(menuEl, anchorEl);
+    go(currentPath);
+    if (!isTouch()) ui.filter.focus();
+  }
+
+  return { open };
 }
+
+const downloadFolderExplorer = createFolderExplorer({
+  kind: "save", menuEl: dlFolderQuickMenu, listEl: dlFolderQuickList, anchorEl: folderStatusSave,
+  getCurrentPath: () => ctxSaveDir.title || "",
+  applyPath: downloadFolderModal.applyPath,
+  openAdvanced: () => downloadFolderModal.open(),
+  removeEndpoint: "/api/settings/roots/remove",
+});
+
+const targetFolderExplorer = createFolderExplorer({
+  kind: "target", menuEl: targetFolderQuickMenu, listEl: targetFolderQuickList, anchorEl: folderStatusTarget,
+  getCurrentPath: () => ctxTargetDir.title || "",
+  applyPath: targetFolderModal.applyPath,
+  openAdvanced: () => targetFolderModal.open(),
+  removeEndpoint: "/api/target-settings/roots/remove",
+});
 
 folderStatusSave.addEventListener("click", (e) => {
   e.stopPropagation();
-  logoMenu.classList.add("hidden");
   jobMenu.classList.add("hidden");
   historyMenu.classList.add("hidden");
-  openFolderQuickDropdown({
-    dropdownEl: dlFolderQuickMenu, listEl: dlFolderQuickList, anchorEl: folderStatusSave,
-    treeEndpoint: "/api/settings/roots/tree",
-    removeEndpoint: "/api/settings/roots/remove",
-    getCurrentPath: () => ctxSaveDir.title || "",
-    applyPath: downloadFolderModal.applyPath,
-    openAdvanced: () => downloadFolderModal.open(),
-    noneLabel: "No saved download folders yet",
-  });
+  downloadFolderExplorer.open();
 });
 
 folderStatusTarget.addEventListener("click", (e) => {
   e.stopPropagation();
-  logoMenu.classList.add("hidden");
   jobMenu.classList.add("hidden");
   historyMenu.classList.add("hidden");
-  openFolderQuickDropdown({
-    dropdownEl: targetFolderQuickMenu, listEl: targetFolderQuickList, anchorEl: folderStatusTarget,
-    treeEndpoint: "/api/target-settings/roots/tree",
-    removeEndpoint: "/api/target-settings/roots/remove",
-    getCurrentPath: () => ctxTargetDir.title || "",
-    applyPath: targetFolderModal.applyPath,
-    openAdvanced: () => targetFolderModal.open(),
-    noneLabel: "No saved target folders yet",
-  });
+  targetFolderExplorer.open();
+});
+
+// Up button beside each folder in the status row: makes the parent folder the
+// active one. The server decides what "parent" is (and refuses to go above the
+// saved folders for a remote device), so this asks it rather than guessing.
+async function folderUpOneLevel(kind, getCurrentPath, applyPath) {
+  closeMenus();
+  const current = getCurrentPath();
+  if (!current) return;
+  try {
+    const res = await fetch(`/api/fs/list?kind=${kind}&path=${encodeURIComponent(current)}&info=1`);
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) { flashStatus(data.error || "Couldn't go up."); return; }
+    if (!data.parent) { flashStatus("Already at the top - there is no folder above this one."); return; }
+    const result = await applyPath(data.parent);
+    if (!result || !result.ok) flashStatus((result && result.error) || "Couldn't change the folder.");
+  } catch (e) {
+    flashStatus("Couldn't reach the server.");
+  }
+}
+
+el("folder-up-save").addEventListener("click", (e) => {
+  e.stopPropagation();
+  folderUpOneLevel("save", () => ctxSaveDir.title || "", downloadFolderModal.applyPath);
+});
+el("folder-up-target").addEventListener("click", (e) => {
+  e.stopPropagation();
+  folderUpOneLevel("target", () => ctxTargetDir.title || "", targetFolderModal.applyPath);
 });
 
 // ── Control bar ────────────────────────────────────────────────
@@ -5468,6 +5999,13 @@ document.addEventListener("keydown", async (e) => {
   if (!newEncodeJobModal.classList.contains("hidden")) {
     if (e.key === "Escape") closeNewEncodeJobModal();
     return;
+  }
+  if (!settingsModal.classList.contains("hidden")) {
+    const dialogOnTop = Array.from(document.querySelectorAll(".modal-overlay:not(.hidden)")).some((m) => m !== settingsModal);
+    if (!dialogOnTop) {
+      if (e.key === "Escape") closeSettingsModal();
+      return;
+    }
   }
 
   // ── Ctrl+ shortcuts ──────────────────────────────────────────

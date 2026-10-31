@@ -19,6 +19,7 @@ from diskspace import get_free_space_label
 from encode_manager import EncodeManager
 from filesystem_scan import scan_filesystem
 from folder_dialog import ask_directory, ask_file_path
+import folder_browser
 from folder_tree import scan_root_tree
 from job_manager import JobManager, ConnectionManager, NeedsDecisionError
 from m3u8_finder import find_m3u8, M3u8NotFound
@@ -328,6 +329,18 @@ async def get_app_version():
     return {"version": APP_VERSION}
 
 
+@app.get("/api/app/info")
+async def get_app_info():
+    """Read-only facts for the Settings panel's Server and About sections."""
+    return {
+        "version": APP_VERSION,
+        "host": HOST,
+        "port": PORT,
+        "lan": HOST not in ("127.0.0.1", "localhost", "::1"),
+        "tray": os.environ.get("STASH_DLP_TRAY") == "1",
+    }
+
+
 @app.get("/api/version")
 async def get_version():
     return version_state
@@ -495,6 +508,46 @@ async def api_get_target_dir_tree():
     return {"roots": [scan_root_tree(r, last_used) for r in roots]}
 
 
+def _fs_roots_for(kind: str):
+    if kind == "save":
+        return get_save_dir_roots()
+    if kind == "target":
+        return get_target_dir_roots()
+    raise folder_browser.BrowseError("Unknown folder kind.", 400)
+
+
+@app.get("/api/fs/list")
+async def api_fs_list(request: Request, kind: str = "save", path: str = "", hidden: int = 0, info: int = 0):
+    """Sub-folders of `path` for the folder explorer menus (empty path = home
+    view). Remote devices are limited to the saved folders - see
+    folder_browser. info=1 skips the listing and returns only path/parent."""
+    local = folder_browser.is_local_client(request.client.host if request.client else "")
+    try:
+        roots = _fs_roots_for(kind)
+        return await asyncio.to_thread(
+            folder_browser.list_folder, path, roots, local, bool(hidden), get_dir_last_used_map(), bool(info)
+        )
+    except folder_browser.BrowseError as e:
+        return JSONResponse(status_code=e.status, content={"error": str(e)})
+
+
+class FsMkdirRequest(BaseModel):
+    kind: str = "save"
+    parent: str
+    name: str
+
+
+@app.post("/api/fs/mkdir")
+async def api_fs_mkdir(req: FsMkdirRequest, request: Request):
+    local = folder_browser.is_local_client(request.client.host if request.client else "")
+    try:
+        roots = _fs_roots_for(req.kind)
+        path = await asyncio.to_thread(folder_browser.make_folder, req.parent, req.name, roots, local)
+    except folder_browser.BrowseError as e:
+        return JSONResponse(status_code=e.status, content={"error": str(e)})
+    return {"path": path, "name": os.path.basename(path)}
+
+
 @app.post("/api/browse-folder")
 async def api_browse_folder(request: Request):
     """Pops a native folder-picker on the server machine. Gated to
@@ -633,6 +686,30 @@ async def api_stash_status():
     the Stash button at all."""
     running = await stash_integration.is_stash_running()
     return {"running": running}
+
+
+class StashConfigRequest(BaseModel):
+    host: str = ""
+
+
+@app.get("/api/stash/config")
+async def api_get_stash_config():
+    return stash_integration.stash_config()
+
+
+@app.post("/api/stash/config")
+async def api_set_stash_config(req: StashConfigRequest):
+    """Saves the Stash address typed in the Settings panel; an empty value
+    clears it so the STASH_HOST environment variable / default applies."""
+    try:
+        return stash_integration.apply_stash_host_override(req.host)
+    except ValueError as e:
+        return JSONResponse(status_code=400, content={"error": str(e)})
+
+
+@app.post("/api/stash/test")
+async def api_test_stash(req: StashConfigRequest):
+    return await stash_integration.test_stash_host(req.host)
 
 
 @app.post("/api/import/stash")
@@ -1526,6 +1603,11 @@ async def api_restart_app():
 
 async def _do_restart():
     await asyncio.sleep(0.3)  # let the HTTP response above actually reach the client first
+
+    # Started by tray_launcher.py: it owns this process, so a self-relaunch would orphan the new server.
+    # Exit with the agreed code instead and the launcher starts a fresh one (RESTART_EXIT_CODE there).
+    if os.environ.get("STASH_DLP_TRAY") == "1":
+        os._exit(75)
 
     if FROZEN:
         # The exe is fully self-contained - no separate script to pass it.
